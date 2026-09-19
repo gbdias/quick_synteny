@@ -1,0 +1,219 @@
+nextflow.enable.dsl = 2
+
+include { RESOLVE_TAXONOMY }        from './modules/local/resolve_taxonomy.nf'
+include { FIND_COMPARISON_ASSEMBLY } from './modules/local/find_comparison_assembly.nf'
+include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly.nf'
+include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
+include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
+include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
+include { MINIPROT_ALIGN }          from './modules/local/miniprot_align.nf'
+include { CHROM_SIZES }             from './modules/local/prepare_synteny_inputs.nf'
+include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
+include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
+
+def RANKS() {
+    return ['species', 'genus', 'family', 'order', 'class', 'phylum']
+}
+
+def helpMessage() {
+    log.info """
+    quick_synteny — taxonomy-guided synteny plotting
+
+    Usage:
+      nextflow run main.nf --taxid <TAXID> --assembly <target.fa> [options]
+
+    Required:
+      --taxid <int>            NCBI taxid of the target organism. Drives comparison/
+                                proteome discovery. Not required if both --comparison
+                                and --proteome are given.
+      --assembly <path>        FASTA of the target genome to place on the synteny plot.
+
+    Manual overrides (skip NCBI discovery entirely):
+      --comparison <path>      Comparison genome FASTA to use instead of auto-discovery.
+      --proteome <path>        Proteome FASTA to use instead of auto-discovery.
+
+    Discovery behavior:
+      --max_rank <rank>        How far to climb the taxonomy ladder before giving up.
+                                One of: ${RANKS().join(',')} (default: order).
+      --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
+                                plot (default: 0, no filtering).
+
+    Synteny chaining:
+      --min_identity <float>   Per-hit identity (0-1) below which a candidate synteny
+                                anchor is dropped. Default: auto-tuned from the observed
+                                mean identity of the weaker genome's alignment, so a
+                                divergent species pair isn't forced through a threshold
+                                tuned for close relatives. Pass a value to override.
+
+    Polyploid support:
+      --show_homeologs <mode>  Also self-compare one or both genomes' own proteome
+                                hits to find and draw homeologous chromosome pairs
+                                (e.g. for an allopolyploid genome). One of: target,
+                                comparison, both. The synteny/homeolog detection
+                                itself needs no ploidy ratio -- it's built directly
+                                from miniprot's own multi-hit alignments, so it
+                                picks up whatever multiplicity is actually in the
+                                data. Default: both. Pass '' to turn it off entirely.
+
+    Output:
+      --outdir <path>          Output directory (default: results).
+
+    Execution (-profile slurm only):
+      --slurm_queue <name>            SLURM queue/partition (default: normal).
+      --singularity_cache_dir <path>  Shared Apptainer/Singularity image cache dir.
+
+    Profiles:
+      -profile standard         Docker + local executor (default for a laptop/CI).
+      -profile slurm             Apptainer + SLURM executor (HPC).
+      -profile test              Docker + local executor with tiny resource caps.
+    """.stripIndent()
+}
+
+def validateParams() {
+    if (!RANKS().contains(params.max_rank)) {
+        exit 1, "ERROR: --max_rank must be one of ${RANKS().join(',')}, got '${params.max_rank}'"
+    }
+
+    if (!params.assembly) {
+        exit 1, "ERROR: --assembly <target genome fasta> is required. Run with --help for usage."
+    }
+    if (!file(params.assembly).exists()) {
+        exit 1, "ERROR: --assembly file not found: ${params.assembly}"
+    }
+
+    def skipDiscovery = params.comparison && params.proteome
+    if (!params.taxid && !skipDiscovery) {
+        exit 1, "ERROR: --taxid is required unless both --comparison and --proteome are given. Run with --help for usage."
+    }
+
+    if (params.comparison && !file(params.comparison).exists()) {
+        exit 1, "ERROR: --comparison file not found: ${params.comparison}"
+    }
+    if (params.proteome && !file(params.proteome).exists()) {
+        exit 1, "ERROR: --proteome file not found: ${params.proteome}"
+    }
+
+    if (params.show_homeologs && !['target', 'comparison', 'both'].contains(params.show_homeologs)) {
+        exit 1, "ERROR: --show_homeologs must be one of target,comparison,both, got '${params.show_homeologs}'"
+    }
+}
+
+def readSelection(selectionFile) {
+    return new groovy.json.JsonSlurper().parse(selectionFile)
+}
+
+workflow {
+    if (params.help) {
+        helpMessage()
+        exit 0
+    }
+
+    validateParams()
+
+    log.info "quick_synteny: assembly=${params.assembly} taxid=${params.taxid ?: '(skipped, using overrides)'} outdir=${params.outdir}"
+
+    def skipDiscovery = params.comparison && params.proteome
+
+    // target is always user-supplied (no auto-discovery for it), so its
+    // display name -- shown as a plot subtitle so a viewer can tell which
+    // physical input file "target"/"comparison" refer to -- is just its
+    // filename, known immediately
+    target_display_name = Channel.value(file(params.assembly).name)
+
+    // ---- comparison + proteome accession discovery (or manual override) ----
+    comparison_fasta = null
+    proteome_fasta   = null
+    // comparison genome's display name is its filename when given manually, or
+    // (since a downloaded comparison genome is always staged as the generic
+    // "genome.fna", which tells a viewer nothing) the NCBI accession it was
+    // discovered from
+    comparison_display_name = null
+
+    if (params.comparison) {
+        comparison_fasta = Channel.value(file(params.comparison))
+        comparison_display_name = Channel.value(file(params.comparison).name)
+    }
+    if (params.proteome) {
+        proteome_fasta = Channel.value(file(params.proteome))
+    }
+
+    if (!skipDiscovery) {
+        lineage_ch = RESOLVE_TAXONOMY(Channel.value(params.taxid))
+
+        if (!params.comparison) {
+            comparison_selection = FIND_COMPARISON_ASSEMBLY(lineage_ch, params.max_rank).selection
+            comparison_selection.map { f ->
+                def sel = readSelection(f)
+                log.info "quick_synteny: comparison accession=${sel.accession} rank=${sel.rank} (${sel.name}) from ${sel.candidate_count} candidate(s)"
+                sel
+            }.view()
+            comparison_fasta = DOWNLOAD_GENOME(comparison_selection.map { readSelection(it).accession })
+            comparison_display_name = comparison_selection.map { readSelection(it).accession }
+        }
+
+        if (!params.proteome) {
+            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank).selection
+            prot_selection.map { f ->
+                def sel = readSelection(f)
+                log.info "quick_synteny: proteome accession=${sel.accession} rank=${sel.rank} (${sel.name}) annotated=${sel.annotated} from ${sel.candidate_count} candidate(s)"
+                sel
+            }.view()
+            proteome_fasta = DOWNLOAD_PROTEIN(prot_selection.map { readSelection(it).accession })
+        }
+    }
+
+    // Each per-genome step below (rename, align, chrom sizes) is a single
+    // process definition invoked ONCE on a channel carrying both the target
+    // and the comparison genome tagged by role name ('target'/'comparison') --
+    // Nextflow DSL2 does not allow calling the same process twice in one
+    // workflow scope, so target+comparison are mixed into one channel and
+    // split back apart with .branch{} wherever a downstream step needs them
+    // as two separate arguments.
+
+    // ---- rename sequences (both genomes) ----
+    genomes_in = Channel.value('target').combine(Channel.value(file(params.assembly)))
+        .mix(Channel.value('comparison').combine(comparison_fasta))
+
+    renamed = RENAME_SEQUENCES(genomes_in).fasta
+    renamed_by_role = renamed.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
+    target_renamed     = renamed_by_role.target
+    comparison_renamed = renamed_by_role.comparison
+
+    // ---- align proteome against both genomes (also doubles as the raw
+    // synteny/homeolog anchor source -- see build_synteny.nf) ----
+    align_in = renamed.combine(proteome_fasta)
+    gff = MINIPROT_ALIGN(align_in).gff
+    gff_by_role = gff.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
+    target_gff     = gff_by_role.target
+    comparison_gff = gff_by_role.comparison
+
+    // ---- chrom sizes (post --min_seq_size filter) ----
+    chrom_sizes = CHROM_SIZES(renamed, params.min_seq_size).chrom_sizes
+    chrom_sizes_by_role = chrom_sizes.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
+    target_chrom_sizes     = chrom_sizes_by_role.target
+    comparison_chrom_sizes = chrom_sizes_by_role.comparison
+
+    // ---- synteny blocks + final plot ----
+    // params.min_identity defaults to null (auto-tune); Groovy's null is not
+    // safe to pass through a process `val` input the same way every call site
+    // expects (falsy-but-interpolatable), so it's normalized to '' here once
+    def min_identity = params.min_identity ?: ''
+    synteny = BUILD_SYNTENY(target_gff, comparison_gff, proteome_fasta, params.show_homeologs, min_identity)
+
+    PYGENOMEVIZ_PLOT(
+        synteny.cross_slider,
+        target_chrom_sizes, comparison_chrom_sizes,
+        synteny.homeolog_slider,
+        synteny.stats,
+        target_display_name, comparison_display_name,
+    )
+}

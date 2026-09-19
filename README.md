@@ -1,0 +1,165 @@
+# quick_synteny
+
+Taxonomy-guided synteny plotting: given a target genome assembly and an NCBI
+taxid, automatically discovers a suitable comparison genome and proteome
+from NCBI (climbing the taxonomy ladder from species outward until it finds
+adequate assemblies), aligns the proteome against both genomes with
+`miniprot`, and renders a two-genome synteny plot as a single self-contained
+interactive HTML page -- a Circos-style ring, a zoom panel, and a whole-
+genome dotplot, all explorable and individually exportable as SVG.
+
+This is a Nextflow DSL2 port of the original `legacy/quick_synteny.sh`
+SLURM script, adding automatic comparison-genome/proteome discovery in place
+of a manually-supplied comparison genome.
+
+## Quick start
+
+```bash
+# with automatic discovery
+nextflow run main.nf -profile standard \
+  --taxid 562 --assembly target_genome.fa --outdir results
+
+# with a manual comparison genome/proteome (skips NCBI discovery entirely)
+nextflow run main.nf -profile standard \
+  --assembly target_genome.fa \
+  --comparison comparison_genome.fa --proteome proteome.faa \
+  --outdir results
+
+# on a SLURM cluster (Apptainer/Singularity)
+nextflow run main.nf -profile slurm \
+  --taxid 562 --assembly target_genome.fa --outdir results
+```
+
+See `nextflow run main.nf --help` for the full parameter list.
+
+## How synteny is found (no separate ortholog aligner)
+
+The same proteome is already aligned against both genomes with `miniprot`
+to build gene models on assemblies that may have no annotation of their own.
+That alignment is reused directly as the synteny signal: `miniprot` reports
+each protein's secondary hits (`-N 5 --outs=0.7`, i.e. up to 5 alternative
+loci scoring within 70% of its best hit) alongside its primary one, so a
+protein's positions in genome A and genome B **are** the raw anchors --
+`bin/build_synteny_blocks.py` groups them by chromosome pair and chains
+collinear runs (longest-monotonic-subsequence, gap-bounded on both axes so
+scattered-but-individually-real hits can't chain into one spurious genome-
+spanning block, the same bounded-gap idea DAGchainer/MCScanX use). Guardrails:
+`--min_identity` drops weak hits -- by default this is auto-tuned to the
+observed mean identity of the weaker genome's alignment (`max(0.3, min(0.9,
+weaker_mean))`, using miniprot's Positive= "similar-or-identical residue"
+score, not its stricter Identity=), rather than a fixed cutoff, so a
+divergent species pair isn't forced through a threshold tuned for close
+relatives; pass a value to pin it yourself. `--min_block_anchors` drops
+short/sparse spurious chains -- also auto-tuned by default, off that same
+weaker-genome mean identity: 15 for a close-relative pair (mean identity
+>= 0.8), 5 for a divergent one, since divergent pairs carry real signal in
+many short locally-collinear chains rather than long ones; pass a value to
+pin it yourself.
+
+This intentionally replaces a separate ortholog-finding aligner (an earlier
+version of this pipeline used jcvi + LAST) with something cruder but much
+faster and simpler: on real *Arabidopsis* genome-scale data this cut total
+runtime from ~35-40 minutes to ~2-3 minutes, and removed jcvi/LAST's Apple
+Silicon emulation conflict entirely (see Profiles below -- there's no longer
+a Rosetta/QEMU tradeoff to make). Expect more false positives/negatives in
+synteny calls than a statistically-rigorous tool like jcvi or MCScanX would
+give you; this trades some of that rigor for speed and a much simpler
+pipeline, which is the deliberate design goal here.
+
+## Plot styling
+
+Every run produces one output, `*.synteny.interactive.html` -- a single
+self-contained page (Bokeh, no server required -- open it in any browser)
+with three panels side by side:
+
+- **Ring** -- both genomes wrapped around a Circos-style circle, the
+  comparison genome on the top half and target on the bottom, with syntenic
+  blocks drawn as ribbons crossing the middle.
+- **Zoom** -- click any chromosome (either genome, on the ring or on the
+  dotplot's axes) to zoom this panel into just that chromosome's links
+  against the other genome; whichever side you didn't click gets packed
+  side by side. Click a single square in the dotplot's grid instead to zoom
+  straight into one specific (target, comparison) chromosome pair, including
+  pairs with no alignments at all.
+- **Dotplot** -- the whole genome as a target-by-comparison grid, each
+  syntenic block drawn as a diagonal (or anti-diagonal, for an inversion)
+  line segment. An "order chromosomes by similarity" toggle reorders both
+  axes so shared synteny lines up into a clean diagonal -- most useful for a
+  closely-related pair with a roughly 1:1 chromosome correspondence.
+
+Hover any wedge, band, or ribbon for its coordinates, protein-alignment
+(anchor) count, mean identity, and anchor density. A color-palette dropdown
+and a numeric spinner recolor comparison-genome chromosomes (a few curated
+palettes, cycling through 1-10 discrete colors instead of one color per
+chromosome); another spinner filters every panel down to blocks with at
+least that many supporting anchors. Two text inputs relabel "target"/
+"comparison" to the actual species/genome names everywhere a title or bar
+shows them, and each panel has its own save button to export exactly that
+panel as a standalone SVG (open it in Inkscape, Illustrator, or similar to
+convert to PDF/PNG) -- named from whatever labels are currently set. A
+small always-visible stats panel shows the alignment summary (proteome
+size, each genome's aligned-protein count/mean identity).
+
+Only the **comparison genome** is colored (a distinct hue per chromosome,
+cycling through a qualitative palette) -- the **target** is a flat grey so
+the comparison genome stands out, and every link is tinted to match the
+comparison-genome chromosome it connects to, with opacity scaled by the
+block's anchor count so strong blocks read as bolder than weak ones. This
+makes it possible to trace by eye which comparison-genome chromosome a
+given ribbon belongs to, and to spot at a glance which blocks are
+well-supported vs. marginal.
+
+## Polyploid genomes
+
+`--show_homeologs` finds and draws which of a genome's own chromosomes are
+homeologous to each other (e.g. for an allopolyploid target or comparison
+genome), and defaults to `both` -- every run already self-scans both genomes
+unless you turn it off:
+
+```bash
+nextflow run main.nf -profile standard \
+  --assembly thaliana.fa --comparison suecica.fa --proteome thaliana_protein.faa \
+  --outdir results
+# --show_homeologs both is the default here; pass --show_homeologs target or
+# --show_homeologs comparison to scan only one side, or --show_homeologs ''
+# to turn it off entirely
+```
+
+No ploidy ratio needs to be declared -- the same chaining logic just runs on
+the requested genome's hits against themselves (a protein hitting
+comparison-genome chr9 *and* chr10 in the same alignment already **is** the
+homeolog signal), so it naturally picks up whatever multiplicity is
+actually in the data. Both ends of a homeolog link land in that genome's own
+half of the ring -- no special-casing needed, and `both` runs the scan on
+each genome independently (a protein forming a homeolog pair in the target
+says nothing about pairing in the comparison genome, and vice versa).
+
+**Note on what the self-comparison actually shows**: on a genome with older
+ancestral whole-genome-duplication history underneath the polyploidy event
+you're asking about (as in Arabidopsis, which retains extensive triplicated
+synteny from ancient WGDs on top of the *thaliana*/*arenosa* hybridization
+that formed *suecica*), the self-scan surfaces real signal from that older
+history too, not just the one hybridization event -- this is a property of
+the underlying biology (and of per-gene reciprocal matching in general), not
+something this tool tries to correct for. Separating "this event's
+homeologs" from "older paralogs" by age would need Ks-based dating, which is
+out of scope here -- validated against a real *A. thaliana* target vs.
+*A. suecica* comparison genome run.
+
+## Profiles
+
+- `standard` -- Docker, local executor (laptop/CI).
+- `slurm` -- Apptainer/Singularity, SLURM executor (HPC).
+- `test` -- Docker, local executor, tiny resource caps.
+
+All containers now run fine under Docker Desktop's default Rosetta
+emulation on Apple Silicon -- an earlier jcvi/LAST-based version of this
+pipeline needed a QEMU/Rosetta tradeoff that no longer applies now that
+jcvi has been removed from the pipeline entirely.
+
+## Repository layout
+
+- `main.nf`, `nextflow.config`, `conf/` -- pipeline entrypoint and profiles.
+- `modules/local/` -- one process (or small process group) per tool.
+- `bin/` -- Python/shell helper scripts used inside processes.
+- `legacy/` -- the original bash/SLURM script this pipeline replaces.

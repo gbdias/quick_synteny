@@ -1,0 +1,13 @@
+.nextflow*
+work/
+results/
+.singularity/
+.bin/
+*.log
+.DS_Store
+__pycache__/
+
+# exploration/planning artifacts, not part of the pipeline itself
+/scratch/
+/prototypes/
+/quick_synteny_nextflow_plan.md
