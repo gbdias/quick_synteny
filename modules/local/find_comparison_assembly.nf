@@ -9,6 +9,15 @@
 // a long time and can OOM-kill the downstream Python selection step. 200
 // candidates is more than enough to pick a good one -- this tool doesn't
 // need the single best assembly out of every one ever submitted.
+//
+// --assembly-level chromosome,complete here is belt-and-suspenders with
+// find_closest_assembly.py's own --require_chromosome_level flag (always
+// passed below): a low-quality genome makes a poor synteny comparison
+// regardless of species, so this is enforced explicitly in the selection
+// script itself, not left to only ever be true as an incidental side effect
+// of this query's own filter. Proteome discovery passes neither -- it only
+// needs a candidate's protein sequences, so a scaffold-level annotated
+// assembly is fine there (see find_proteome_assembly.nf).
 
 process QUERY_GENOME_LADDER_COMPARISON {
     tag "max_rank=${max_rank}"
@@ -46,6 +55,7 @@ process SELECT_COMPARISON_ASSEMBLY {
     path lineage
     path jsonl_files
     val max_rank
+    val exclude_target  // true: drop every same-species candidate outright (see find_closest_assembly.py)
 
     output:
     path 'comparison_selection.json', emit: selection
@@ -53,8 +63,10 @@ process SELECT_COMPARISON_ASSEMBLY {
     path 'comparison_search_log.tsv'
 
     script:
+    def excludeFlag = exclude_target ? '--exclude_target' : ''
     """
-    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix comparison
+    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix comparison \\
+        --require_chromosome_level ${excludeFlag}
     """
 }
 
@@ -62,10 +74,11 @@ workflow FIND_COMPARISON_ASSEMBLY {
     take:
     lineage
     max_rank
+    exclude_target
 
     main:
     ladder = QUERY_GENOME_LADDER_COMPARISON(lineage, max_rank)
-    sel    = SELECT_COMPARISON_ASSEMBLY(lineage, ladder.jsonl, max_rank)
+    sel    = SELECT_COMPARISON_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target)
 
     emit:
     selection = sel.selection

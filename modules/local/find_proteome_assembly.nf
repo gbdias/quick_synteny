@@ -1,6 +1,9 @@
 // Same ladder-walk as find_comparison_assembly.nf, filtered for annotation
 // availability instead of assembly level -- a scaffold-level annotated
-// assembly is fine here since only its proteins are used.
+// assembly is fine here since only its proteins are used. Unlike that
+// query, this one has no --assembly-level filter of its own, so
+// find_closest_assembly.py's chromosome-level gate on same-species
+// candidates (see that script) is the only thing enforcing it here.
 
 process QUERY_GENOME_LADDER_PROTEOME {
     tag "max_rank=${max_rank}"
@@ -38,6 +41,7 @@ process SELECT_PROTEOME_ASSEMBLY {
     path lineage
     path jsonl_files
     val max_rank
+    val exclude_target  // true: drop every same-species candidate outright (see find_closest_assembly.py)
 
     output:
     path 'proteome_selection.json', emit: selection
@@ -45,8 +49,9 @@ process SELECT_PROTEOME_ASSEMBLY {
     path 'proteome_search_log.tsv'
 
     script:
+    def excludeFlag = exclude_target ? '--exclude_target' : ''
     """
-    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix proteome
+    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix proteome ${excludeFlag}
     """
 }
 
@@ -54,10 +59,11 @@ workflow FIND_PROTEOME_ASSEMBLY {
     take:
     lineage
     max_rank
+    exclude_target
 
     main:
     ladder = QUERY_GENOME_LADDER_PROTEOME(lineage, max_rank)
-    sel    = SELECT_PROTEOME_ASSEMBLY(lineage, ladder.jsonl, max_rank)
+    sel    = SELECT_PROTEOME_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target)
 
     emit:
     selection = sel.selection

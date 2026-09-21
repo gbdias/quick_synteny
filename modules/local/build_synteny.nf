@@ -83,16 +83,19 @@ process COMPUTE_ALIGNMENT_STATS {
     tuple val(target_name), path(target_gff)
     tuple val(comparison_name), path(comparison_gff)
     path proteome
+    val proteome_origin  // species name (auto-discovered) or filename (user-supplied); '' omits the line
 
     output:
     path "${target_name}.${comparison_name}.stats.json", emit: stats
 
     script:
+    def originFlag = proteome_origin ? "--proteome_origin '${proteome_origin}'" : ''
     """
     compute_alignment_stats.py \\
         --proteome ${proteome} \\
         --query_gff ${target_gff} --subject_gff ${comparison_gff} \\
         --query_name ${target_name} --subject_name ${comparison_name} \\
+        ${originFlag} \\
         --out ${target_name}.${comparison_name}.stats.json
     """
 }
@@ -104,10 +107,11 @@ workflow BUILD_SYNTENY {
     proteome         // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
     find_homeologs   // '', 'target', 'comparison', or 'both' -- which genome(s) to self-compare
     min_identity     // '' auto-tunes (see build_synteny_blocks.py); otherwise an explicit 0-1 override
+    proteome_origin  // species name (auto-discovered) or filename (user-supplied), for the stats panel
 
     main:
     cross_slider = BUILD_CROSS_SYNTENY_FOR_SLIDER(target_gff, comparison_gff, min_identity).links
-    stats        = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome).stats
+    stats        = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, proteome_origin).stats
 
     // target_gff/comparison_gff tuples already carry their own role name as
     // element 0 (from main.nf's .branch{} split), so one process call over

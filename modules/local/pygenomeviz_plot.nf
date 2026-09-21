@@ -44,6 +44,8 @@ process RENDER_SYNTENY_INTERACTIVE {
     path stats              // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
     val target_subtitle     // input file name/accession, shown under the target label
     val comparison_subtitle // ditto, for the comparison label
+    path target_gaps        // FIND_ASSEMBLY_GAPS output -- always a real file (unconditional, unlike the homeolog links above)
+    path comparison_gaps    // ditto
 
     output:
     path "${target_name}.${comparison_name}.synteny.interactive.html"
@@ -63,6 +65,7 @@ process RENDER_SYNTENY_INTERACTIVE {
         ${comparisonHomeologFlag} \\
         --stats ${stats} \\
         --query_subtitle "${target_subtitle}" --subject_subtitle "${comparison_subtitle}" \\
+        --target_gaps ${target_gaps} --comparison_gaps ${comparison_gaps} \\
         --out_prefix ${target_name}.${comparison_name}.synteny
     """
 }
@@ -76,6 +79,8 @@ workflow PYGENOMEVIZ_PLOT {
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
     comparison_subtitle    // val -- comparison genome's input file name/accession, ditto
+    target_gaps            // tuple(name, path gaps.tsv) -- FIND_ASSEMBLY_GAPS output
+    comparison_gaps
 
     main:
     // homeolog_links_slider can carry a 'target' tuple, a 'comparison' tuple,
@@ -101,5 +106,7 @@ workflow PYGENOMEVIZ_PLOT {
         comparison_homeolog_file,
         stats,
         target_subtitle, comparison_subtitle,
+        target_gaps.map { it[1] },
+        comparison_gaps.map { it[1] },
     )
 }

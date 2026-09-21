@@ -7,7 +7,7 @@ include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
 include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
 include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
 include { MINIPROT_ALIGN }          from './modules/local/miniprot_align.nf'
-include { CHROM_SIZES }             from './modules/local/prepare_synteny_inputs.nf'
+include { CHROM_SIZES; FIND_ASSEMBLY_GAPS } from './modules/local/prepare_synteny_inputs.nf'
 include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
 include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
 
@@ -37,6 +37,16 @@ def helpMessage() {
                                 One of: ${RANKS().join(',')} (default: order).
       --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
                                 plot (default: 0, no filtering).
+      --exclude_target         Never pick a comparison genome or proteome source of the
+                                same species as the target, even a chromosome-level one.
+                                Off by default: a same-species result is kept -- it's a
+                                legitimate outcome (e.g. a second, independently submitted
+                                assembly of the same organism, or the only chromosome-level
+                                resource available for a sparsely-sequenced group) -- as
+                                long as it's chromosome-level or better; only a lower-
+                                quality same-species candidate is dropped either way.
+      --min_asm_gap <int>       Minimum run of N's (bp) counted as an assembly gap, shown
+                                 by the plot's "Show gaps" switch (default: 100).
 
     Synteny chaining:
       --min_identity <float>   Per-hit identity (0-1) below which a candidate synteny
@@ -44,6 +54,15 @@ def helpMessage() {
                                 mean identity of the weaker genome's alignment, so a
                                 divergent species pair isn't forced through a threshold
                                 tuned for close relatives. Pass a value to override.
+
+    Resource tuning:
+      --miniprot_m <int>       Miniprot k-mer sampling exponent: samples 1/2^INT
+                                of genomic k-mers when building its index. Higher
+                                values cut peak alignment RAM at some cost to
+                                sensitivity -- useful on RAM-constrained hardware
+                                (a laptop, a small VM). Default: unset (miniprot's
+                                own default applies). See benchmark/miniprot_m_sweep/
+                                for the measured RAM-vs-concordance tradeoff.
 
     Polyploid support:
       --show_homeologs <mode>  Also self-compare one or both genomes' own proteome
@@ -128,6 +147,11 @@ workflow {
     // "genome.fna", which tells a viewer nothing) the NCBI accession it was
     // discovered from
     comparison_display_name = null
+    // proteome's origin for the stats panel: its filename when given manually,
+    // or (species name is more useful than an accession here -- the proteome
+    // is background context, not one of the two genomes being compared) the
+    // species name it was discovered from
+    proteome_display_name = null
 
     if (params.comparison) {
         comparison_fasta = Channel.value(file(params.comparison))
@@ -135,16 +159,18 @@ workflow {
     }
     if (params.proteome) {
         proteome_fasta = Channel.value(file(params.proteome))
+        proteome_display_name = Channel.value(file(params.proteome).name)
     }
 
     if (!skipDiscovery) {
         lineage_ch = RESOLVE_TAXONOMY(Channel.value(params.taxid))
 
         if (!params.comparison) {
-            comparison_selection = FIND_COMPARISON_ASSEMBLY(lineage_ch, params.max_rank).selection
+            comparison_selection = FIND_COMPARISON_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target).selection
             comparison_selection.map { f ->
                 def sel = readSelection(f)
-                log.info "quick_synteny: comparison accession=${sel.accession} rank=${sel.rank} (${sel.name}) from ${sel.candidate_count} candidate(s)"
+                def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
+                log.info "quick_synteny: comparison accession=${sel.accession} rank=${sel.rank} (${sel.name})${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
                 sel
             }.view()
             comparison_fasta = DOWNLOAD_GENOME(comparison_selection.map { readSelection(it).accession })
@@ -152,13 +178,15 @@ workflow {
         }
 
         if (!params.proteome) {
-            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank).selection
+            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target).selection
             prot_selection.map { f ->
                 def sel = readSelection(f)
-                log.info "quick_synteny: proteome accession=${sel.accession} rank=${sel.rank} (${sel.name}) annotated=${sel.annotated} from ${sel.candidate_count} candidate(s)"
+                def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
+                log.info "quick_synteny: proteome accession=${sel.accession} rank=${sel.rank} (${sel.name}) annotated=${sel.annotated}${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
                 sel
             }.view()
             proteome_fasta = DOWNLOAD_PROTEIN(prot_selection.map { readSelection(it).accession })
+            proteome_display_name = prot_selection.map { readSelection(it).name }
         }
     }
 
@@ -185,7 +213,10 @@ workflow {
     // ---- align proteome against both genomes (also doubles as the raw
     // synteny/homeolog anchor source -- see build_synteny.nf) ----
     align_in = renamed.combine(proteome_fasta)
-    gff = MINIPROT_ALIGN(align_in).gff
+    // params.miniprot_m defaults to null (miniprot's own default); normalized
+    // to '' here for the same reason as min_identity below -- see that comment
+    def miniprot_m = params.miniprot_m ?: ''
+    gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
     gff_by_role = gff.branch {
         target: it[0] == 'target'
         comparison: it[0] == 'comparison'
@@ -202,12 +233,22 @@ workflow {
     target_chrom_sizes     = chrom_sizes_by_role.target
     comparison_chrom_sizes = chrom_sizes_by_role.comparison
 
+    // ---- assembly gaps (both genomes, always computed) ----
+    gaps = FIND_ASSEMBLY_GAPS(renamed, params.min_asm_gap).gaps
+    gaps_by_role = gaps.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
+    target_gaps     = gaps_by_role.target
+    comparison_gaps = gaps_by_role.comparison
+
     // ---- synteny blocks + final plot ----
     // params.min_identity defaults to null (auto-tune); Groovy's null is not
     // safe to pass through a process `val` input the same way every call site
     // expects (falsy-but-interpolatable), so it's normalized to '' here once
     def min_identity = params.min_identity ?: ''
-    synteny = BUILD_SYNTENY(target_gff, comparison_gff, proteome_fasta, params.show_homeologs, min_identity)
+    synteny = BUILD_SYNTENY(target_gff, comparison_gff, proteome_fasta, params.show_homeologs, min_identity,
+                             proteome_display_name)
 
     PYGENOMEVIZ_PLOT(
         synteny.cross_slider,
@@ -215,5 +256,6 @@ workflow {
         synteny.homeolog_slider,
         synteny.stats,
         target_display_name, comparison_display_name,
+        target_gaps, comparison_gaps,
     )
 }

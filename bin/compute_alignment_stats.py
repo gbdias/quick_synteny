@@ -70,6 +70,10 @@ def main():
     parser.add_argument('--subject_gff', required=True)
     parser.add_argument('--query_name', required=True)
     parser.add_argument('--subject_name', required=True)
+    parser.add_argument('--proteome_origin', default=None,
+                         help="where the proteome came from, for the stats panel: a species "
+                              "name if it was auto-discovered from NCBI, or the input filename "
+                              "if the user supplied it directly. Omitted (no line shown) if not given.")
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
 
@@ -79,6 +83,7 @@ def main():
 
     stats = {
         'proteome_total': proteome_total,
+        'proteome_origin': args.proteome_origin,
         'query_name': args.query_name,
         'query_aligned': query_aligned,
         'query_mean_identity': query_identity,

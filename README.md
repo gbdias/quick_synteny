@@ -6,7 +6,7 @@ from NCBI (climbing the taxonomy ladder from species outward until it finds
 adequate assemblies), aligns the proteome against both genomes with
 `miniprot`, and renders a two-genome synteny plot as a single self-contained
 interactive HTML page -- a Circos-style ring, a zoom panel, and a whole-
-genome dotplot, all explorable and individually exportable as SVG.
+genome dotplot, all explorable and individually exportable as SVG, PNG, or JPEG.
 
 This is a Nextflow DSL2 port of the original `legacy/quick_synteny.sh`
 SLURM script, adding automatic comparison-genome/proteome discovery in place
@@ -87,6 +87,20 @@ with three panels side by side:
   axes so shared synteny lines up into a clean diagonal -- most useful for a
   closely-related pair with a roughly 1:1 chromosome correspondence.
 
+An "Order by size" switch (on by default) sorts every chromosome -- on the
+ring and both dotplot axes alike -- largest to smallest; switch it off to
+see each genome's chromosomes in their original FASTA order instead. The
+comparison genome's dotplot axis always reads bottom-to-top with the
+largest (or, with the switch off, the first-in-file) chromosome at the
+bottom, under either setting.
+
+A "Show gaps" switch (off by default, below the ring) marks assembly gaps --
+runs of N's in each input FASTA, `--min_asm_gap` bp or longer (default:
+100) -- on the ring and the zoom panel, and as thin dotted lines on the
+dotplot. Gaps are found once per genome, from the same renamed sequences
+`chrom.sizes` and the links use, so their coordinates always match; each
+run's gap TSVs are published to `pipeline_info/*.gaps.tsv`.
+
 Hover any wedge, band, or ribbon for its coordinates, protein-alignment
 (anchor) count, mean identity, and anchor density. A color-palette dropdown
 and a numeric spinner recolor comparison-genome chromosomes (a few curated
@@ -94,11 +108,14 @@ palettes, cycling through 1-10 discrete colors instead of one color per
 chromosome); another spinner filters every panel down to blocks with at
 least that many supporting anchors. Two text inputs relabel "target"/
 "comparison" to the actual species/genome names everywhere a title or bar
-shows them, and each panel has its own save button to export exactly that
-panel as a standalone SVG (open it in Inkscape, Illustrator, or similar to
-convert to PDF/PNG) -- named from whatever labels are currently set. A
-small always-visible stats panel shows the alignment summary (proteome
-size, each genome's aligned-protein count/mean identity).
+shows them, and each panel has its own save button plus a format dropdown to
+export exactly that panel as SVG (a vector original -- open it in Inkscape,
+Illustrator, or similar to edit it or convert it to PDF), PNG, or JPEG (both
+ready to paste into a slide or document) -- named from whatever labels are
+currently set. A small always-visible stats panel (under the zoom panel) shows the
+alignment summary -- proteome size, each genome's aligned-protein
+count/mean identity, and the proteome's own origin (the species it was
+auto-discovered from, or the input filename if supplied manually).
 
 Only the **comparison genome** is colored (a distinct hue per chromosome,
 cycling through a qualitative palette) -- the **target** is a flat grey so

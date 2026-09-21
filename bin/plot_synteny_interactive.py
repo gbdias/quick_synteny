@@ -2,9 +2,11 @@
 """Render a two-genome synteny plot as a self-contained interactive HTML page
 (Bokeh, no server -- all interactivity is CustomJS). This is the pipeline's
 only plot output -- there is deliberately no static-image equivalent, so
-that "explore, then export exactly the panel you want as an SVG" (see each
-panel's save button, SYN.exportFigureAsSVG) can be the one workflow, rather
-than needing separate static renders kept in sync with it.
+that "explore, then export exactly the panel you want" (see each panel's
+save button + format selector, SYN.exportFigure -- SVG for a vector original
+to edit or convert to PDF, PNG for something ready to paste into a slide or
+document) can be the one workflow, rather than needing separate static
+renders kept in sync with it.
 
 Three-column layout: a full Circos-style ring on the left (every wedge/
 ribbon individually hoverable), a linear zoom/detail panel in the middle, a
@@ -62,7 +64,7 @@ from bokeh.embed import file_html
 from bokeh.events import DoubleTap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, Range1d, Select, Spinner, TextInput, Toggle)
+                           Button, Div, Range1d, Select, Spinner, Switch, TextInput, Toggle)
 from bokeh.plotting import figure
 from bokeh.resources import CDN
 
@@ -85,11 +87,11 @@ PALETTE_PASTEL = [
 # SHARED_JS) indexes with idx % k for any k up to MAX_COLORS, so a shorter
 # list would read past its own end and recolor as undefined
 PALETTES = {
-    'Categorical (default)': PALETTE,
+    'Default': PALETTE,
     'Colorblind-safe': PALETTE_COLORBLIND,
     'Pastel': PALETTE_PASTEL,
 }
-DEFAULT_PALETTE_NAME = 'Categorical (default)'
+DEFAULT_PALETTE_NAME = 'Default'
 TARGET_GREY = '#999999'
 
 OUTER_R = 1.0
@@ -98,6 +100,55 @@ INNER_R = OUTER_R - RING_WIDTH
 LINK_R = INNER_R
 GROUP_GAP = math.radians(4)
 CHROM_GAP = math.radians(0.5)
+
+# an assembly gap is typically a few hundred bp against a multi-Mb
+# chromosome -- drawn at its true angular width, most gaps would render
+# sub-pixel and be both invisible and practically unhoverable. Widening only
+# the ones that would otherwise fall under this floor (real length is still
+# exact in the tooltip/label) is the same "minimum feature width" convention
+# other genome browsers use for tiny features -- not applied to a gap that's
+# already wide enough to show its true size. Small on purpose: a gap wedge
+# spans the ideogram's FULL radial height (INNER_R to OUTER_R, same as
+# wedge_polygon's own defaults -- no separate radial inset), so it should
+# read as a thin needle mark across that whole band, not a short wide block --
+# only the angular width (this constant) needs flooring, not the height.
+MIN_GAP_ANGLE = math.radians(0.2)
+
+# the zoom panel figure's own fixed pixel width -- embedded (not duplicated
+# as a separate JS literal) so SYN.widenGapBp's px-to-bp conversion can
+# never drift from the actual figure build_page() creates below
+DETAIL_FIG_WIDTH = 446
+
+# the default right-hand toolbar Bokeh reserves on every figure here (pan/
+# wheel-zoom/reset/hover icons) -- that strip eats into detail_fig's own
+# DETAIL_FIG_WIDTH rather than sitting outside it, so the panel's actual
+# *drawn* frame (what a viewer reads as "the zoom panel") is this much
+# narrower on the right than the figure's nominal width.
+PLOT_TOOLBAR_WIDTH = 30
+
+# the stats box below detail_fig -- matched to the zoom panel's drawn frame,
+# not its full nominal width, so the box's own right edge lines up with the
+# frame's right edge instead of running on past it under the toolbar icons
+STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH
+
+# every titleless toolbar control below a figure (save/clear buttons, the
+# SVG/PNG/JPEG format dropdowns, the "order by similarity" toggle) -- left
+# unset, each one auto-sizes to its own label/font metrics instead (a plain
+# Button came out a couple px shorter than one with an emoji glyph in its
+# label, and Select's own browser-native control renders shorter still than
+# either), so the buttons along one row didn't line up. Explicit and shared
+# so every one of them matches, no matter what's in its label.
+TOOLBAR_CONTROL_HEIGHT = 32
+
+# the header row's five titled controls (target/comparison label, color
+# palette, colors, min block anchors) -- narrower than their old 220px,
+# which was much wider than any of their labels or values actually need
+TOP_CONTROL_WIDTH = 150
+
+# dotplot gap lines only -- a lighter grey than the ring/zoom panel's own
+# solid-black gap markers (a `multi_line` renderer style, set once here in
+# Python; no JS mirror needed since it's never re-set per-point client-side)
+GAP_LINE_COLOR = '#AAAAAA'
 
 MAX_COLORS = 10
 DEFAULT_COLORS = MAX_COLORS
@@ -132,6 +183,25 @@ def read_chrom_sizes(path):
             name, size = line.split('\t')[:2]
             chroms.append((name, int(size)))
     return chroms
+
+
+def read_gaps(path):
+    """find_assembly_gaps.py output: chrom, start, end -- no header, 0-based
+    half-open, same convention as read_links' q_start/q_end (see
+    build_synteny_blocks.py's parse_gff). Returns [] for path=None (no
+    --target_gaps/--comparison_gaps given), same graceful-degradation
+    convention as the homeolog links args below."""
+    if not path:
+        return []
+    gaps = []
+    with open(path) as f:
+        for line in f:
+            line = line.rstrip('\n')
+            if not line:
+                continue
+            chrom, start, end = line.split('\t')[:3]
+            gaps.append({'chrom': chrom, 'start': int(start), 'end': int(end)})
+    return gaps
 
 
 def read_links(path):
@@ -213,6 +283,15 @@ def arc_points(a0, a1, radius, n=48):
     return [point(a0 + (a1 - a0) * i / n, radius) for i in range(n + 1)]
 
 
+def arc_points_ordered(a0, a1, radius, n=24):
+    """Like arc_points, but walks a0 -> a1 exactly as given, never reordered
+    to a0<a1 -- arc_points' reordering is fine for a closed wedge (outer arc
+    + reversed inner arc just need consistent winding either way), but
+    ribbon_polygon below needs to know which literal endpoint is which, to
+    hand each one to the correct Bezier crossing segment."""
+    return [point(a0 + (a1 - a0) * i / n, radius) for i in range(n + 1)]
+
+
 def wedge_polygon(a0, a1, r0=INNER_R, r1=OUTER_R, n=48):
     """Annular sector (a ring wedge) as a closed polygon: outer arc a0->a1,
     then inner arc back a1->a0, same shape matplotlib.patches.Wedge draws."""
@@ -233,25 +312,40 @@ def quad_bezier(p0, p1, p2, n=24):
 
 
 def ribbon_polygon(angle_q1, angle_q2, angle_s1, angle_s2, radius=LINK_R, n=24):
-    """Straight chord across the query arc, quadratic Bezier (control at the
-    ring's center) over to the subject arc, straight chord back, Bezier back
-    to the start -- the bowtie ribbon crossing through the middle of the
-    ring."""
-    p_q1, p_q2 = point(angle_q1, radius), point(angle_q2, radius)
-    p_s1, p_s2 = point(angle_s1, radius), point(angle_s2, radius)
+    """Arc across the query span -- curved along the ring's own radius, not
+    a straight chord, so it sits flush against the ideogram's own curvature
+    where the ribbon meets it (LINK_R == INNER_R) -- quadratic Bezier
+    (control at the ring's center) over to the subject arc, arc across the
+    subject span, Bezier back to the start -- the bowtie ribbon crossing
+    through the middle of the ring."""
+    q_arc = arc_points_ordered(angle_q1, angle_q2, radius, n)  # q1 -> q2, in order
+    s_arc = arc_points_ordered(angle_s2, angle_s1, radius, n)  # s2 -> s1, in order (matches traversal below)
     origin = (0.0, 0.0)
-    poly = [p_q1, p_q2]
-    poly += quad_bezier(p_q2, origin, p_s2, n)[1:]
-    poly += [p_s1]
-    poly += quad_bezier(p_s1, origin, p_q1, n)[1:]
+    poly = list(q_arc)
+    poly += quad_bezier(q_arc[-1], origin, s_arc[0], n)[1:]
+    poly += s_arc[1:]
+    poly += quad_bezier(s_arc[-1], origin, q_arc[0], n)[1:]
     return [p[0] for p in poly], [p[1] for p in poly]
 
 
 class Dataset:
     def __init__(self, query_chrom_sizes, subject_chrom_sizes, links_path,
-                 target_homeolog_links_path=None, comparison_homeolog_links_path=None):
-        self.query_chroms = read_chrom_sizes(query_chrom_sizes)
-        self.subject_chroms = read_chrom_sizes(subject_chrom_sizes)
+                 target_homeolog_links_path=None, comparison_homeolog_links_path=None,
+                 query_gaps_path=None, subject_gaps_path=None):
+        # CHROM_SIZES emits natural (FASTA) order now, not size order (see
+        # that process's own comment) -- self.query_chroms/subject_chroms
+        # stay the name used everywhere below (offsets, wedges, dotplot
+        # layout, color assignment) and represent whichever order is
+        # DEFAULT-active, which is size order (size_order_toggle defaults to
+        # on in build_page() -- kept in sync deliberately, same as every
+        # other Python/JS default-state pair in this file). The natural-order
+        # lists are kept alongside purely so build_page() can embed them for
+        # the client-side reorder engines (SYN.buildRingLayout,
+        # SYN.dpNaturalOrder) to switch back to when that toggle goes off.
+        self.query_chroms_natural = read_chrom_sizes(query_chrom_sizes)
+        self.subject_chroms_natural = read_chrom_sizes(subject_chrom_sizes)
+        self.query_chroms = sorted(self.query_chroms_natural, key=lambda c: -c[1])
+        self.subject_chroms = sorted(self.subject_chroms_natural, key=lambda c: -c[1])
         self.query_sizes = dict(self.query_chroms)
         self.subject_sizes = dict(self.subject_chroms)
 
@@ -267,17 +361,16 @@ class Dataset:
         # boundary gridlines build_dotplot_sources() draws already mark each
         # edge, so a gap would only waste axis space, not add information
         self.dp_query_offsets, self.dp_query_span = linear_offsets(self.query_chroms, 0)
-        # reversed relative to self.subject_chroms (and to the ring's subject
-        # arrangement): linear_offsets gives the FIRST name in its input list
-        # the lowest -- bottommost -- position, so without this the first
-        # comparison chromosome would sit at the very bottom of the axis and
-        # reading up the axis would run last-to-first -- reversing the input
-        # here instead puts the first chromosome at the top, so the axis
-        # reads top-to-bottom in the same natural (file) order the x-axis
-        # already reads left-to-right. This is also this dataset's "natural"
-        # dotplot order in the sense the "order by similarity" toggle uses
-        # (see SHARED_JS's SYN.dpNaturalOrder, its client-side counterpart).
-        self.dp_subject_offsets, self.dp_subject_span = linear_offsets(list(reversed(self.subject_chroms)), 0)
+        # NOT reversed (an earlier version reversed this, putting the first
+        # comparison chromosome at the top -- flipped per explicit request):
+        # linear_offsets gives the FIRST name in its input list the lowest --
+        # bottommost -- position, same convention the x-axis already uses, so
+        # the first comparison chromosome now sits at the BOTTOM of the axis
+        # and reading up the axis runs last-to-first. This is also this
+        # dataset's "natural" dotplot order in the sense the "order by
+        # similarity" toggle uses (see SHARED_JS's SYN.dpNaturalOrder, its
+        # client-side counterpart).
+        self.dp_subject_offsets, self.dp_subject_span = linear_offsets(self.subject_chroms, 0)
 
         self.query_colors = {name: TARGET_GREY for name, _ in self.query_chroms}
         self.subject_colors = {name: PALETTE[i % DEFAULT_COLORS]
@@ -294,6 +387,12 @@ class Dataset:
             self.comparison_homeolog_links = [l for l in read_links(comparison_homeolog_links_path)
                                                if l['q_chrom'] in self.subject_offsets and l['s_chrom'] in self.subject_offsets]
 
+        # assembly gaps -- filtered to chroms that survived --min_seq_size the
+        # same way links are above, so a gap on a sequence dropped from the
+        # plot doesn't linger in the data
+        self.query_gaps = [g for g in read_gaps(query_gaps_path) if g['chrom'] in self.query_offsets]
+        self.subject_gaps = [g for g in read_gaps(subject_gaps_path) if g['chrom'] in self.subject_offsets]
+
     def link_angles(self, link, q_offsets, q_sizes, s_offsets, s_sizes):
         return (
             bp_to_angle(link['q_chrom'], link['q_start'], q_sizes, q_offsets),
@@ -307,16 +406,82 @@ class Dataset:
                      + self.comparison_homeolog_links), default=1) or 1
 
 
-def format_link_label(link, extra=''):
+def format_link_label(link, extra='', top_label='Comparison', bottom_label='Target'):
     """mean_identity/anchor_density are None for links.tsv files predating
-    those columns -- omit that line rather than printing 'None'."""
+    those columns -- omit that line rather than printing 'None'.
+
+    top_label/bottom_label default to the normal cross-genome case (s_chrom
+    is always on the comparison genome, q_chrom always on target here) --
+    but a homeolog link's two coordinates are BOTH from the same genome
+    (see build_overview_sources' target_homeolog_links/comparison_homeolog_
+    links loops), so those callers pass both labels as that one genome's
+    name instead of the default Comparison/Target pair, which would
+    otherwise misattribute one side to the wrong genome. A small <table>,
+    not padded strings, is what actually right-aligns the coordinate
+    column regardless of how the two label words' widths differ."""
     stats = f"{link['score']} protein alignment(s)  ·  orientation={link['orientation']}"
     if link.get('mean_identity') is not None and link.get('anchor_density') is not None:
         stats += (f"<br>avg identity: {link['mean_identity'] * 100:.1f}%"
                   f"  ·  density: {link['anchor_density']:.1f} anchors/Mb")
-    return (f"{link['q_chrom']}:{link['q_start']:,}-{link['q_end']:,}"
-            f" ↔ {link['s_chrom']}:{link['s_start']:,}-{link['s_end']:,}"
-            f"<br>{stats}{extra}")
+    coords = (
+        "<table style='border-collapse:collapse'>"
+        f"<tr><td style='padding-right:6px'>{top_label}</td>"
+        f"<td style='text-align:right'>{link['s_chrom']}:{link['s_start']:,}-{link['s_end']:,}</td></tr>"
+        f"<tr><td style='padding-right:6px'>{bottom_label}</td>"
+        f"<td style='text-align:right'>{link['q_chrom']}:{link['q_start']:,}-{link['q_end']:,}</td></tr>"
+        "</table>"
+    )
+    return f"{coords}<br>{stats}{extra}"
+
+
+def format_gap_label(chrom, start, end):
+    """Mirrors SHARED_JS's SYN.formatGapLabel exactly -- kept in sync
+    deliberately (see module docstring)."""
+    return f"Assembly gap<br>{html.escape(chrom)}:{start:,}-{end:,} ({end - start:,} bp)"
+
+
+def build_gap_records(gaps, offsets, sizes):
+    """Ring-wedge geometry for a genome's own assembly gaps -- same annular-
+    sector shape as a chromosome wedge, same full INNER_R-OUTER_R radial
+    span too (wedge_polygon's own defaults, no radial inset -- a gap marker
+    is exactly as tall as the ideogram it marks), just angularly widened to
+    MIN_GAP_ANGLE if narrower (see that constant's own comment) so it reads
+    as a thin needle across that height rather than a sub-pixel sliver.
+    min/max, not a0/a1 directly: a subject/comparison chromosome's angle
+    runs DEcreasing with bp (see circular_offsets), so a0 can be either side
+    of a1 depending on which genome this gap belongs to. Mirrors SHARED_JS's
+    SYN.buildRingLayout gap loop -- kept in sync deliberately."""
+    records = []
+    for g in gaps:
+        a0 = bp_to_angle(g['chrom'], g['start'], sizes, offsets)
+        a1 = bp_to_angle(g['chrom'], g['end'], sizes, offsets)
+        lo, hi = min(a0, a1), max(a0, a1)
+        if hi - lo < MIN_GAP_ANGLE:
+            mid = (lo + hi) / 2
+            lo, hi = mid - MIN_GAP_ANGLE / 2, mid + MIN_GAP_ANGLE / 2
+        xs, ys = wedge_polygon(lo, hi)
+        records.append({'xs': xs, 'ys': ys, 'label': format_gap_label(g['chrom'], g['start'], g['end'])})
+    return records
+
+
+def group_gaps_by_chrom(gaps):
+    """{chrom: [{start, end}, ...]} -- the form the zoom panel and the
+    dotplot's gap lines both need (per-chromosome lookup, not the ring's
+    flat wedge-polygon list build_gap_records returns), embedded once and
+    shared by both client-side (see SHARED_JS's targetGapsByChrom/
+    comparisonGapsByChrom usage)."""
+    by_chrom = {}
+    for g in gaps:
+        by_chrom.setdefault(g['chrom'], []).append({'start': g['start'], 'end': g['end']})
+    return by_chrom
+
+
+def trunc1(x):
+    """Truncates (not rounds) to 1 decimal place -- e.g. 99.96 -> 99.9, not
+    100.0, so the stats panel never implies a percentage reached a round
+    number it didn't actually reach. Mirrors SHARED_JS's own truncation in
+    SYN.buildStatsHtml (Math.floor(x*10)/10) -- kept in sync deliberately."""
+    return math.floor(x * 10) / 10
 
 
 def format_stats_html(target_label, comparison_label, stats):
@@ -328,19 +493,31 @@ def format_stats_html(target_label, comparison_label, stats):
     if not stats:
         return ''
     total = stats['proteome_total']
+    origin = stats.get('proteome_origin')
 
     def row(label, aligned, identity):
         pct = (aligned / total * 100) if total else 0.0
-        return (f"<tr><td>{html.escape(label)}</td><td>{aligned:,} ({pct:.1f}%)</td>"
-                f"<td>{identity * 100:.1f}%</td></tr>")
+        return (f"<tr><td style='padding-right:20px'>{html.escape(label)}</td>"
+                f"<td style='text-align:right;padding-right:20px'>{aligned:,} ({trunc1(pct):.1f}%)</td>"
+                f"<td style='text-align:right'>{trunc1(identity * 100):.1f}%</td></tr>")
 
+    origin_line = (f"<div style='color:#666;margin-top:2px'>Proteome: {html.escape(origin)}</div>"
+                   if origin else '')
+
+    # display:block + an explicit px width (matching stats_div's own
+    # width=STATS_PANEL_WIDTH, box-sizing:border-box so the border/padding
+    # don't push it wider) -- rather than the old shrink-to-fit
+    # display:inline-block -- makes this box span the zoom panel's drawn
+    # frame instead of only as wide as its own text/table content.
     return (
         "<div style='font-size:13px;color:#333;border:1px solid #ddd;border-radius:6px;"
-        "padding:8px 12px;display:inline-block;margin:4px 0 8px 0'>"
-        f"<b>Alignment summary</b> -- {total:,} protein(s) in the input proteome"
+        f"padding:8px 12px;display:block;box-sizing:border-box;width:{STATS_PANEL_WIDTH}px;"
+        "margin:4px 0 8px 0'>"
+        f"<b>Alignment summary</b><br>{total:,} input proteins"
+        f"{origin_line}"
         "<table style='border-collapse:collapse;margin-top:4px'>"
-        "<tr style='color:#666'><th style='text-align:left;padding-right:12px'></th>"
-        "<th style='text-align:right;padding-right:12px'>aligned</th>"
+        "<tr style='color:#666'><th style='text-align:left;padding-right:20px'></th>"
+        "<th style='text-align:right;padding-right:20px'>aligned</th>"
         "<th style='text-align:right'>avg identity</th></tr>"
         + row(target_label, stats['query_aligned'], stats['query_mean_identity'])
         + row(comparison_label, stats['subject_aligned'], stats['subject_mean_identity'])
@@ -415,7 +592,10 @@ def build_overview_sources(ds, subject_index, query_index):
             'xs': xs, 'ys': ys,
             'palette_index': query_index[link['q_chrom']],
             'alpha': 0.25 + 0.55 * (link['score'] / max_score),
-            'label': format_link_label(link, extra=' (homeolog)'),
+            # both coordinates are target's own -- see format_link_label's
+            # top_label/bottom_label docstring
+            'label': format_link_label(link, extra=' (homeolog)',
+                                        top_label='Target', bottom_label='Target'),
             'score': link['score'],
             'is_homeolog': True,
             'dp_x0': 0, 'dp_y0': 0, 'dp_x1': 0, 'dp_y1': 0,
@@ -428,7 +608,10 @@ def build_overview_sources(ds, subject_index, query_index):
             'xs': xs, 'ys': ys,
             'palette_index': subject_index[link['q_chrom']],
             'alpha': 0.25 + 0.55 * (link['score'] / max_score),
-            'label': format_link_label(link, extra=' (homeolog)'),
+            # both coordinates are comparison's own -- see format_link_label's
+            # top_label/bottom_label docstring
+            'label': format_link_label(link, extra=' (homeolog)',
+                                        top_label='Comparison', bottom_label='Comparison'),
             'score': link['score'],
             'is_homeolog': True,
             'dp_x0': 0, 'dp_y0': 0, 'dp_x1': 0, 'dp_y1': 0,
@@ -452,16 +635,24 @@ def build_overview_sources(ds, subject_index, query_index):
         label_y.append((OUTER_R + 0.14) * math.sin(mid))
         label_text.append(name)
 
-    # the overview starts showing every ribbon (slider defaults to
-    # MBA_SLIDER_MIN, i.e. no filtering), so the initial ColumnDataSource is
-    # just ribbon_records unfiltered, colored at the default color count
+    # The overview otherwise starts showing every ribbon at MBA_SLIDER_MIN
+    # (no min-block-anchors filtering), but self-links are excluded here --
+    # NOT because build_overview_sources knows about any widget, but because
+    # this must match self_links_toggle's own default (active=False, see
+    # build_page()) by construction: this Python-rendered initial data is
+    # never passed through SYN.buildOverviewRibbons (that only ever runs
+    # client-side, in response to a control changing), so if this filter and
+    # that widget's default ever disagree, the page loads showing a switch
+    # in one state and ribbons in the other. Kept in sync deliberately, same
+    # as SYN.buildStatsHtml/format_stats_html above.
     r_src = ColumnDataSource(dict(
-        xs=[r['xs'] for r in ribbon_records],
-        ys=[r['ys'] for r in ribbon_records],
-        fill_color=[lighten(PALETTE[r['palette_index'] % DEFAULT_COLORS]) for r in ribbon_records],
-        alpha=[r['alpha'] for r in ribbon_records],
-        label=[r['label'] for r in ribbon_records],
-        palette_index=[r['palette_index'] for r in ribbon_records],
+        xs=[r['xs'] for r in ribbon_records if not r['is_homeolog']],
+        ys=[r['ys'] for r in ribbon_records if not r['is_homeolog']],
+        fill_color=[lighten(PALETTE[r['palette_index'] % DEFAULT_COLORS])
+                    for r in ribbon_records if not r['is_homeolog']],
+        alpha=[r['alpha'] for r in ribbon_records if not r['is_homeolog']],
+        label=[r['label'] for r in ribbon_records if not r['is_homeolog']],
+        palette_index=[r['palette_index'] for r in ribbon_records if not r['is_homeolog']],
     ))
 
     return (
@@ -518,11 +709,11 @@ def build_dotplot_sources(ds, subject_index, ribbon_records):
     for name, size in ds.subject_chroms:
         y0 = ds.dp_subject_offsets[name]
         grid_xs.append([-rx, total_x]); grid_ys.append([y0, y0])
-    # the topmost edge belongs to ds.subject_chroms[0] here, not [-1] --
-    # dp_subject_offsets was built from the reversed list (see
-    # Dataset.__init__), so the FIRST name in the original list is the one
-    # that ends up with the highest (topmost) position
-    top_s_name, top_s_size = ds.subject_chroms[0]
+    # the topmost edge belongs to ds.subject_chroms[-1] here -- dp_subject_
+    # offsets is no longer reversed (see Dataset.__init__), so the LAST name
+    # in subject_chroms is the one that ends up with the highest (topmost)
+    # position, same as ds.query_chroms[-1]'s rightmost edge above
+    top_s_name, top_s_size = ds.subject_chroms[-1]
     grid_xs.append([-rx, total_x]); grid_ys.append([ds.dp_subject_offsets[top_s_name] + top_s_size] * 2)
 
     q_label_x, q_label_y, q_label_text = [], [], []
@@ -609,7 +800,30 @@ SYN.state = {
     // recently set programmatically, not a single fixed value baked in at
     // page load (see build_page()'s three DoubleTap handlers)
     detailRange: null,
+    // a snapshot of the ring ribbons' alpha array taken the moment a ribbon
+    // is first clicked, so SYN.applyRibbonHighlight can restore the exact
+    // pre-highlight (score-based) alphas on deselect rather than guessing --
+    // null whenever no ribbon is currently highlighted
+    ribbonBaseAlpha: null,
+    // read by SYN.dpNaturalOrder (both the dotplot's own toggle and the
+    // ring's reorder read through that one function) -- true = size order
+    // (SYN.data.queryNames/subjectNames), false = FASTA/natural order
+    // (SYN.data.queryNamesNatural/subjectNamesNatural). Matches
+    // size_order_toggle's default (see build_page()) -- kept in sync
+    // deliberately, same as every other default-state pair in this file.
+    orderBySize: true,
+    // read by SYN.applyDetail (gates whether a freshly built detail's gap
+    // ticks actually reach detail_gap_source) and by show_gaps_toggle's own
+    // callback (ring + dotplot gap visibility) -- matches show_gaps_toggle's
+    // default (see build_page()) -- kept in sync deliberately, same as
+    // every other default-state pair in this file.
+    showGaps: false,
 };
+
+// how dim the OTHER ribbons go while one is highlighted -- low enough to
+// read as "not what you clicked", not so low they vanish and lose all
+// spatial context for where the highlighted one sits among the rest
+SYN.RIBBON_DIM_ALPHA = 0.08;
 
 // The label TextInputs are free-text (see build_page()'s target_label_input/
 // comparison_label_input) and, unlike chromosome names, are never validated
@@ -656,14 +870,20 @@ SYN.recolorSubjectWedges = function(k, subjectSource) {
 
 // SYN.data.ribbons holds EVERY ribbon (see build_overview_sources() -- the
 // embedded links are always generated at MBA_SLIDER_MIN, the least strict
-// slider setting), so both filtering by min-block-anchors and recoloring by
-// the current color count happen together here, client-side, on every move
-// of either slider -- rebuilding from the same master list rather than
-// mutating whatever happens to be currently displayed keeps the two sliders
-// from stepping on each other (e.g. recoloring after a filter must recolor
-// only the still-visible subset, not silently undo the filter).
-SYN.buildOverviewRibbons = function(minScore, k) {
-    const records = SYN.data.ribbons.filter((r) => r.score >= minScore);
+// slider setting), so filtering by min-block-anchors, recoloring by the
+// current color count, and showing/hiding self-links (is_homeolog records --
+// a protein hitting two loci within the SAME genome) all happen together
+// here, client-side, on every change of any of the three controls --
+// rebuilding from the same master list rather than mutating whatever
+// happens to be currently displayed keeps them from stepping on each other
+// (e.g. recoloring after a filter must recolor only the still-visible
+// subset, not silently undo the filter or un-hide self-links).
+SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny) {
+    // self-link (is_homeolog) records are governed by showSelfLinks alone;
+    // cross-genome records are governed by hideSynteny alone -- the two
+    // switches compose independently rather than one overriding the other
+    const records = SYN.data.ribbons.filter((r) =>
+        r.score >= minScore && (r.is_homeolog ? showSelfLinks : !hideSynteny));
     return {
         xs: records.map((r) => r.xs),
         ys: records.map((r) => r.ys),
@@ -674,9 +894,330 @@ SYN.buildOverviewRibbons = function(minScore, k) {
     };
 };
 
-SYN.applyOverviewRibbons = function(minScore, k, ribbonSource) {
-    ribbonSource.data = SYN.buildOverviewRibbons(minScore, k);
+SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny, ribbonSource) {
+    ribbonSource.data = SYN.buildOverviewRibbons(minScore, k, showSelfLinks, hideSynteny);
+    // clear any stale ribbon-click highlight -- the rebuilt data's array
+    // positions no longer correspond to whatever was selected before (a
+    // filter/recolor/self-links change can add, drop, or reorder records),
+    // and the fresh alphas above are already correct, so ribbonBaseAlpha
+    // must be nulled BEFORE clearing .selected.indices below: that clear
+    // fires SYN.applyRibbonHighlight's own listener, whose deselect path
+    // only touches .data if ribbonBaseAlpha is still set -- nulling it here
+    // first makes that a no-op instead of overwriting the fresh data with a
+    // stale (wrong-length) snapshot from before the rebuild.
+    SYN.state.ribbonBaseAlpha = null;
+    ribbonSource.selected.indices = [];
     ribbonSource.change.emit();
+};
+
+// Clicking a ribbon highlights it (full opacity) and dims every other one,
+// so one syntenic block can be traced by eye against the surrounding
+// clutter; clicking empty ring space (or anything that clears the
+// selection -- a wedge, a dotplot cell, "clear zoom") deselects and
+// restores everyone's normal alpha. Rebuilds (mba/color/palette/self-links)
+// also invalidate the highlight -- see SYN.applyOverviewRibbons above.
+SYN.applyRibbonHighlight = function(ribbonSource) {
+    const idx = ribbonSource.selected.indices;
+    if (idx.length === 0) {
+        if (SYN.state.ribbonBaseAlpha) {
+            ribbonSource.data.alpha = SYN.state.ribbonBaseAlpha;
+            SYN.state.ribbonBaseAlpha = null;
+            ribbonSource.change.emit();
+        }
+        return;
+    }
+    if (!SYN.state.ribbonBaseAlpha) {
+        SYN.state.ribbonBaseAlpha = ribbonSource.data.alpha.slice();
+    }
+    const base = SYN.state.ribbonBaseAlpha;
+    const selected = new Set(idx);
+    ribbonSource.data.alpha = base.map((a, i) => (selected.has(i) ? 1.0 : SYN.RIBBON_DIM_ALPHA));
+    ribbonSource.change.emit();
+};
+
+// ---- ring geometry (JS port of the Python module-level helpers of the
+// same names/purpose: point, arc_points, wedge_polygon, quad_bezier,
+// ribbon_polygon, circular_offsets, bp_to_angle) -- needed because, unlike
+// the dotplot (which already had a full client-side reorder engine for
+// "order by similarity"), the ring's order was always fixed at page load
+// until now. Kept in sync deliberately, same convention as every other
+// Python/JS pair in this file. ----
+
+SYN.point = function(angle, radius) {
+    return [radius * Math.cos(angle), radius * Math.sin(angle)];
+};
+
+SYN.arcPoints = function(a0, a1, radius, n) {
+    n = n || 48;
+    if (a1 < a0) { const t = a0; a0 = a1; a1 = t; }
+    const pts = [];
+    for (let i = 0; i <= n; i++) { pts.push(SYN.point(a0 + (a1 - a0) * i / n, radius)); }
+    return pts;
+};
+
+// Like SYN.arcPoints, but walks a0 -> a1 exactly as given, never reordered
+// to a0<a1 -- see arc_points_ordered's Python docstring for why
+// SYN.ribbonPolygonJS below needs this instead of SYN.arcPoints.
+SYN.arcPointsOrdered = function(a0, a1, radius, n) {
+    n = n || 24;
+    const pts = [];
+    for (let i = 0; i <= n; i++) { pts.push(SYN.point(a0 + (a1 - a0) * i / n, radius)); }
+    return pts;
+};
+
+SYN.wedgePolygonJS = function(a0, a1, r0, r1, n) {
+    n = n || 48;
+    const outer = SYN.arcPoints(a0, a1, r1, n);
+    const inner = SYN.arcPoints(a0, a1, r0, n).slice().reverse();
+    const poly = outer.concat(inner);
+    return {xs: poly.map((p) => p[0]), ys: poly.map((p) => p[1])};
+};
+
+SYN.quadBezier = function(p0, p1, p2, n) {
+    n = n || 24;
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const x = (1 - t) ** 2 * p0[0] + 2 * (1 - t) * t * p1[0] + t ** 2 * p2[0];
+        const y = (1 - t) ** 2 * p0[1] + 2 * (1 - t) * t * p1[1] + t ** 2 * p2[1];
+        pts.push([x, y]);
+    }
+    return pts;
+};
+
+SYN.ribbonPolygonJS = function(aq1, aq2, as1, as2, radius, n) {
+    n = n || 24;
+    // curved along the ring's own radius where the ribbon meets each
+    // ideogram, not a straight chord -- see ribbon_polygon's Python
+    // docstring; kept in sync deliberately
+    const qArc = SYN.arcPointsOrdered(aq1, aq2, radius, n);  // q1 -> q2, in order
+    const sArc = SYN.arcPointsOrdered(as2, as1, radius, n);  // s2 -> s1, in order (matches traversal below)
+    const origin = [0, 0];
+    let poly = qArc.slice();
+    poly = poly.concat(SYN.quadBezier(qArc[qArc.length - 1], origin, sArc[0], n).slice(1));
+    poly = poly.concat(sArc.slice(1));
+    poly = poly.concat(SYN.quadBezier(sArc[sArc.length - 1], origin, qArc[0], n).slice(1));
+    return {xs: poly.map((p) => p[0]), ys: poly.map((p) => p[1])};
+};
+
+SYN.computeCircularOffsets = function(order, sizes, angleStart, angleEnd) {
+    const n = order.length;
+    const direction = angleEnd >= angleStart ? 1 : -1;
+    const totalGap = SYN.data.chromGap * Math.max(n - 1, 0);
+    const available = Math.max(Math.abs(angleEnd - angleStart) - totalGap, 0.01);
+    const totalBp = order.reduce((s, name) => s + sizes[name], 0) || 1;
+    const offsets = {};
+    let cur = angleStart;
+    for (const name of order) {
+        const span = available * (sizes[name] / totalBp);
+        offsets[name] = [cur, cur + direction * span];
+        cur += direction * (span + SYN.data.chromGap);
+    }
+    return offsets;
+};
+
+SYN.bpToAngleJS = function(chrom, bpPos, sizes, offsets) {
+    const [a0, a1] = offsets[chrom];
+    const size = sizes[chrom];
+    const frac = size ? Math.min(Math.max(bpPos / size, 0), 1) : 0;
+    return a0 + frac * (a1 - a0);
+};
+
+// mirrors build_gap_records' widening logic in this file's Python exactly
+// (min/max, not a0/a1 directly -- see its own comment for why) -- kept in
+// sync deliberately
+SYN.widenGapAngle = function(a0, a1) {
+    let lo = Math.min(a0, a1), hi = Math.max(a0, a1);
+    if (hi - lo < SYN.data.minGapAngle) {
+        const mid = (lo + hi) / 2;
+        lo = mid - SYN.data.minGapAngle / 2;
+        hi = mid + SYN.data.minGapAngle / 2;
+    }
+    return [lo, hi];
+};
+
+// zoom-panel gap ticks have no Python-side equivalent to mirror (see
+// buildDetailData/buildPairDetailData's own "no Python mirror" convention --
+// same reasoning as SYN.buildDotplotSegmentsForLayout) -- these two are
+// purely a JS-side visibility fix, same idea as SYN.widenGapAngle above
+// (a gap is typically a few hundred bp against a multi-Mb bar, so drawn at
+// true width most would render sub-pixel) but in linear bp/px space instead
+// of angular: refSpan is the caller's own best estimate of the panel's full
+// data-space width (pivotSize where that's all that's known yet, xMax once
+// it's computed -- see each call site), converted through the panel's fixed
+// SYN.data.detailFigWidth px size and the same x_range padding build_page()
+// uses (xMax * 1.08) to get an approximate bp-per-px, then floored to
+// SYN.GAP_MIN_PX pixels' worth of bp. Small on purpose: a gap tick spans the
+// bar's FULL height (no vertical inset -- see each addGapTicks call site's
+// own gapYs), so it should read as a thin needle across that height, not a
+// short wide block -- only the width needs flooring, not the height.
+SYN.GAP_MIN_PX = 1.5;
+SYN.widenGapBp = function(start, end, refSpan) {
+    const minBp = (refSpan * 1.08 / SYN.data.detailFigWidth) * SYN.GAP_MIN_PX;
+    if (end - start < minBp) {
+        const mid = (start + end) / 2;
+        return [mid - minBp / 2, mid + minBp / 2];
+    }
+    return [start, end];
+};
+
+// Rebuilds every ring-native source (query/subject wedges, chromosome
+// labels, and the ribbons master list SYN.data.ribbons itself -- NOT just
+// whatever subset is currently filtered into r_src, so a later mba/color/
+// self-links change still has correct fresh geometry to filter from) for an
+// arbitrary (queryOrder, subjectOrder). Mirrors build_overview_sources +
+// build_page()'s ribbon_records/label loops exactly.
+SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
+    const groupGap = SYN.data.groupGap;
+    const subjectOffsets = SYN.computeCircularOffsets(
+        subjectOrder, SYN.data.subjectSizes, Math.PI - groupGap, groupGap);
+    const queryOffsets = SYN.computeCircularOffsets(
+        queryOrder, SYN.data.querySizes, Math.PI + groupGap, 2 * Math.PI - groupGap);
+
+    const q = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: []};
+    for (const name of queryOrder) {
+        const [a0, a1] = queryOffsets[name];
+        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
+        q.xs.push(poly.xs); q.ys.push(poly.ys);
+        q.fill_color.push(SYN.data.targetGrey); q.name.push(name);
+        q.size_label.push(`${(SYN.data.querySizes[name] / 1e6).toFixed(2)} Mb`);
+        q.group.push('target');
+    }
+
+    const s = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], palette_index: []};
+    for (const name of subjectOrder) {
+        const [a0, a1] = subjectOffsets[name];
+        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
+        const pIdx = SYN.data.subjectColorIndex[name];
+        s.xs.push(poly.xs); s.ys.push(poly.ys);
+        s.fill_color.push(SYN.paletteColor(pIdx, k));
+        s.name.push(name);
+        s.size_label.push(`${(SYN.data.subjectSizes[name] / 1e6).toFixed(2)} Mb`);
+        s.group.push('comparison'); s.palette_index.push(pIdx);
+    }
+
+    const labelR = SYN.data.outerR + 0.14;
+    const label = {x: [], y: [], text: []};
+    for (const name of queryOrder) {
+        const [a0, a1] = queryOffsets[name]; const mid = (a0 + a1) / 2;
+        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+    }
+    for (const name of subjectOrder) {
+        const [a0, a1] = subjectOffsets[name]; const mid = (a0 + a1) / 2;
+        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+    }
+
+    const ribbons = [];
+    const allCross = [].concat(...Object.values(SYN.data.linksByQuery));
+    for (const l of allCross) {
+        const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.querySizes, queryOffsets);
+        const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
+        const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
+        const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.subjectSizes, subjectOffsets);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        ribbons.push({
+            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.s_chrom],
+            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore), label: SYN.formatLinkLabel(l),
+            score: l.score, is_homeolog: false,
+        });
+    }
+    for (const l of SYN.data.targetHomeologLinks) {
+        const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.querySizes, queryOffsets);
+        const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
+        const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.querySizes, queryOffsets);
+        const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.querySizes, queryOffsets);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        ribbons.push({
+            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.queryColorIndex[l.q_chrom],
+            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
+            label: SYN.formatLinkLabel(l, 'Target', 'Target') + ' (homeolog)',
+            score: l.score, is_homeolog: true,
+        });
+    }
+    for (const l of SYN.data.comparisonHomeologLinks) {
+        const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.subjectSizes, subjectOffsets);
+        const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.subjectSizes, subjectOffsets);
+        const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
+        const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.subjectSizes, subjectOffsets);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        ribbons.push({
+            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom],
+            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
+            label: SYN.formatLinkLabel(l, 'Comparison', 'Comparison') + ' (homeolog)',
+            score: l.score, is_homeolog: true,
+        });
+    }
+
+    // Assembly-gap wedges for the current order -- same annular-sector shape
+    // AND same full innerR-outerR radial span as a chromosome wedge (no
+    // radial inset -- a gap marker is exactly as tall as the ideogram it
+    // marks; SYN.wedgePolygonJS's default r0/r1 args below), just angularly
+    // widened to SYN.data.minGapAngle if narrower (see that constant's own
+    // Python comment) so it reads as a thin needle, not a sub-pixel sliver.
+    // Always computed here regardless of show_gaps_toggle's current state
+    // (mirrors ribbons above: the toggle only ever filters what SYN.apply
+    // GapVisibility copies OUT of this master list into gap_src, same
+    // pattern as SYN.buildOverviewRibbons/SYN.applyOverviewRibbons for
+    // self-links).
+    const gaps = [];
+    for (const chrom in SYN.data.targetGapsByChrom) {
+        for (const g of SYN.data.targetGapsByChrom[chrom]) {
+            const a0 = SYN.bpToAngleJS(chrom, g.start, SYN.data.querySizes, queryOffsets);
+            const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.querySizes, queryOffsets);
+            const [lo, hi] = SYN.widenGapAngle(a0, a1);
+            const poly = SYN.wedgePolygonJS(lo, hi, SYN.data.innerR, SYN.data.outerR);
+            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel(chrom, g.start, g.end)});
+        }
+    }
+    for (const chrom in SYN.data.comparisonGapsByChrom) {
+        for (const g of SYN.data.comparisonGapsByChrom[chrom]) {
+            const a0 = SYN.bpToAngleJS(chrom, g.start, SYN.data.subjectSizes, subjectOffsets);
+            const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.subjectSizes, subjectOffsets);
+            const [lo, hi] = SYN.widenGapAngle(a0, a1);
+            const poly = SYN.wedgePolygonJS(lo, hi, SYN.data.innerR, SYN.data.outerR);
+            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel(chrom, g.start, g.end)});
+        }
+    }
+
+    return {q, s, label, ribbons, gaps};
+};
+
+// Applies a full ring reorder: rebuilds wedge/label sources directly (never
+// filtered by anything), replaces the SYN.data.ribbons MASTER list with
+// fresh geometry (so mba/color/self-links/hide-synteny keep working
+// correctly against the new order afterward), then re-runs the current
+// filter state on top of it via SYN.applyOverviewRibbons. Clears wedge/
+// ribbon selections -- stale indices from before the rebuild would point at
+// the wrong chromosome/ribbon after the arrays are replaced (same reasoning
+// as SYN.applyOverviewRibbons's own selection-clearing).
+SYN.applyRingLayout = function(queryOrder, subjectOrder, sources) {
+    const layout = SYN.buildRingLayout(queryOrder, subjectOrder, sources.k);
+    sources.querySource.data = layout.q;
+    sources.subjectSource.data = layout.s;
+    sources.labelSource.data = layout.label;
+    SYN.data.ribbons = layout.ribbons;
+    SYN.data.gapRecords = layout.gaps;
+    sources.querySource.selected.indices = [];
+    sources.subjectSource.selected.indices = [];
+    sources.querySource.change.emit();
+    sources.subjectSource.change.emit();
+    sources.labelSource.change.emit();
+    SYN.applyOverviewRibbons(sources.minScore, sources.k, sources.showSelfLinks,
+                              sources.hideSynteny, sources.ribbonSource);
+    SYN.applyGapVisibility(sources.gapSource);
+};
+
+// SYN.data.gapRecords holds the CURRENT ring order's full wedge-polygon
+// list (every gap, replaced wholesale on a reorder -- see SYN.applyRingLayout
+// above), so this only ever needs to copy it into gap_src, or clear it, per
+// SYN.state.showGaps -- same "rebuild from a master list" idiom as
+// SYN.applyOverviewRibbons, just with no score/self-links filtering to do.
+SYN.applyGapVisibility = function(gapSource) {
+    const records = SYN.state.showGaps ? SYN.data.gapRecords : [];
+    gapSource.data = {
+        xs: records.map((r) => r.xs), ys: records.map((r) => r.ys), label: records.map((r) => r.label),
+    };
+    gapSource.change.emit();
 };
 
 // The dotplot's chromosome order is not fixed the way the ring's is -- the
@@ -727,17 +1268,22 @@ SYN.computeOffsets = function(order, sizes) {
     return offsets;
 };
 
-// The default order: target reads left-to-right in its natural (file) order
-// -- same as the ring and as Dataset.__init__'s dp_query_offsets -- and
-// comparison reads top-to-bottom in that SAME natural order, which means
-// reversing it before laying it out bottom-to-top (see Dataset.__init__'s
-// dp_subject_offsets for why: linear_offsets gives the first name the
-// lowest -- bottommost -- position, so the first name has to be last in the
-// list to end up at the top).
+// The non-similarity order: target reads left-to-right, comparison
+// bottom-to-top, both in whichever of {size, natural (FASTA)} order
+// SYN.state.orderBySize currently selects (see size_order_toggle) -- no
+// reversal (an earlier version reversed the comparison list, putting the
+// first name at the top -- flipped per explicit request): SYN.computeOffsets
+// gives the first name in its list the lowest -- bottommost -- position,
+// same convention the x-axis already uses (see Dataset.__init__'s
+// dp_subject_offsets, its Python-render counterpart). Named "natural" for
+// what it's the alternative TO (similarity order, see
+// SYN.computeSimilarityOrder below) -- not because it always resolves to
+// FASTA order anymore.
 SYN.dpNaturalOrder = function() {
+    const bySize = SYN.state.orderBySize;
     return {
-        queryOrder: SYN.data.queryNames.slice(),
-        subjectOrder: SYN.data.subjectNames.slice().reverse(),
+        queryOrder: (bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural).slice(),
+        subjectOrder: (bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural).slice(),
     };
 };
 
@@ -878,6 +1424,42 @@ SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources)
     sources.subjectLabel.data = layout.subjectLabels; sources.subjectLabel.change.emit();
     sources.cell.data = layout.cells; sources.cell.change.emit();
     SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, sources.segment);
+    if (sources.gap) { SYN.applyDotplotGapVisibility(sources.gap); }
+};
+
+// Dotplot companion to SYN.buildRingLayout's gap wedges (nice-to-have, same
+// "Show gaps" switch) -- thin lines instead of a polygon per gap, same
+// bounds convention as build_dotplot_sources' own boundary gridlines. No
+// Python-side equivalent (see dp_gap_src's own comment in build_page() for
+// why) -- entirely client-side, reading SYN.state.dpQueryOffsets/
+// dpSubjectOffsets directly (always current -- SYN.applyDotplotOrder sets
+// them before this ever runs) rather than taking offsets as parameters, so
+// show_gaps_toggle's own callback can call this without needing to know
+// which order is currently active.
+SYN.buildDotplotGapLines = function() {
+    const rx = SYN.data.dpRx, ry = SYN.data.dpRy;
+    const totalX = SYN.data.dpTotalX, totalY = SYN.data.dpTotalY;
+    const xs = [], ys = [], label = [];
+    for (const chrom in SYN.data.targetGapsByChrom) {
+        for (const g of SYN.data.targetGapsByChrom[chrom]) {
+            const mid = SYN.state.dpQueryOffsets[chrom] + (g.start + g.end) / 2;
+            xs.push([mid, mid]); ys.push([-ry, totalY]);
+            label.push(SYN.formatGapLabel(chrom, g.start, g.end));
+        }
+    }
+    for (const chrom in SYN.data.comparisonGapsByChrom) {
+        for (const g of SYN.data.comparisonGapsByChrom[chrom]) {
+            const mid = SYN.state.dpSubjectOffsets[chrom] + (g.start + g.end) / 2;
+            xs.push([-rx, totalX]); ys.push([mid, mid]);
+            label.push(SYN.formatGapLabel(chrom, g.start, g.end));
+        }
+    }
+    return {xs, ys, label};
+};
+
+SYN.applyDotplotGapVisibility = function(gapSource) {
+    gapSource.data = SYN.state.showGaps ? SYN.buildDotplotGapLines() : {xs: [], ys: [], label: []};
+    gapSource.change.emit();
 };
 
 SYN.buildOffsetsLinear = function(chroms, gap) {
@@ -890,11 +1472,22 @@ SYN.buildOffsetsLinear = function(chroms, gap) {
     return [offsets, cum - gap];
 };
 
+// 'target' -> SYN.data.targetGapsByChrom, 'comparison' -> ...GapsByChrom --
+// both the zoom panel builders below need this same per-chromosome lookup
+// (as opposed to the ring's flat wedge-polygon list, see SYN.buildRingLayout)
+// to know which genome's gap list a given bar's chromosome name belongs to,
+// since target and comparison chromosomes can share names (see
+// Dataset.__init__'s own comment on this).
+SYN.gapsForChrom = function(role, name) {
+    return (role === 'target' ? SYN.data.targetGapsByChrom : SYN.data.comparisonGapsByChrom)[name] || [];
+};
+
 SYN.emptyDetail = function(title) {
     return {
         bars: {xs: [], ys: [], fill_color: []},
         ribbons: {xs: [], ys: [], fill_color: [], alpha: [], label: []},
         labels: {x: [], y: [], text: [], color: []},
+        gaps: {xs: [], ys: [], label: []},
         x_range: [-1, 1], y_range: [-0.5, 1.5],
         title: title || 'Click any chromosome wedge on the left to zoom in.',
     };
@@ -918,6 +1511,26 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     const barH = 0.32, topY = 1.2, botY = 0.0;
     const pivotRowY = isPivotSubject ? topY : botY;
     const otherRowY = isPivotSubject ? botY : topY;
+    const pivotRole = isPivotSubject ? 'comparison' : 'target';
+    const otherRole = isPivotSubject ? 'target' : 'comparison';
+
+    // gap ticks for one bar -- same thin-rect-over-the-bar idea as the
+    // ring's wedge markers, just linear: x0 is the bar's own left edge (0
+    // for the pivot, which is never offset; otherOffsets[name] for a packed
+    // "other" bar), rowY/barH match whichever row that bar is drawn on
+    // (full bar height, no vertical inset -- a gap tick is exactly as tall
+    // as the bar it marks, same as the ring's gap wedges), and refSpan is
+    // the caller's best-known estimate of the panel's overall bp span (see
+    // SYN.widenGapBp).
+    const gapXs = [], gapYs = [], gapLabel = [];
+    const addGapTicks = (role, name, x0, rowY, refSpan) => {
+        for (const g of SYN.gapsForChrom(role, name)) {
+            const [gs, ge] = SYN.widenGapBp(g.start, g.end, refSpan);
+            gapXs.push([x0 + gs, x0 + ge, x0 + ge, x0 + gs]);
+            gapYs.push([rowY, rowY, rowY + barH, rowY + barH]);
+            gapLabel.push(SYN.formatGapLabel(name, g.start, g.end));
+        }
+    };
 
     if (links.length === 0) {
         const d = SYN.emptyDetail(`${pivotName}: no links found`);
@@ -926,6 +1539,8 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
                   fill_color: [pivotColor]};
         d.labels = {x: [pivotSize / 2], y: [pivotRowY + barH / 2], text: [pivotName],
                     color: [SYN.textColorFor(pivotColor)]};
+        addGapTicks(pivotRole, pivotName, 0, pivotRowY, pivotSize);
+        d.gaps = {xs: gapXs, ys: gapYs, label: gapLabel};
         d.x_range = [-pivotSize * 0.03, pivotSize * 1.05];
         return d;
     }
@@ -956,6 +1571,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         labelY.push(otherRowY + barH / 2);
         labelText.push(name);
         labelColor.push(SYN.textColorFor(color));
+        addGapTicks(otherRole, name, x0, otherRowY, xMax);
     }
     barXs.push([0, pivotSize, pivotSize, 0]);
     barYs.push([pivotRowY, pivotRowY, pivotRowY + barH, pivotRowY + barH]);
@@ -964,6 +1580,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     labelY.push(pivotRowY + barH / 2);
     labelText.push(pivotName);
     labelColor.push(SYN.textColorFor(pivotColor));
+    addGapTicks(pivotRole, pivotName, 0, pivotRowY, xMax);
 
     const otherEdge = isPivotSubject ? botY + barH : topY;
     const pivotEdge = isPivotSubject ? topY : botY + barH;
@@ -987,6 +1604,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         bars: {xs: barXs, ys: barYs, fill_color: barFill},
         ribbons: {xs: ribXs, ys: ribYs, fill_color: ribFill, alpha: ribAlpha, label: ribLabel},
         labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
+        gaps: {xs: gapXs, ys: gapYs, label: gapLabel},
         x_range: [-xMax * 0.03, xMax * 1.05],
         y_range: [botY - 0.35, topY + barH + 0.35],
         title: `${pivotName} (${pivotKind}) — ${links.length} link(s) vs ${otherNames.length} ${otherKind} chromosome(s)`,
@@ -1021,11 +1639,29 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const baseX = [-xMax * 0.03, xMax * 1.05];
     const baseY = [botY - 0.35, topY + barH + 0.35];
 
+    // both bars sit at x0=0 -- unlike buildDetailData's packed "other" row,
+    // there's only ever one chromosome per side here, so no per-bar offset.
+    // Same widen treatment as buildDetailData's addGapTicks -- see its own
+    // comment (full bar height, no vertical inset).
+    const gapXs = [], gapYs = [], gapLabel = [];
+    const addGapTicks = (role, name, rowY) => {
+        for (const g of SYN.gapsForChrom(role, name)) {
+            const [gs, ge] = SYN.widenGapBp(g.start, g.end, xMax);
+            gapXs.push([gs, ge, ge, gs]);
+            gapYs.push([rowY, rowY, rowY + barH, rowY + barH]);
+            gapLabel.push(SYN.formatGapLabel(name, g.start, g.end));
+        }
+    };
+    addGapTicks('comparison', subjectName, topY);
+    addGapTicks('target', targetName, botY);
+    const gaps = {xs: gapXs, ys: gapYs, label: gapLabel};
+
     if (links.length === 0) {
         return {
             bars: {xs: barXs, ys: barYs, fill_color: barFill},
             ribbons: {xs: [], ys: [], fill_color: [], alpha: [], label: []},
             labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
+            gaps,
             x_range: baseX, y_range: baseY,
             title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.comparisonLabel}) -- no links`,
         };
@@ -1046,6 +1682,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
         bars: {xs: barXs, ys: barYs, fill_color: barFill},
         ribbons: {xs: ribXs, ys: ribYs, fill_color: ribFill, alpha: ribAlpha, label: ribLabel},
         labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
+        gaps,
         x_range: baseX, y_range: baseY,
         title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.comparisonLabel}) -- ${links.length} link(s)`,
     };
@@ -1053,23 +1690,49 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
 
 // mirrors format_link_label() in this file's Python -- mean_identity/
 // anchor_density are null for links.tsv files predating those columns, so
-// that line is simply omitted rather than printing "null"
-SYN.formatLinkLabel = function(l) {
+// that line is simply omitted rather than printing "null". topLabel/
+// bottomLabel default to the normal cross-genome case (Comparison/Target);
+// a homeolog caller passes both as that one genome's own name instead --
+// see format_link_label's Python docstring for why.
+SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
+    topLabel = topLabel || 'Comparison';
+    bottomLabel = bottomLabel || 'Target';
     let stats = `${l.score} protein alignment(s)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
         && l.anchor_density !== null && l.anchor_density !== undefined) {
         stats += `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
             + `  ·  density: ${l.anchor_density.toFixed(1)} anchors/Mb`;
     }
-    return `${l.q_chrom}:${l.q_start.toLocaleString()}-${l.q_end.toLocaleString()}`
-        + ` ↔ ${l.s_chrom}:${l.s_start.toLocaleString()}-${l.s_end.toLocaleString()}`
-        + `<br>${stats}`;
+    const coords = `<table style="border-collapse:collapse">`
+        + `<tr><td style="padding-right:6px">${topLabel}</td>`
+        + `<td style="text-align:right">${l.s_chrom}:${l.s_start.toLocaleString()}-${l.s_end.toLocaleString()}</td></tr>`
+        + `<tr><td style="padding-right:6px">${bottomLabel}</td>`
+        + `<td style="text-align:right">${l.q_chrom}:${l.q_start.toLocaleString()}-${l.q_end.toLocaleString()}</td></tr>`
+        + `</table>`;
+    return `${coords}<br>${stats}`;
 };
 
-SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig) {
+// mirrors format_gap_label() in this file's Python -- kept in sync
+// deliberately
+SYN.formatGapLabel = function(chrom, start, end) {
+    return `Assembly gap<br>${SYN.escapeHtml(chrom)}:${start.toLocaleString()}-${end.toLocaleString()}`
+        + ` (${(end - start).toLocaleString()} bp)`;
+};
+
+// gapSource is optional (the ring/dotplot's own DoubleTap/reset handlers
+// don't touch the zoom panel at all, so they never pass one) -- when given,
+// writes d.gaps only if SYN.state.showGaps is on, same gating
+// SYN.applyGapVisibility/SYN.applyDotplotGapVisibility use for their own
+// sources, so all three panels' gap markers stay in lockstep with the one
+// "Show gaps" switch.
+SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, gapSource) {
     barSource.data = d.bars; barSource.change.emit();
     ribbonSource.data = d.ribbons; ribbonSource.change.emit();
     labelSource.data = d.labels; labelSource.change.emit();
+    if (gapSource) {
+        gapSource.data = SYN.state.showGaps ? d.gaps : {xs: [], ys: [], label: []};
+        gapSource.change.emit();
+    }
     detailFig.x_range.start = d.x_range[0]; detailFig.x_range.end = d.x_range[1];
     detailFig.y_range.start = d.y_range[0]; detailFig.y_range.end = d.y_range[1];
     detailFig.title.text = d.title;
@@ -1082,13 +1745,13 @@ SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig) {
 // block-anchors spinner (see build_page()), so which of buildDetailData/
 // buildPairDetailData applies doesn't need to be duplicated in each of
 // their three CustomJS callbacks.
-SYN.refreshDetail = function(k, minScore, barSource, ribbonSource, labelSource, detailFig) {
+SYN.refreshDetail = function(k, minScore, barSource, ribbonSource, labelSource, detailFig, gapSource) {
     if (SYN.state.mode === 'pair') {
         const d = SYN.buildPairDetailData(SYN.state.pairTarget, SYN.state.pairSubject, k, minScore);
-        SYN.applyDetail(d, barSource, ribbonSource, labelSource, detailFig);
+        SYN.applyDetail(d, barSource, ribbonSource, labelSource, detailFig, gapSource);
     } else if (SYN.state.pivotName) {
         const d = SYN.buildDetailData(SYN.state.pivotSide, SYN.state.pivotName, k, minScore);
-        SYN.applyDetail(d, barSource, ribbonSource, labelSource, detailFig);
+        SYN.applyDetail(d, barSource, ribbonSource, labelSource, detailFig, gapSource);
     }
 };
 
@@ -1152,13 +1815,15 @@ SYN.findViewByModelId = function(modelId) {
     return null;
 };
 
-// Exports a figure as a real, standalone .svg file -- no PDF conversion
-// library needed at all, since output_backend="svg" already gives every
-// figure a genuine vector <svg> DOM tree (see build_page()) rather than only
-// ever being able to rasterize a canvas. A user who actually wants a PDF (or
-// PNG, or anything else) can convert this in Inkscape, Illustrator, or any
-// other vector tool -- exporting the SVG directly here keeps this page free
-// of any runtime dependency beyond Bokeh itself.
+// Exports a figure as a real, standalone .svg file -- no library needed at
+// all, since output_backend="svg" already gives every figure a genuine
+// vector <svg> DOM tree (see build_page()) rather than only ever being able
+// to rasterize a canvas. This is the vector original -- open it in Inkscape,
+// Illustrator, or any other vector tool to edit it or convert it to PDF. A
+// rasterized alternative (PNG or JPEG, for pasting into a slide or document)
+// is exported the same way via SYN.exportFigureAsRaster below, built on top
+// of this same SVG -- see SYN.exportFigure for the dispatcher both save
+// buttons call.
 SYN.exportFigureAsSVG = function(figModel, filename) {
     const view = SYN.findViewByModelId(figModel.id);
     const svgEl = view && view.el ? SYN.findMainSvg(view.el) : null;
@@ -1175,7 +1840,12 @@ SYN.exportFigureAsSVG = function(figModel, filename) {
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     }
     const svgText = new XMLSerializer().serializeToString(clone);
-    const blob = new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'});
+    SYN.downloadBlob(new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'}), filename);
+};
+
+// Shared by both export paths: builds a Blob URL, clicks a synthetic <a> to
+// trigger the browser's download, then revokes the URL.
+SYN.downloadBlob = function(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1186,16 +1856,84 @@ SYN.exportFigureAsSVG = function(figModel, filename) {
     URL.revokeObjectURL(url);
 };
 
+// Rasterizes the same SVG SYN.exportFigureAsSVG exports, via an offscreen
+// <canvas> -- no new runtime dependency, Image/Canvas are native browser
+// APIs. Shared by PNG and JPEG: same pipeline, just a different mimeType
+// (and, for JPEG, a quality factor -- canvas.toBlob ignores the 3rd arg for
+// PNG, so passing it unconditionally is harmless). `scale` (default 2)
+// renders at 2x the on-screen pixel size for a crisper-than-screen image
+// rather than exposing another UI control for it. The white fill before
+// drawImage matters for BOTH formats: PNG would otherwise get a transparent
+// margin if Bokeh's SVG doesn't already paint an opaque background, and
+// JPEG has no transparency channel at all -- without this, a transparent
+// area would silently render black instead.
+SYN.exportFigureAsRaster = function(figModel, filename, mimeType, scale) {
+    scale = scale || 2;
+    const view = SYN.findViewByModelId(figModel.id);
+    const svgEl = view && view.el ? SYN.findMainSvg(view.el) : null;
+    if (!svgEl) {
+        console.error(`SYN.exportFigureAsRaster: could not find a rendered <svg> for this figure (${mimeType}).`);
+        return;
+    }
+    const rect = svgEl.getBoundingClientRect();
+    const clone = svgEl.cloneNode(true);
+    if (!clone.getAttribute('xmlns')) {
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+    }
+    const svgText = new XMLSerializer().serializeToString(clone);
+    const svgUrl = URL.createObjectURL(new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'}));
+
+    const img = new Image();
+    img.onload = function() {
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(rect.width * scale);
+        canvas.height = Math.round(rect.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0, rect.width, rect.height);
+        URL.revokeObjectURL(svgUrl);
+        canvas.toBlob(function(blob) {
+            if (!blob) {
+                console.error(`SYN.exportFigureAsRaster: canvas.toBlob returned null (${mimeType}).`);
+                return;
+            }
+            SYN.downloadBlob(blob, filename);
+        }, mimeType, 0.92);
+    };
+    img.onerror = function() {
+        console.error(`SYN.exportFigureAsRaster: the rendered SVG failed to load into an <img> for rasterizing (${mimeType}).`);
+        URL.revokeObjectURL(svgUrl);
+    };
+    img.src = svgUrl;
+};
+
+// One dispatcher both save buttons' CustomJS calls, instead of near-duplicate
+// blocks each hardcoding a format.
+SYN.EXPORT_MIME = {PNG: 'image/png', JPEG: 'image/jpeg'};
+SYN.exportFigure = function(figModel, panel, format) {
+    const filename = SYN.buildExportFilename(panel, format);
+    const mimeType = SYN.EXPORT_MIME[format];
+    if (mimeType) {
+        SYN.exportFigureAsRaster(figModel, filename, mimeType);
+    } else {
+        SYN.exportFigureAsSVG(figModel, filename);
+    }
+};
+
 // Builds a save button's download filename from whatever labels are
 // currently active, instead of a fixed generic name, so an exported file is
 // self-describing without the viewer having to rename it -- sanitized since
 // the labels are free-text input and filenames can't contain arbitrary
-// characters (path separators in particular).
-SYN.buildExportFilename = function(panel) {
+// characters (path separators in particular). JPEG gets the conventional
+// .jpg extension, not the literal (also valid, but less common) .jpeg.
+SYN.buildExportFilename = function(panel, format) {
     const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     const t = sanitize(SYN.state.targetLabel) || 'target';
     const r = sanitize(SYN.state.comparisonLabel) || 'comparison';
-    return `${t}_vs_${r}_${panel}.svg`;
+    const ext = format === 'JPEG' ? 'jpg' : format.toLowerCase();
+    return `${t}_vs_${r}_${panel}.${ext}`;
 };
 
 // Every title/bar-label a viewer might export reads SYN.state.targetLabel/
@@ -1231,20 +1969,38 @@ SYN.applyLabels = function(targetLabel, comparisonLabel, ctx) {
 // as a normal page element rather than baked into any one exportable figure,
 // since export is per-panel now (ring, zoom, or dotplot), not "the whole
 // image" the way a static render was.
+// truncates (not rounds) to 1 decimal place -- mirrors trunc1() in this
+// file's Python exactly, kept in sync deliberately
+SYN.trunc1 = function(x) {
+    return Math.floor(x * 10) / 10;
+};
+
 SYN.buildStatsHtml = function(targetLabel, comparisonLabel) {
     const s = SYN.data.alignmentStats;
     if (!s) { return ''; }
-    const pct = (n) => s.proteome_total ? (n / s.proteome_total * 100).toFixed(1) : '0.0';
+    const pct = (n) => s.proteome_total ? SYN.trunc1(n / s.proteome_total * 100).toFixed(1) : '0.0';
     const row = (label, aligned, identity) => `
-        <tr><td>${SYN.escapeHtml(label)}</td><td>${aligned.toLocaleString()} (${pct(aligned)}%)</td>
-            <td>${(identity * 100).toFixed(1)}%</td></tr>`;
+        <tr><td style="padding-right:20px">${SYN.escapeHtml(label)}</td>
+            <td style="text-align:right;padding-right:20px">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
+            <td style="text-align:right">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
+    const originLine = s.proteome_origin
+        ? `<div style="color:#666;margin-top:2px">Proteome: ${SYN.escapeHtml(s.proteome_origin)}</div>` : '';
+    // display:block + an explicit px width (SYN.data.statsPanelWidth, same
+    // value as stats_div's own width=STATS_PANEL_WIDTH on the Python side --
+    // see format_stats_html) rather than shrink-to-fit display:inline-block,
+    // so this box spans the zoom panel's drawn frame (not its full nominal
+    // width, which includes the toolbar strip -- see PLOT_TOOLBAR_WIDTH)
+    // instead of only its own text/table content -- kept in sync with
+    // format_stats_html deliberately.
     return `
         <div style="font-size:13px;color:#333;border:1px solid #ddd;border-radius:6px;
-                    padding:8px 12px;display:inline-block;margin:4px 0 8px 0">
-            <b>Alignment summary</b> -- ${s.proteome_total.toLocaleString()} protein(s) in the input proteome
+                    padding:8px 12px;display:block;box-sizing:border-box;
+                    width:${SYN.data.statsPanelWidth}px;margin:4px 0 8px 0">
+            <b>Alignment summary</b><br>${s.proteome_total.toLocaleString()} input proteins
+            ${originLine}
             <table style="border-collapse:collapse;margin-top:4px">
-                <tr style="color:#666"><th style="text-align:left;padding-right:12px"></th>
-                    <th style="text-align:right;padding-right:12px">aligned</th>
+                <tr style="color:#666"><th style="text-align:left;padding-right:20px"></th>
+                    <th style="text-align:right;padding-right:20px">aligned</th>
                     <th style="text-align:right">avg identity</th></tr>
                 ${row(targetLabel, s.query_aligned, s.query_mean_identity)}
                 ${row(comparisonLabel, s.subject_aligned, s.subject_mean_identity)}
@@ -1267,6 +2023,20 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     query_index = {name: i for i, (name, _) in enumerate(ds.query_chroms)}
 
     q_src, s_src, r_src, label_src, ribbon_records = build_overview_sources(ds, subject_index, query_index)
+
+    # Assembly-gap wedges (both genomes' own gaps, drawn on their own half of
+    # the ring): computed for the CURRENT (default = size order) ring layout
+    # here, same as ribbon_records above, and carried into the page as
+    # SYN.data.gapRecords for SYN.buildRingLayout to replace on a reorder.
+    # gap_src itself starts EMPTY, matching show_gaps_toggle's default
+    # (active=False, see below) -- same reasoning as r_src's self-links
+    # filtering in build_overview_sources: this Python-rendered initial data
+    # is never passed through SYN.applyGapVisibility, so if this and the
+    # switch's default ever disagree, the page loads showing a switch in one
+    # state and gaps in the other.
+    gap_records = (build_gap_records(ds.query_gaps, ds.query_offsets, ds.query_sizes)
+                   + build_gap_records(ds.subject_gaps, ds.subject_offsets, ds.subject_sizes))
+    gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
 
     lim = OUTER_R + 0.22
     # no 'tap' here -- that shorthand adds its own generic, unrestricted
@@ -1292,6 +2062,15 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                          line_color='black', line_width=0.5)
     overview.text('x', 'y', source=label_src, text_align='center', text_baseline='middle',
                   text_font_size='10px')
+    # drawn last (on top of the wedges) so a gap stripe is actually visible
+    # against the chromosome band it marks. Not part of overview_tap below --
+    # a gap marker isn't a clickable region (there's nothing to zoom into
+    # that the chromosome wedge underneath doesn't already offer), just a
+    # hover target -- and Bokeh hit-tests each TapTool renderer independently
+    # of paint order, so leaving it out doesn't block clicks to the wedge
+    # underneath either.
+    gap_renderer = overview.patches('xs', 'ys', source=gap_src, fill_color='#000000',
+                                     fill_alpha=0.55, line_color=None)
 
     # follow_mouse -- see detail_fig's identical HoverTool below for why: a
     # ribbon can span most of the ring, so the default snap-to-center
@@ -1301,21 +2080,32 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     overview.add_tools(HoverTool(renderers=[query_renderer, subject_renderer],
                                   tooltips=[("Chromosome", "@name"), ("Size", "@size_label"),
                                             ("Group", "@group")]))
+    overview.add_tools(HoverTool(renderers=[gap_renderer], tooltips="@label{safe}",
+                                  point_policy='follow_mouse'))
     # both sides are clickable: either wedge triggers the same zoom behavior.
+    # ribbon_renderer is on the same TapTool (not a second one) -- clicking a
+    # ribbon highlights it instead of zooming (see SYN.applyRibbonHighlight
+    # and its wiring below); Bokeh hit-tests per-renderer within one TapTool
+    # just fine, and a second TapTool would mean a second toolbar button (see
+    # the "no 'tap' here" note above -- same reasoning against duplicates).
     # visible=False hides its toolbar button -- clicking a wedge doesn't
     # need one, it's not a mode you toggle on/off -- but a tool added via
     # add_tools() (unlike one named in the tools= string above) is never
     # auto-activated, hidden or not, so active_tap has to be set explicitly
     # or the hidden tool would sit there never actually receiving clicks
-    overview_tap = TapTool(renderers=[subject_renderer, query_renderer], visible=False)
+    overview_tap = TapTool(renderers=[subject_renderer, query_renderer, ribbon_renderer], visible=False)
     overview.add_tools(overview_tap)
     overview.toolbar.active_tap = overview_tap
     # double-click to reset pan/zoom -- a shortcut for the toolbar's own
     # Reset button, since this ring never reprograms its own range after
-    # creation, the reset target is just its own original (fixed) extent
-    overview.js_on_event(DoubleTap, CustomJS(args=dict(fig=overview), code=f"""
+    # creation, the reset target is just its own original (fixed) extent.
+    # Also clears an active ribbon highlight (see SYN.applyRibbonHighlight) --
+    # a double-click reads as "reset this panel", which should include any
+    # transient ribbon selection, not just pan/zoom.
+    overview.js_on_event(DoubleTap, CustomJS(args=dict(fig=overview, ribbon_source=r_src), code=f"""
         fig.x_range.start = {-lim}; fig.x_range.end = {lim};
         fig.y_range.start = {-lim}; fig.y_range.end = {lim};
+        ribbon_source.selected.indices = [];
     """))
 
     # Whole-genome dotplot: target along x, comparison along y, each block
@@ -1329,6 +2119,16 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     (dp_q_src, dp_s_src, dp_seg_src, dp_grid_src,
      dp_q_label_src, dp_s_label_src, dp_cell_src, dp_total_x, dp_total_y, dp_rx, dp_ry) = \
         build_dotplot_sources(ds, subject_index, ribbon_records)
+
+    # Dotplot gap lines (nice-to-have companion to the ring's gap wedges,
+    # same "Show gaps" switch) -- unlike the ring's gap_src, this has no
+    # Python-computed initial geometry: SYN.buildDotplotGapLines rebuilds it
+    # entirely client-side from SYN.data.targetGapsByChrom/comparisonGaps
+    # ByChrom + SYN.state.dpQueryOffsets/dpSubjectOffsets (already seeded at
+    # load, see build_page()'s seed_js) whenever it's needed, the same way
+    # SYN.buildDotplotSegmentsForLayout has no Python-side equivalent either.
+    # Starts empty either way, matching the switch's default-off state.
+    dp_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
 
     # *3 (not just enough room for the ruler strip itself) leaves space for
     # the chromosome-name labels drawn just outside each ruler (see
@@ -1357,9 +2157,19 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # cells with zero links, which the axis rulers alone can't reach.
     dp_cell_renderer = dotplot_fig.patches('xs', 'ys', source=dp_cell_src, fill_color=None,
                                             fill_alpha=0, line_color=None)
-    dotplot_fig.multi_line('xs', 'ys', source=dp_grid_src, line_color='#DDDDDD', line_width=1)
+    dotplot_fig.multi_line('xs', 'ys', source=dp_grid_src, line_color='black', line_width=1)
     dp_segment_renderer = dotplot_fig.multi_line('xs', 'ys', source=dp_seg_src, line_color='line_color',
                                                   line_alpha='alpha', line_width=2)
+    # thin, light-grey dotted lines, drawn above the segments/gridlines but
+    # below the ruler strips -- a gap line crossing the ruler itself would
+    # look like noise against the strip's own solid fill, not add
+    # information there. Deliberately subtle (thinner and lighter than the
+    # ring/zoom panel's own black gap markers): the dotplot is already the
+    # busiest panel, and a gap line here is a secondary "here's roughly
+    # where" cue, not the primary way to inspect one -- see GAP_LINE_COLOR's
+    # own comment.
+    dp_gap_renderer = dotplot_fig.multi_line('xs', 'ys', source=dp_gap_src, line_color=GAP_LINE_COLOR,
+                                              line_dash='dotted', line_width=0.75)
     dp_query_renderer = dotplot_fig.patches('xs', 'ys', source=dp_q_src, fill_color='fill_color',
                                              line_color='black', line_width=0.5)
     dp_subject_renderer = dotplot_fig.patches('xs', 'ys', source=dp_s_src, fill_color='fill_color',
@@ -1375,6 +2185,15 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_fig.add_tools(HoverTool(renderers=[dp_query_renderer, dp_subject_renderer],
                                      tooltips=[("Chromosome", "@name"), ("Size", "@size_label"),
                                                ("Group", "@group")]))
+    # line_policy='interp' (default is 'nearest', which -- since each gap
+    # line here is just 2 vertices, its own start and end -- would otherwise
+    # snap the tooltip to whichever of those two endpoints is closer, so it
+    # jumps between the top/bottom (or left/right) of the plot instead of
+    # tracking the mouse along the rest of the line's length; interp gives a
+    # continuously-interpolated position along the segment for
+    # point_policy='follow_mouse' to actually follow)
+    dotplot_fig.add_tools(HoverTool(renderers=[dp_gap_renderer], tooltips="@label{safe}",
+                                     point_policy='follow_mouse', line_policy='interp'))
     # one TapTool covering every clickable renderer here (rather than one
     # per renderer group, as an earlier version had) -- a single tool can
     # span renderers backed by different data sources just fine, each
@@ -1400,7 +2219,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_bar_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[]))
     detail_rib_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[]))
     detail_label_src = ColumnDataSource(dict(x=[], y=[], text=[], color=[]))
-    detail_fig = figure(width=446, height=302, x_axis_label='position (Mb)',
+    detail_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
+    detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
                          title="Click any chromosome wedge on the left to zoom in.",
                          tools="pan,wheel_zoom,reset",
                          output_backend="svg")
@@ -1418,6 +2238,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                                  fill_alpha='alpha')
     detail_bar_renderer = detail_fig.patches('xs', 'ys', source=detail_bar_src,
                                               fill_color='fill_color', line_color='black', line_width=0.5)
+    # drawn after the bars so a gap tick is visible on top of the bar it
+    # marks -- see overview's identical gap_renderer above for why it's not
+    # part of any TapTool (nothing to zoom into beyond the bar underneath)
+    detail_gap_renderer = detail_fig.patches('xs', 'ys', source=detail_gap_src, fill_color='#000000',
+                                              fill_alpha=0.55, line_color=None)
     detail_fig.text('x', 'y', source=detail_label_src, text_align='center', text_baseline='middle',
                      text_font_size='9px', text_color='color')
     # point_policy='follow_mouse' (default is 'snap_to_data', anchored to
@@ -1425,6 +2250,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # so anchoring to its center means the tooltip can render outside the
     # current view once someone's zoomed into one end of it
     detail_fig.add_tools(HoverTool(renderers=[detail_ribbon_renderer], tooltips="@label{safe}",
+                                    point_policy='follow_mouse'))
+    detail_fig.add_tools(HoverTool(renderers=[detail_gap_renderer], tooltips="@label{safe}",
                                     point_policy='follow_mouse'))
     # double-click to reset -- unlike the ring/dotplot above, this panel's
     # range is rewritten on every click (see SYN.applyDetail), so the reset
@@ -1441,13 +2268,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # default to the literal role tags (today's look, unchanged) -- a viewer
     # can retype either to the actual species/genome name before exporting a
     # panel, see SYN.applyLabels
-    target_label_input = TextInput(title="Target label", value=query_name, width=220)
-    comparison_label_input = TextInput(title="Comparison label", value=subject_name, width=220)
+    target_label_input = TextInput(title="Target label", value=query_name, width=TOP_CONTROL_WIDTH)
+    comparison_label_input = TextInput(title="Comparison label", value=subject_name,
+                                        width=TOP_CONTROL_WIDTH)
 
     palette_select = Select(title="Color palette", value=DEFAULT_PALETTE_NAME,
-                             options=list(PALETTES.keys()), width=220)
-    color_spinner = Spinner(title="Comparison colors (discrete, cycling)", low=1, high=MAX_COLORS,
-                             step=1, value=DEFAULT_COLORS, width=220)
+                             options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
+    color_spinner = Spinner(title="Colors", low=1, high=MAX_COLORS,
+                             step=1, value=DEFAULT_COLORS, width=TOP_CONTROL_WIDTH)
     # high is the actual largest block size in this dataset, not a fixed
     # constant -- MBA_SLIDER_MIN is still a real floor (the embedded links
     # were generated with --min_block_anchors that low, see
@@ -1456,26 +2284,88 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # arbitrary round number when a Spinner lets someone type any value
     max_observed_score = max((r['score'] for r in ribbon_records), default=MBA_SLIDER_MIN)
     mba_spinner = Spinner(title="Min block anchors", low=MBA_SLIDER_MIN, high=max_observed_score,
-                           step=1, value=MBA_SLIDER_MIN, width=220)
-    reset_btn = Button(label="✕ clear zoom", button_type="default", width=140)
-    save_ring_btn = Button(label="⬇ save ring (SVG)", button_type="default", width=160)
-    save_zoom_btn = Button(label="⬇ save zoom (SVG)", button_type="default", width=160)
-    save_dotplot_btn = Button(label="⬇ save dotplot (SVG)", button_type="default", width=160)
+                           step=1, value=MBA_SLIDER_MIN, width=TOP_CONTROL_WIDTH)
+    reset_btn = Button(label="✕ clear zoom", button_type="default", width=140,
+                        height=TOOLBAR_CONTROL_HEIGHT)
+    save_ring_btn = Button(label="⬇ save ring", button_type="default", width=130,
+                            height=TOOLBAR_CONTROL_HEIGHT)
+    save_zoom_btn = Button(label="⬇ save zoom", button_type="default", width=130,
+                            height=TOOLBAR_CONTROL_HEIGHT)
+    save_dotplot_btn = Button(label="⬇ save dotplot", button_type="default", width=130,
+                               height=TOOLBAR_CONTROL_HEIGHT)
+    # format choice lives next to each save button rather than as a second
+    # button per panel -- adds ~50px to a row instead of ~130px, which
+    # matters on the dotplot row (already save button + order_toggle). JPEG
+    # has no transparency channel -- SYN.exportFigureAsRaster fills white
+    # first regardless of format, so this doesn't need special-casing there.
+    EXPORT_FORMATS = ["SVG", "PNG", "JPEG"]
+    ring_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+                              height=TOOLBAR_CONTROL_HEIGHT)
+    zoom_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+                              height=TOOLBAR_CONTROL_HEIGHT)
+    dotplot_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+                                 height=TOOLBAR_CONTROL_HEIGHT)
     # off by default: natural (file/karyotype) order is what most users
     # recognize their chromosomes by, and reordering only pays off when the
     # two genomes are close enough that a near-1:1 correspondence exists to
     # reveal in the first place (see SYN.computeSimilarityOrder's docstring)
     order_toggle = Toggle(label="Order chromosomes by similarity", active=False,
-                           button_type="default", width=160)
+                           button_type="default", width=160, height=TOOLBAR_CONTROL_HEIGHT)
+    # Global -- affects the ring AND the dotplot alike, but lives in the
+    # ring's own row (next to show_gaps_toggle, itself global -- see its own
+    # comment below) rather than the shared controls row above, since that's
+    # where it was asked to sit.
+    # On by default: matches today's only behavior (CHROM_SIZES used to
+    # always sort by size; now the plot script does, by default, instead --
+    # see Dataset.__init__). When off, both panels fall back to each
+    # genome's own FASTA/natural sequence order. Layered under
+    # order_toggle, not alongside it: while "order by similarity" is on,
+    # this switch has no visible effect on the dotplot (similarity order
+    # replaces natural order wholesale either way) -- it only governs what
+    # "natural" itself means, for whichever panel is currently showing it.
+    # See SYN.dpNaturalOrder (dotplot + the shared order concept) and
+    # SYN.applyRingLayout (the ring, which has no similarity concept at all).
+    size_order_toggle = Switch(label="Order by size", active=True)
+    # Switch, not Toggle -- a checkbox-style on/off switch rather than a
+    # pressable button, for these two specifically (order_toggle above stays
+    # a button; only these ring-display toggles were asked to become
+    # switches). off by default -- self-links can dominate/clutter the ring
+    # (e.g. a heavily-homeologous polyploid genome), so a viewer opts in
+    # rather than opting out. Lives with the ring's own save row (not the
+    # palette/colors/min-block-anchors row below) because self-links are
+    # drawn only on the ring -- build_dotplot_sources() explicitly excludes
+    # homeolog records, so they never appear on the zoom or dotplot panels
+    # either.
+    self_links_toggle = Switch(label="Show self-links", active=False)
+    # off by default -- hides cross-genome synteny ribbons, leaving only
+    # self-links on screen if self_links_toggle is also on (see the combined
+    # predicate in SYN.buildOverviewRibbons: is_homeolog records are governed
+    # by self_links_toggle regardless of this switch; non-homeolog records
+    # are governed by this switch regardless of self_links_toggle -- the two
+    # compose independently, including the "both off" case, which is a valid
+    # (if visually empty) combination, not specially prevented).
+    hide_synteny_toggle = Switch(label="Hide synteny", active=False)
+    # off by default -- an assembly gap marker is a diagnostic/QC detail
+    # (see bin/find_assembly_gaps.py), not something every viewer needs on
+    # screen by default, and a draft-quality assembly can have thousands of
+    # them at the default 100bp threshold. Lives in the ring's own row (the
+    # user asked for it "below the ring plot") even though it also affects
+    # the zoom panel and the dotplot (see SYN.applyGapVisibility/
+    # SYN.applyDotplotGapVisibility/SYN.refreshDetail's gap handling) --
+    # unlike self_links_toggle/hide_synteny_toggle, which are genuinely
+    # ring-only, this one switch is intentionally the single on/off control
+    # for every panel's gap markers, since "show gaps" is one concept
+    # regardless of which panel is currently displaying them.
+    show_gaps_toggle = Switch(label="Show gaps", active=False)
 
-    save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview), code="""
-        SYN.exportFigureAsSVG(fig, SYN.buildExportFilename('ring'));
+    save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview, fmt=ring_format_sel), code="""
+        SYN.exportFigure(fig, 'ring', fmt.value);
     """))
-    save_zoom_btn.js_on_click(CustomJS(args=dict(fig=detail_fig), code="""
-        SYN.exportFigureAsSVG(fig, SYN.buildExportFilename('zoom'));
+    save_zoom_btn.js_on_click(CustomJS(args=dict(fig=detail_fig, fmt=zoom_format_sel), code="""
+        SYN.exportFigure(fig, 'zoom', fmt.value);
     """))
-    save_dotplot_btn.js_on_click(CustomJS(args=dict(fig=dotplot_fig), code="""
-        SYN.exportFigureAsSVG(fig, SYN.buildExportFilename('dotplot'));
+    save_dotplot_btn.js_on_click(CustomJS(args=dict(fig=dotplot_fig, fmt=dotplot_format_sel), code="""
+        SYN.exportFigure(fig, 'dotplot', fmt.value);
     """))
 
     # Rebuilds every order-dependent dotplot source for whichever order is
@@ -1487,16 +2377,59 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         color_spinner=color_spinner, mba_spinner=mba_spinner,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
         dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
-        dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src,
+        dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
     ), code="""
         const order = cb_obj.active ? SYN.computeSimilarityOrder() : SYN.dpNaturalOrder();
         SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, color_spinner.value, mba_spinner.value, {
             query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
             queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-            cell: dp_cell_source, segment: dp_segment_source,
+            cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source,
         });
     """)
     order_toggle.js_on_click(order_toggle_callback)
+
+    # size_order_toggle always reorders the ring (which has no similarity
+    # concept to defer to); it only reorders the dotplot when order_toggle
+    # is OFF, since while similarity order is active, "natural" isn't
+    # currently visible on the dotplot at all -- see size_order_toggle's
+    # own comment above for why this is layered rather than independent.
+    size_order_toggle_callback = CustomJS(args=dict(
+        query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
+        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        order_toggle=order_toggle, gap_source=gap_src,
+        dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
+        dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
+        dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
+    ), code="""
+        SYN.state.orderBySize = cb_obj.active;
+        const bySize = cb_obj.active;
+        // The ring builds its own subject order directly here (see
+        // Dataset.__init__: circular_offsets(self.subject_chroms, ...))
+        // rather than reusing SYN.dpNaturalOrder()'s subjectOrder below --
+        // the two happen to be identical lists today (neither is reversed
+        // any more), but they're two independently-defined conventions (the
+        // ring's own angular layout vs. the dotplot's bottom-up linear one),
+        // kept as separate computations so a future change to either one
+        // doesn't silently break the other.
+        const ringQueryOrder = (bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural).slice();
+        const ringSubjectOrder = (bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural).slice();
+        SYN.applyRingLayout(ringQueryOrder, ringSubjectOrder, {
+            querySource: query_source, subjectSource: subject_source,
+            labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
+            minScore: mba_spinner.value, k: color_spinner.value,
+            showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
+        });
+        if (!order_toggle.active) {
+            const dpOrder = SYN.dpNaturalOrder();
+            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, mba_spinner.value, {
+                query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
+                queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
+                cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source,
+            });
+        }
+    """)
+    size_order_toggle.js_on_change('active', size_order_toggle_callback)
 
     # Tapping a chromosome region -- a ring wedge, a dotplot ruler cell, or a
     # dotplot grid cell -- clears every OTHER clickable source's selection,
@@ -1513,6 +2446,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             this_source=this_source, other_sources=other_sources, side=side,
             color_spinner=color_spinner, mba_spinner=mba_spinner, bar_source=detail_bar_src,
             ribbon_source=detail_rib_src, label_source=detail_label_src, detail_fig=detail_fig,
+            detail_gap_source=detail_gap_src,
         ), code="""
             const idx = this_source.selected.indices;
             if (idx.length === 0) { return; }
@@ -1522,17 +2456,36 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             SYN.state.pivotSide = side;
             SYN.state.pivotName = name;
             const d = SYN.buildDetailData(side, name, color_spinner.value, mba_spinner.value);
-            SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig);
+            SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
         """)
 
     s_src.selected.js_on_change(
-        'indices', make_tap_callback(s_src, [q_src, dp_s_src, dp_q_src, dp_cell_src], 'subject'))
+        'indices', make_tap_callback(s_src, [q_src, dp_s_src, dp_q_src, dp_cell_src, r_src], 'subject'))
     q_src.selected.js_on_change(
-        'indices', make_tap_callback(q_src, [s_src, dp_s_src, dp_q_src, dp_cell_src], 'query'))
+        'indices', make_tap_callback(q_src, [s_src, dp_s_src, dp_q_src, dp_cell_src, r_src], 'query'))
     dp_s_src.selected.js_on_change(
-        'indices', make_tap_callback(dp_s_src, [s_src, q_src, dp_q_src, dp_cell_src], 'subject'))
+        'indices', make_tap_callback(dp_s_src, [s_src, q_src, dp_q_src, dp_cell_src, r_src], 'subject'))
     dp_q_src.selected.js_on_change(
-        'indices', make_tap_callback(dp_q_src, [s_src, q_src, dp_s_src, dp_cell_src], 'query'))
+        'indices', make_tap_callback(dp_q_src, [s_src, q_src, dp_s_src, dp_cell_src, r_src], 'query'))
+
+    # Clicking a ribbon highlights it and dims the rest (SYN.applyRibbonHighlight)
+    # instead of driving the zoom panel -- so this doesn't reuse
+    # make_tap_callback above, which is specific to the pivot-zoom behavior.
+    # Still participates in the same mutual-exclusion: a ribbon click clears
+    # any active wedge/dotplot selection, and (via r_src's presence in THEIR
+    # other_sources lists above) a wedge/dotplot click clears an active
+    # ribbon highlight right back -- exactly one click source is ever
+    # "active" across the whole ring+dotplot at a time.
+    ribbon_tap_callback = CustomJS(args=dict(
+        ribbon_source=r_src, other_sources=[s_src, q_src, dp_s_src, dp_q_src, dp_cell_src],
+    ), code="""
+        const idx = ribbon_source.selected.indices;
+        if (idx.length > 0) {
+            for (const other of other_sources) { other.selected.indices = []; }
+        }
+        SYN.applyRibbonHighlight(ribbon_source);
+    """)
+    r_src.selected.js_on_change('indices', ribbon_tap_callback)
 
     # Tapping a dotplot grid cell zooms the detail panel into exactly that
     # (target chromosome, comparison chromosome) pair -- unlike the pivot
@@ -1541,9 +2494,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # refusing the click, since "no synteny here" is itself the answer for
     # an empty cell.
     pair_tap_callback = CustomJS(args=dict(
-        this_source=dp_cell_src, other_sources=[s_src, q_src, dp_s_src, dp_q_src],
+        this_source=dp_cell_src, other_sources=[s_src, q_src, dp_s_src, dp_q_src, r_src],
         color_spinner=color_spinner, mba_spinner=mba_spinner, bar_source=detail_bar_src,
         ribbon_source=detail_rib_src, label_source=detail_label_src, detail_fig=detail_fig,
+        detail_gap_source=detail_gap_src,
     ), code="""
         const idx = this_source.selected.indices;
         if (idx.length === 0) { return; }
@@ -1555,37 +2509,87 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.state.pairTarget = targetName;
         SYN.state.pairSubject = subjectName;
         const d = SYN.buildPairDetailData(targetName, subjectName, color_spinner.value, mba_spinner.value);
-        SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig);
+        SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
     """)
     dp_cell_src.selected.js_on_change('indices', pair_tap_callback)
 
     color_callback = CustomJS(args=dict(
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, mba_spinner=mba_spinner,
+        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
-        label_source=detail_label_src, detail_fig=detail_fig,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         const k = cb_obj.value;
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
-        SYN.applyOverviewRibbons(mba_spinner.value, k, overview_ribbon_source);
+        SYN.applyOverviewRibbons(mba_spinner.value, k, self_links_toggle.active,
+                                  hide_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(mba_spinner.value, k, dotplot_segment_source);
-        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig);
+        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
+                           detail_gap_source);
     """)
     color_spinner.js_on_change('value', color_callback)
 
     mba_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, color_spinner=color_spinner,
+        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
-        label_source=detail_label_src, detail_fig=detail_fig,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         const minScore = cb_obj.value;
         const k = color_spinner.value;
-        SYN.applyOverviewRibbons(minScore, k, overview_ribbon_source);
+        SYN.applyOverviewRibbons(minScore, k, self_links_toggle.active,
+                                  hide_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
-        SYN.refreshDetail(k, minScore, bar_source, ribbon_source, label_source, detail_fig);
+        SYN.refreshDetail(k, minScore, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
     """)
     mba_spinner.js_on_change('value', mba_callback)
+
+    # Switch fires via js_on_change('active', ...), not js_on_click (which is
+    # Button/Toggle-specific) -- cb_obj is still the Switch itself either way,
+    # so cb_obj.active works the same as it did when this was a Toggle.
+    self_links_toggle_callback = CustomJS(args=dict(
+        overview_ribbon_source=r_src, color_spinner=color_spinner, mba_spinner=mba_spinner,
+        hide_synteny_toggle=hide_synteny_toggle,
+    ), code="""
+        SYN.applyOverviewRibbons(mba_spinner.value, color_spinner.value, cb_obj.active,
+                                  hide_synteny_toggle.active, overview_ribbon_source);
+    """)
+    self_links_toggle.js_on_change('active', self_links_toggle_callback)
+
+    hide_synteny_toggle_callback = CustomJS(args=dict(
+        overview_ribbon_source=r_src, color_spinner=color_spinner, mba_spinner=mba_spinner,
+        self_links_toggle=self_links_toggle,
+    ), code="""
+        SYN.applyOverviewRibbons(mba_spinner.value, color_spinner.value, self_links_toggle.active,
+                                  cb_obj.active, overview_ribbon_source);
+    """)
+    hide_synteny_toggle.js_on_change('active', hide_synteny_toggle_callback)
+
+    # Single on/off switch for every panel's gap markers at once (see
+    # show_gaps_toggle's own comment above for why it's not split per
+    # panel): flips SYN.state.showGaps, then rebuilds the ring's gap source
+    # from the current-order master list (SYN.data.gapRecords), the
+    # dotplot's gap lines from the current dotplot offsets, and re-renders
+    # whatever's currently in the zoom panel (a pivot, a pair, or nothing --
+    # SYN.refreshDetail is a no-op in the last case) so its gap ticks
+    # (already computed into every SYN.buildDetailData/buildPairDetailData
+    # result regardless of this switch -- see SYN.applyDetail) actually
+    # show or hide too.
+    show_gaps_toggle_callback = CustomJS(args=dict(
+        gap_source=gap_src, dp_gap_source=dp_gap_src,
+        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        bar_source=detail_bar_src, ribbon_source=detail_rib_src,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
+    ), code="""
+        SYN.state.showGaps = cb_obj.active;
+        SYN.applyGapVisibility(gap_source);
+        SYN.applyDotplotGapVisibility(dp_gap_source);
+        SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source,
+                           label_source, detail_fig, detail_gap_source);
+    """)
+    show_gaps_toggle.js_on_change('active', show_gaps_toggle_callback)
 
     # Swaps the active color array itself (SYN.data.palette -- every recolor
     # function reads from it by reference, so nothing else needs to change)
@@ -1596,24 +2600,27 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src,
         color_spinner=color_spinner, mba_spinner=mba_spinner,
+        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
-        label_source=detail_label_src, detail_fig=detail_fig,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         SYN.data.palette = SYN.data.palettes[cb_obj.value];
         const k = color_spinner.value;
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
-        SYN.applyOverviewRibbons(mba_spinner.value, k, overview_ribbon_source);
+        SYN.applyOverviewRibbons(mba_spinner.value, k, self_links_toggle.active,
+                                  hide_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(mba_spinner.value, k, dotplot_segment_source);
-        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig);
+        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
+                           detail_gap_source);
     """)
     palette_select.js_on_change('value', palette_callback)
 
     reset_callback = CustomJS(args=dict(
         subject_source=s_src, query_source=q_src, dp_subject_source=dp_s_src, dp_query_source=dp_q_src,
-        dp_cell_source=dp_cell_src,
+        dp_cell_source=dp_cell_src, overview_ribbon_source=r_src,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
-        label_source=detail_label_src, detail_fig=detail_fig,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         SYN.state.mode = null;
         SYN.state.pivotSide = null;
@@ -1625,7 +2632,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         dp_subject_source.selected.indices = [];
         dp_query_source.selected.indices = [];
         dp_cell_source.selected.indices = [];
-        SYN.applyDetail(SYN.emptyDetail(), bar_source, ribbon_source, label_source, detail_fig);
+        overview_ribbon_source.selected.indices = [];
+        SYN.applyDetail(SYN.emptyDetail(), bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
     """)
     reset_btn.js_on_click(reset_callback)
 
@@ -1634,25 +2642,54 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "links against the other genome -- both trigger the same zoom, and a "
                      "click on any of them clears the others' selection. You can also click a "
                      "single square in the dotplot grid to zoom straight into that one "
-                     "chromosome pair, including squares with no alignments at all. Target "
+                     "chromosome pair, including squares with no alignments at all. Click a "
+                     "ribbon on the ring instead to highlight just that one and dim the rest -- "
+                     "click empty ring space, double-click the ring, or click a wedge/dotplot "
+                     "cell to clear the highlight. Target "
                      "label/Comparison label relabel the genomes everywhere a title or bar shows "
                      "them, so an exported panel can show the actual species/genome name "
                      "instead of \"target\"/\"comparison\". Color palette switches the set of "
-                     "colors comparison chromosomes cycle through; Comparison colors changes how "
-                     "many discrete colors from it they cycle through. Min block anchors filters "
+                     "colors comparison chromosomes cycle through; Colors changes how many "
+                     "discrete colors from it they cycle through. Min block anchors filters "
                      "out synteny blocks with fewer than that many supporting protein alignments "
                      "-- raise it to cut noise, lower it to see more (shorter, less certain) "
-                     "blocks. Order chromosomes by similarity reorders both dotplot axes so "
-                     "shared synteny lines up into a diagonal -- most useful when the two "
-                     "genomes are closely related with a roughly 1:1 chromosome correspondence; "
-                     "off by default so chromosomes stay in their familiar order. Hover any "
-                     "wedge, band, or ribbon for details, and use each panel's save button to "
-                     "export it as an SVG (open it in Inkscape, Illustrator, or similar to "
-                     "convert to PDF/PNG/etc.).</p>")
+                     "blocks. Show self-links, next to the ring's save button, switches whether "
+                     "a genome's own self-comparison links (e.g. homeologous chromosome pairs in "
+                     "a polyploid genome) are drawn on the ring alongside the cross-genome "
+                     "synteny -- off by default. Hide synteny, next to it, hides the cross-genome "
+                     "links instead, leaving only self-links on screen if Show self-links is also "
+                     "on -- off by default. The two switches are independent and compose. Show "
+                     "gaps, next to those, marks assembly gaps (runs of N's in the input FASTA, "
+                     "--min_asm_gap bp or longer) on the ring, the zoom panel, and (as thin dotted "
+                     "lines) the dotplot alike -- off by default. Order "
+                     "by size, next to those, sorts every chromosome, on the ring and both "
+                     "dotplot axes, largest to smallest -- on by default; switch it off to see "
+                     "them in their original FASTA order instead. Order chromosomes by similarity "
+                     "reorders both dotplot axes (only -- the ring keeps whichever order the size "
+                     "switch is set to) so shared synteny lines up into a diagonal instead -- most "
+                     "useful when the two genomes are closely related with a roughly 1:1 "
+                     "chromosome correspondence; off by default. Hover any "
+                     "wedge, band, ribbon, or gap marker for details, and use each panel's save "
+                     "button to "
+                     "export it as SVG (a vector original -- open it in Inkscape, Illustrator, "
+                     "or similar to edit it or convert it to PDF), PNG, or JPEG (both ready to "
+                     "paste into a slide or document), whichever the dropdown next to that "
+                     "button is set to.</p>")
 
-    left_col = column(overview, save_ring_btn)
-    mid_col = column(detail_fig, row(reset_btn, save_zoom_btn))
-    right_col = column(dotplot_fig, row(save_dotplot_btn, order_toggle))
+    # split across two rows, not one -- all six widgets on a single row ran
+    # wider than the ring figure itself (620px), which stretched left_col
+    # past that width and pushed mid_col/right_col to the right by the
+    # overflow, opening a much bigger gap after the ring than the one
+    # between mid_col and right_col. Split by scope instead: ring-only
+    # controls (export + the two switches that affect only the ring's own
+    # ribbons) on top, the two switches that are global (show_gaps_toggle,
+    # size_order_toggle -- see their own comments) below -- both rows stay
+    # well under 620px, so left_col's width goes back to matching the ring
+    # figure exactly.
+    left_col = column(overview,
+                       row(save_ring_btn, ring_format_sel, self_links_toggle, hide_synteny_toggle),
+                       row(show_gaps_toggle, size_order_toggle))
+    right_col = column(dotplot_fig, row(save_dotplot_btn, dotplot_format_sel, order_toggle))
 
     # reactive (see SYN.applyLabels) -- shows the current target_label_input/
     # comparison_label_input values, not the literal "target"/"comparison"
@@ -1676,8 +2713,28 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # initial render uses the default (literal role-tag) labels, matching
     # the TextInputs' own defaults -- reactive after that (see SYN.applyStats,
     # wired below), same split as header_title_div/subtitle_div above.
-    # Empty/invisible if no --stats was given.
-    stats_div = Div(text=format_stats_html(query_name, subject_name, alignment_stats))
+    # Empty/invisible if no --stats was given. width=STATS_PANEL_WIDTH makes
+    # the box itself (format_stats_html/SYN.buildStatsHtml's markup, which is
+    # `display:block` precisely so it stretches to fill this rather than
+    # shrink-wrapping its content) as wide as the zoom panel's drawn frame
+    # above it -- detail_fig's own width minus its toolbar strip (see
+    # PLOT_TOOLBAR_WIDTH), not the full nominal figure width (which would run
+    # this box's right edge out under the toolbar icons) and not the
+    # narrower reset/save/format row under it either.
+    # margin=(0,0,0,0) overrides Bokeh's own default 5px margin on every side
+    # of a Div, which otherwise insets this box 5px from detail_fig's left
+    # edge while pushing its right edge 5px past detail_fig's own -- exactly
+    # the width but visibly not aligned with the panel it's meant to match.
+    # The vertical breathing room that default margin used to provide is
+    # already there regardless, from format_stats_html's own inline
+    # `margin:4px 0 8px 0` on the box itself.
+    stats_div = Div(text=format_stats_html(query_name, subject_name, alignment_stats),
+                     width=STATS_PANEL_WIDTH, margin=(0, 0, 0, 0))
+
+    # placed under the zoom panel specifically (not a full-width bar under
+    # all three panels) -- fills the otherwise-empty space under the
+    # narrower middle column, since the ring/dotplot are taller
+    mid_col = column(detail_fig, row(reset_btn, save_zoom_btn, zoom_format_sel), stats_div)
 
     label_callback = CustomJS(args=dict(
         target_label_input=target_label_input, comparison_label_input=comparison_label_input,
@@ -1685,7 +2742,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         q_src=q_src, dp_q_src=dp_q_src, s_src=s_src, dp_s_src=dp_s_src,
         color_spinner=color_spinner, mba_spinner=mba_spinner,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
-        label_source=detail_label_src, detail_fig=detail_fig,
+        label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         const targetLabel = target_label_input.value.trim() || 'target';
         const comparisonLabel = comparison_label_input.value.trim() || 'comparison';
@@ -1693,7 +2750,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             overview, dotplotFig: dotplot_fig, headerDiv: header_div,
             queryLikeSources: [q_src, dp_q_src], subjectLikeSources: [s_src, dp_s_src],
         });
-        SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig);
+        SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source, label_source,
+                           detail_fig, detail_gap_source);
         SYN.applyStats(targetLabel, comparisonLabel, stats_div);
     """)
     target_label_input.js_on_change('value', label_callback)
@@ -1705,11 +2763,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     layout = column(
         *header_children,
-        stats_div,
-        row(target_label_input, comparison_label_input),
+        row(target_label_input, comparison_label_input, palette_select, color_spinner, mba_spinner),
         hint,
-        row(palette_select, color_spinner, mba_spinner),
-        row(left_col, mid_col, right_col),
+        # spacing=20 -- row()'s default is 0, so without this the three
+        # panels would sit flush against each other (or worse, apart by
+        # whatever a child happens to overflow to, see left_col's own
+        # comment above) rather than by a deliberate, equal gap
+        row(left_col, mid_col, right_col, spacing=20),
     )
 
     page_html = file_html(layout, CDN, title=f"{query_name} vs {subject_name} -- interactive synteny")
@@ -1725,6 +2785,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         links_by_comparison[name] = [embed_link(l) for l in ds.links if l['s_chrom'] == name]
     for name, _ in ds.query_chroms:
         links_by_query[name] = [embed_link(l) for l in ds.links if l['q_chrom'] == name]
+    # Flat (not grouped-by-chromosome) -- SYN.buildRingLayout is the only
+    # consumer, and it iterates every homeolog link regardless of which
+    # chromosome it's on, same as build_overview_sources does in Python.
+    # There's no dotplot equivalent (homeolog links never appear there --
+    # see build_overview_sources' comment on why), so unlike linksByQuery/
+    # linksByComparison above, no grouped form is needed.
+    target_homeolog_links_flat = [embed_link(l) for l in ds.target_homeolog_links]
+    comparison_homeolog_links_flat = [embed_link(l) for l in ds.comparison_homeolog_links]
     syn_data = {
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
         'palettes': PALETTES,
@@ -1733,13 +2801,47 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'comparisonName': subject_name,
         'queryNames': query_names,
         'subjectNames': subject_names,
+        # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
+        # fall back to when the "Order by size" switch is off. queryNames/
+        # subjectNames above are already size order (see Dataset.__init__).
+        'queryNamesNatural': [n for n, _ in ds.query_chroms_natural],
+        'subjectNamesNatural': [n for n, _ in ds.subject_chroms_natural],
         'querySizes': ds.query_sizes,
         'subjectSizes': ds.subject_sizes,
         'subjectColorIndex': subject_index,
+        # query (target) wedges are always flat TARGET_GREY, never palette-
+        # indexed (see ds.query_colors) -- this index exists only so the
+        # target's own homeolog ribbons can still be colored per-chromosome,
+        # exactly mirroring build_overview_sources' target_homeolog_links loop
+        'queryColorIndex': query_index,
         'linksByComparison': links_by_comparison,
         'linksByQuery': links_by_query,
+        'targetHomeologLinks': target_homeolog_links_flat,
+        'comparisonHomeologLinks': comparison_homeolog_links_flat,
         'ribbons': ribbon_records,
         'maxScore': ds.max_score(),
+        # per-chromosome assembly-gap lookup, one genome's own gaps each --
+        # separate dicts (not a single by-name lookup) since target and
+        # comparison chromosomes can share names, same reasoning as
+        # queryColorIndex/subjectColorIndex above. Read by SYN.buildRingLayout
+        # (ring wedges), SYN.buildDotplotGapLines (dotplot lines), and
+        # SYN.gapsForChrom (zoom panel bars) -- one source of raw gap data,
+        # three different geometries built from it.
+        'targetGapsByChrom': group_gaps_by_chrom(ds.query_gaps),
+        'comparisonGapsByChrom': group_gaps_by_chrom(ds.subject_gaps),
+        # the ring's CURRENT (default = size order) gap wedge polygons --
+        # replaced wholesale on a reorder (see SYN.applyRingLayout), same
+        # "master list, filtered display source" split as 'ribbons' above
+        'gapRecords': gap_records,
+        # ring geometry constants -- embedded (not duplicated as separate JS
+        # literals) so SYN.buildRingLayout can never numerically drift from
+        # the fixed figure extent build_page() already committed to at
+        # Python-render time (see OUTER_R/INNER_R/LINK_R/GROUP_GAP/CHROM_GAP
+        # module constants above)
+        'outerR': OUTER_R, 'innerR': INNER_R, 'linkR': LINK_R,
+        'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
+        'detailFigWidth': DETAIL_FIG_WIDTH,
+        'statsPanelWidth': STATS_PANEL_WIDTH,
         # rx/ry/totalX/totalY never change when the dotplot is reordered --
         # same chromosomes, same sizes, just shuffled -- so the "order by
         # similarity" toggle's client-side rebuild (see SHARED_JS's
@@ -1751,7 +2853,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'alignmentStats': alignment_stats,
     }
     # Seeds SYN.state's dotplot offsets to match Python's own initial render
-    # (natural order -- see Dataset.__init__'s reversed dp_subject_offsets
+    # (natural order -- see Dataset.__init__'s dp_subject_offsets
     # and SHARED_JS's SYN.dpNaturalOrder) so the color/palette/min-block-
     # anchors callbacks have a valid SYN.state.dpQueryOffsets/dpSubjectOffsets
     # to redraw against before the order-by-similarity toggle is ever touched.
@@ -1799,11 +2901,18 @@ def main():
                               'which physical genome "target"/"comparison" refer to')
     parser.add_argument('--subject_subtitle', default=None,
                          help='ditto, under the subject/comparison name')
+    parser.add_argument('--target_gaps', default=None,
+                         help='optional find_assembly_gaps.py output (chrom, start, end TSV, '
+                              'no header) for the target genome -- drawn as gap markers on the '
+                              'ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
+    parser.add_argument('--comparison_gaps', default=None,
+                         help='ditto, for the comparison genome')
     parser.add_argument('--out_prefix', required=True)
     args = parser.parse_args()
 
     ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.links,
-                 args.target_homeolog_links, args.comparison_homeolog_links)
+                 args.target_homeolog_links, args.comparison_homeolog_links,
+                 args.target_gaps, args.comparison_gaps)
     if not ds.query_chroms or not ds.subject_chroms:
         sys.exit("ERROR: no chromosomes to plot -- check --min_seq_size isn't "
                   "filtering out everything")
@@ -1827,6 +2936,8 @@ def main():
         homeolog_bits.append(f"{len(ds.target_homeolog_links)} target homeolog link(s)")
     if args.comparison_homeolog_links:
         homeolog_bits.append(f"{len(ds.comparison_homeolog_links)} comparison homeolog link(s)")
+    if args.target_gaps or args.comparison_gaps:
+        homeolog_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} comparison assembly gap(s)")
     print(f"[plot_synteny_interactive] wrote {out_path} ({len(links_by_comparison)} comparison / "
           f"{len(links_by_query)} target chromosome(s), {total_links} link(s) embedded"
           + ((f"; {'; '.join(homeolog_bits)}") if homeolog_bits else '') + ")",
