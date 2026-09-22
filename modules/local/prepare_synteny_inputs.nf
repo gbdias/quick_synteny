@@ -1,6 +1,7 @@
-// Chromosome-size table used to size pyGenomeViz tracks and to filter out
-// sequences shorter than --min_seq_size. The jcvi-layout chromEnd-marker
-// trick from the original bash script is gone: pyGenomeViz takes chromosome
+// Chromosome-size table used to size the ring/dotplot tracks in
+// plot_synteny_interactive.py's Bokeh rendering, and to filter out sequences
+// shorter than --min_seq_size. The jcvi-layout chromEnd-marker trick from
+// the original bash script is gone: the plot script takes chromosome
 // lengths directly, it doesn't need a fake BED feature to infer track extent.
 //
 // Emitted in the FASTA's own (natural) sequence order -- deliberately NOT

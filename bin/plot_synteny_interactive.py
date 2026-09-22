@@ -10,18 +10,18 @@ renders kept in sync with it.
 
 Three-column layout: a full Circos-style ring on the left (every wedge/
 ribbon individually hoverable), a linear zoom/detail panel in the middle, a
-whole-genome dotplot on the right. Clicking a comparison-chromosome wedge, a
+whole-genome dotplot on the right. Clicking a reference-chromosome wedge, a
 target-chromosome wedge, or a chromosome band on either dotplot axis zooms
 the middle panel into that one chromosome's links -- whichever side you
 didn't click gets packed (multiple chromosomes side by side if more than one
 is involved), the clicked chromosome stays alone on its own row. Clicking a
 single square in the dotplot grid instead zooms straight into that one
-(target, comparison) chromosome pair -- always exactly two bars, no packing,
+(target, reference) chromosome pair -- always exactly two bars, no packing,
 and this is also the only way to select a pair with zero links (see
 SYN.buildPairDetailData), since the axis rulers can only ever select one
-chromosome at a time. Comparison-genome chromosomes are always drawn on top
+chromosome at a time. Reference-genome chromosomes are always drawn on top
 in every panel, regardless of which side triggered the zoom. A dropdown
-picks which of a few curated color palettes (see PALETTES) comparison-genome
+picks which of a few curated color palettes (see PALETTES) reference-genome
 chromosomes cycle through, and a numeric spinner recolors every panel by
 cycling through 1-MAX_COLORS discrete colors from whichever one is active
 instead of one color per chromosome; a second spinner filters every panel
@@ -34,7 +34,7 @@ of the chaining algorithm in JS. Spinners rather than sliders since the
 filter is a plain score comparison that works for any integer, not just a
 handful of steps -- a free-form numeric input doesn't imply a false ceiling
 the way a slider's end-of-track does. Two text inputs let a viewer relabel
-"target"/"comparison" to the actual genome/species names before exporting a
+"target"/"reference" to the actual genome/species names before exporting a
 panel (see SYN.applyLabels) -- every exportable title/bar-label reads from
 these rather than the pipeline's literal role tags. A stats panel (see
 SYN.applyStats) shows the alignment summary --stats optionally provides,
@@ -46,13 +46,13 @@ Python (build_overview_sources()/build_dotplot_sources()) and once as plain
 JS (SHARED_JS), so the browser can rebuild an arbitrary (pivot side, pivot
 chromosome, color count, min block anchors, chromosome order) combination
 instead of only combinations precomputed ahead of time. Python only ships
-the raw links (grouped by comparison-genome chromosome and by target
+the raw links (grouped by reference-genome chromosome and by target
 chromosome) plus chromosome sizes/colors, as embedded JSON.
 
-This is not run through bin/'s usual container (the pygenomeviz biocontainer
-this does run through has no Bokeh by default) -- see
-modules/local/pygenomeviz_plot.nf for why this process pip-installs Bokeh
-into it at runtime instead of using a dedicated image.
+This is not run through bin/'s usual container -- it needs Bokeh, which has
+no bioconda recipe, so this runs on a Seqera Containers (Wave) image built
+directly from conda-forge's bokeh package instead. See
+modules/local/pygenomeviz_plot.nf for the full reasoning.
 """
 import argparse
 import html
@@ -83,6 +83,26 @@ PALETTE_PASTEL = [
     '#A1C9F4', '#FFB482', '#8DE5A1', '#FF9F9B', '#D0BBFF',
     '#DEBB9B', '#FAB0E4', '#CFCFCF', '#FFFEA3', '#B9F2F0',
 ]
+# seaborn's "bright" set -- same hues as PALETTE, more saturated/vivid
+PALETTE_BRIGHT = [
+    '#023EFF', '#FF7C00', '#1AC938', '#E8000B', '#8B2BE2',
+    '#9F4800', '#F14CC1', '#A3A3A3', '#FFC400', '#00D7FF',
+]
+# seaborn's "dark" set -- same hues again, deepened/desaturated; pairs well
+# with light text or a light background where PALETTE/PALETTE_BRIGHT read
+# as too loud
+PALETTE_DARK = [
+    '#001C7F', '#B1400D', '#12711C', '#8C0800', '#591E71',
+    '#592F0D', '#A23582', '#3C3C3C', '#B8850A', '#006374',
+]
+# matplotlib's "tab10" -- a different, widely-recognized categorical set
+# (distinct hues from seaborn's "deep"/PALETTE above, not just a
+# lighter/darker variant of the same ten) for a viewer who wants a familiar
+# look from outside the seaborn family
+PALETTE_TABLEAU = [
+    '#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD',
+    '#8C564B', '#E377C2', '#7F7F7F', '#BCBD22', '#17BECF',
+]
 # every option needs exactly MAX_COLORS entries -- SYN.paletteColor (see
 # SHARED_JS) indexes with idx % k for any k up to MAX_COLORS, so a shorter
 # list would read past its own end and recolor as undefined
@@ -90,6 +110,9 @@ PALETTES = {
     'Default': PALETTE,
     'Colorblind-safe': PALETTE_COLORBLIND,
     'Pastel': PALETTE_PASTEL,
+    'Bright': PALETTE_BRIGHT,
+    'Dark': PALETTE_DARK,
+    'Tableau': PALETTE_TABLEAU,
 }
 DEFAULT_PALETTE_NAME = 'Default'
 TARGET_GREY = '#999999'
@@ -140,7 +163,7 @@ STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH
 # so every one of them matches, no matter what's in its label.
 TOOLBAR_CONTROL_HEIGHT = 32
 
-# the header row's five titled controls (target/comparison label, color
+# the header row's five titled controls (target/reference label, color
 # palette, colors, min block anchors) -- narrower than their old 220px,
 # which was much wider than any of their labels or values actually need
 TOP_CONTROL_WIDTH = 150
@@ -349,7 +372,7 @@ class Dataset:
         self.query_sizes = dict(self.query_chroms)
         self.subject_sizes = dict(self.subject_chroms)
 
-        # comparison (subject) occupies the upper half of the ring, target the
+        # reference (subject) occupies the upper half of the ring, target the
         # lower half. subject's angle args are given start > end so its bp
         # coordinates run left-to-right like the query arc's do, not
         # backwards -- see circular_offsets.
@@ -357,15 +380,15 @@ class Dataset:
         self.query_offsets = circular_offsets(self.query_chroms, math.pi + GROUP_GAP, 2 * math.pi - GROUP_GAP)
 
         # linear (non-angular) layout for the dotplot panel -- target along
-        # x, comparison along y, chromosomes flush end to end (no gap): the
+        # x, reference along y, chromosomes flush end to end (no gap): the
         # boundary gridlines build_dotplot_sources() draws already mark each
         # edge, so a gap would only waste axis space, not add information
         self.dp_query_offsets, self.dp_query_span = linear_offsets(self.query_chroms, 0)
         # NOT reversed (an earlier version reversed this, putting the first
-        # comparison chromosome at the top -- flipped per explicit request):
+        # reference chromosome at the top -- flipped per explicit request):
         # linear_offsets gives the FIRST name in its input list the lowest --
         # bottommost -- position, same convention the x-axis already uses, so
-        # the first comparison chromosome now sits at the BOTTOM of the axis
+        # the first reference chromosome now sits at the BOTTOM of the axis
         # and reading up the axis runs last-to-first. This is also this
         # dataset's "natural" dotplot order in the sense the "order by
         # similarity" toggle uses (see SHARED_JS's SYN.dpNaturalOrder, its
@@ -406,16 +429,16 @@ class Dataset:
                      + self.comparison_homeolog_links), default=1) or 1
 
 
-def format_link_label(link, extra='', top_label='Comparison', bottom_label='Target'):
+def format_link_label(link, extra='', top_label='Reference', bottom_label='Target'):
     """mean_identity/anchor_density are None for links.tsv files predating
     those columns -- omit that line rather than printing 'None'.
 
     top_label/bottom_label default to the normal cross-genome case (s_chrom
-    is always on the comparison genome, q_chrom always on target here) --
+    is always on the reference genome, q_chrom always on target here) --
     but a homeolog link's two coordinates are BOTH from the same genome
     (see build_overview_sources' target_homeolog_links/comparison_homeolog_
     links loops), so those callers pass both labels as that one genome's
-    name instead of the default Comparison/Target pair, which would
+    name instead of the default Reference/Target pair, which would
     otherwise misattribute one side to the wrong genome. A small <table>,
     not padded strings, is what actually right-aligns the coordinate
     column regardless of how the two label words' widths differ."""
@@ -447,7 +470,7 @@ def build_gap_records(gaps, offsets, sizes):
     is exactly as tall as the ideogram it marks), just angularly widened to
     MIN_GAP_ANGLE if narrower (see that constant's own comment) so it reads
     as a thin needle across that height rather than a sub-pixel sliver.
-    min/max, not a0/a1 directly: a subject/comparison chromosome's angle
+    min/max, not a0/a1 directly: a subject/reference chromosome's angle
     runs DEcreasing with bp (see circular_offsets), so a0 can be either side
     of a1 depending on which genome this gap belongs to. Mirrors SHARED_JS's
     SYN.buildRingLayout gap loop -- kept in sync deliberately."""
@@ -469,7 +492,7 @@ def group_gaps_by_chrom(gaps):
     dotplot's gap lines both need (per-chromosome lookup, not the ring's
     flat wedge-polygon list build_gap_records returns), embedded once and
     shared by both client-side (see SHARED_JS's targetGapsByChrom/
-    comparisonGapsByChrom usage)."""
+    referenceGapsByChrom usage)."""
     by_chrom = {}
     for g in gaps:
         by_chrom.setdefault(g['chrom'], []).append({'start': g['start'], 'end': g['end']})
@@ -484,11 +507,11 @@ def trunc1(x):
     return math.floor(x * 10) / 10
 
 
-def format_stats_html(target_label, comparison_label, stats):
+def format_stats_html(target_label, reference_label, stats):
     """The interactive HTML's replacement for the (removed) static plots'
     stats inset -- see compute_alignment_stats.py. Mirrors SHARED_JS's
     SYN.buildStatsHtml exactly (same markup), since that's what re-renders
-    this same panel client-side whenever a viewer edits the target/comparison
+    this same panel client-side whenever a viewer edits the target/reference
     labels -- kept in sync deliberately (see module docstring)."""
     if not stats:
         return ''
@@ -520,7 +543,7 @@ def format_stats_html(target_label, comparison_label, stats):
         "<th style='text-align:right;padding-right:20px'>aligned</th>"
         "<th style='text-align:right'>avg identity</th></tr>"
         + row(target_label, stats['query_aligned'], stats['query_mean_identity'])
-        + row(comparison_label, stats['subject_aligned'], stats['subject_mean_identity'])
+        + row(reference_label, stats['subject_aligned'], stats['subject_mean_identity'])
         + "</table></div>"
     )
 
@@ -540,7 +563,7 @@ def build_overview_sources(ds, subject_index, query_index):
         xs, ys = wedge_polygon(a0, a1)
         s_xs.append(xs); s_ys.append(ys)
         s_fill.append(ds.subject_colors[name]); s_name.append(name)
-        s_size.append(f"{size / 1e6:.2f} Mb"); s_group.append('comparison')
+        s_size.append(f"{size / 1e6:.2f} Mb"); s_group.append('reference')
         s_idx.append(subject_index[name])
 
     # Every ribbon's full geometry/label is computed once here regardless of
@@ -555,8 +578,8 @@ def build_overview_sources(ds, subject_index, query_index):
                                              ds.subject_offsets, ds.subject_sizes)
         xs, ys = ribbon_polygon(aq1, aq2, as1, as2)
         # dotplot segment endpoints: same block, plotted in linear (target-x,
-        # comparison-y) coordinates instead of angular ones. A '-' (inverted)
-        # block's target and comparison spans run opposite directions, so the
+        # reference-y) coordinates instead of angular ones. A '-' (inverted)
+        # block's target and reference spans run opposite directions, so the
         # segment is drawn corner-to-corner the other way (anti-diagonal) --
         # the same convention MCScanX/D-GENIES-style dotplots use to make
         # inversions visually distinct from collinear blocks.
@@ -579,7 +602,7 @@ def build_overview_sources(ds, subject_index, query_index):
     # half of the ring, using its own offsets/sizes on both ends and its own
     # chromosome's palette index (query_index/subject_index) so the ribbon is
     # colored the same way that genome's wedges/ribbons already are. Neither
-    # set has a natural place on a target-by-comparison dotplot -- excluded
+    # set has a natural place on a target-by-reference dotplot -- excluded
     # there (the initial segment source below, and every later dotplot
     # redraw, which reads raw links from linksByQuery instead -- see
     # SHARED_JS's SYN.buildDotplotSegmentsForLayout -- rather than this
@@ -608,16 +631,16 @@ def build_overview_sources(ds, subject_index, query_index):
             'xs': xs, 'ys': ys,
             'palette_index': subject_index[link['q_chrom']],
             'alpha': 0.25 + 0.55 * (link['score'] / max_score),
-            # both coordinates are comparison's own -- see format_link_label's
+            # both coordinates are reference's own -- see format_link_label's
             # top_label/bottom_label docstring
             'label': format_link_label(link, extra=' (homeolog)',
-                                        top_label='Comparison', bottom_label='Comparison'),
+                                        top_label='Reference', bottom_label='Reference'),
             'score': link['score'],
             'is_homeolog': True,
             'dp_x0': 0, 'dp_y0': 0, 'dp_x1': 0, 'dp_y1': 0,
         })
 
-    # query and subject chromosomes can share names (e.g. a polyploid comparison
+    # query and subject chromosomes can share names (e.g. a polyploid reference
     # renamed to chr1..chrN same as the target) -- iterate each side against
     # its own offsets dict rather than a single by-name lookup, which would
     # silently resolve every shared name to whichever dict happens to have it
@@ -670,12 +693,12 @@ def build_dotplot_sources(ds, subject_index, ribbon_records):
     ring wedges use, so build_page() can wire them into the exact same
     zoom-pivot tap callback) plus boundary gridlines, the initial
     (unfiltered) block-segment source, and the invisible N x M grid-cell hit
-    layer (one per (target chromosome, comparison chromosome) pair -- see the
+    layer (one per (target chromosome, reference chromosome) pair -- see the
     'cell_src' built below -- for the pairwise zoom, including pairs with no
-    links at all), all in the dotplot's linear target-x / comparison-y
+    links at all), all in the dotplot's linear target-x / reference-y
     coordinate space -- see Dataset.__init__'s dp_query_offsets/
     dp_subject_offsets and DP_RULER_FRAC. Homeolog links (either genome's own
-    self-comparison) have no natural x-position on a target-by-comparison plot
+    self-comparison) have no natural x-position on a target-by-reference plot
     and are excluded here."""
     total_x, total_y = ds.dp_query_span, ds.dp_subject_span
     rx, ry = total_x * DP_RULER_FRAC, total_y * DP_RULER_FRAC
@@ -689,14 +712,14 @@ def build_dotplot_sources(ds, subject_index, ribbon_records):
         q_fill.append(ds.query_colors[name]); q_name.append(name)
         q_size.append(f"{size / 1e6:.2f} Mb"); q_group.append('target')
 
-    # left ruler: one rect per comparison chromosome, just left of x=0
+    # left ruler: one rect per reference chromosome, just left of x=0
     s_xs, s_ys, s_fill, s_name, s_size, s_group, s_idx = [], [], [], [], [], [], []
     for name, size in ds.subject_chroms:
         y0 = ds.dp_subject_offsets[name]
         s_xs.append([-rx, -rx, 0, 0])
         s_ys.append([y0, y0 + size, y0 + size, y0])
         s_fill.append(ds.subject_colors[name]); s_name.append(name)
-        s_size.append(f"{size / 1e6:.2f} Mb"); s_group.append('comparison')
+        s_size.append(f"{size / 1e6:.2f} Mb"); s_group.append('reference')
         s_idx.append(subject_index[name])
 
     # faint boundary lines at every chromosome edge, spanning the full plot
@@ -738,7 +761,7 @@ def build_dotplot_sources(ds, subject_index, ribbon_records):
         palette_index=[r['palette_index'] for r in cross],
     ))
 
-    # every (target chromosome, comparison chromosome) cell of the dotplot
+    # every (target chromosome, reference chromosome) cell of the dotplot
     # grid, including pairs with zero links -- the axis rulers can only
     # select one chromosome at a time, so this is the only way to make an
     # empty cell (no synteny between that pair at all) clickable. Rendered
@@ -784,16 +807,16 @@ window.SYN = window.SYN || {};
 // that isn't a reorder itself (recoloring, the min-block-anchors filter)
 // reads these rather than recomputing an order, so it always draws whatever
 // order is currently active without needing to know which one that is.
-// targetLabel/comparisonLabel are the viewer-editable display names (see
+// targetLabel/referenceLabel are the viewer-editable display names (see
 // SYN.applyLabels) -- every title/bar-label that would otherwise show the
-// pipeline's literal "target"/"comparison" role tags reads from these
+// pipeline's literal "target"/"reference" role tags reads from these
 // instead, seeded to those same literal tags at load (see build_page()'s
 // seed script) so nothing changes on screen until a viewer actually types
 // something into the label inputs.
 SYN.state = {
     pivotSide: null, pivotName: null, mode: null, pairTarget: null, pairSubject: null,
     dpQueryOffsets: null, dpSubjectOffsets: null,
-    targetLabel: null, comparisonLabel: null,
+    targetLabel: null, referenceLabel: null,
     // the zoom panel's own x_range/y_range are rewritten on every click (see
     // SYN.applyDetail below), unlike the ring/dotplot's fixed ranges -- so
     // its double-click-to-reset target has to track whatever was most
@@ -826,7 +849,7 @@ SYN.state = {
 SYN.RIBBON_DIM_ALPHA = 0.08;
 
 // The label TextInputs are free-text (see build_page()'s target_label_input/
-// comparison_label_input) and, unlike chromosome names, are never validated
+// reference_label_input) and, unlike chromosome names, are never validated
 // against anything -- every place their value gets interpolated into HTML
 // rendered via a Div's .text or a HoverTool's "{safe}" formatter (both raw
 // HTML, not escaped by Bokeh) runs it through this first, so a label
@@ -861,7 +884,7 @@ SYN.textColorFor = function(hex) {
     return luminance >= 0.6 ? '#000000' : '#ffffff';
 };
 
-// comparison wedges are never filtered by the min-block-anchors slider (only
+// reference wedges are never filtered by the min-block-anchors slider (only
 // ribbons are), so recoloring them only ever needs the current color count
 SYN.recolorSubjectWedges = function(k, subjectSource) {
     subjectSource.data['fill_color'] = subjectSource.data['palette_index'].map((idx) => SYN.paletteColor(idx, k));
@@ -1093,7 +1116,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         s.fill_color.push(SYN.paletteColor(pIdx, k));
         s.name.push(name);
         s.size_label.push(`${(SYN.data.subjectSizes[name] / 1e6).toFixed(2)} Mb`);
-        s.group.push('comparison'); s.palette_index.push(pIdx);
+        s.group.push('reference'); s.palette_index.push(pIdx);
     }
 
     const labelR = SYN.data.outerR + 0.14;
@@ -1134,7 +1157,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
             score: l.score, is_homeolog: true,
         });
     }
-    for (const l of SYN.data.comparisonHomeologLinks) {
+    for (const l of SYN.data.referenceHomeologLinks) {
         const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.subjectSizes, subjectOffsets);
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.subjectSizes, subjectOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
@@ -1143,7 +1166,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom],
             alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
-            label: SYN.formatLinkLabel(l, 'Comparison', 'Comparison') + ' (homeolog)',
+            label: SYN.formatLinkLabel(l, 'Reference', 'Reference') + ' (homeolog)',
             score: l.score, is_homeolog: true,
         });
     }
@@ -1169,8 +1192,8 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
             gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel(chrom, g.start, g.end)});
         }
     }
-    for (const chrom in SYN.data.comparisonGapsByChrom) {
-        for (const g of SYN.data.comparisonGapsByChrom[chrom]) {
+    for (const chrom in SYN.data.referenceGapsByChrom) {
+        for (const g of SYN.data.referenceGapsByChrom[chrom]) {
             const a0 = SYN.bpToAngleJS(chrom, g.start, SYN.data.subjectSizes, subjectOffsets);
             const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.subjectSizes, subjectOffsets);
             const [lo, hi] = SYN.widenGapAngle(a0, a1);
@@ -1241,7 +1264,7 @@ SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minSc
             const x1 = queryOffsets[l.q_chrom] + l.q_end;
             const yLo = subjectOffsets[l.s_chrom] + l.s_start;
             const yHi = subjectOffsets[l.s_chrom] + l.s_end;
-            // '-' (inverted) blocks run the comparison span the opposite
+            // '-' (inverted) blocks run the reference span the opposite
             // direction from the target span, same convention as the
             // Python-side initial render (see build_overview_sources())
             const [y0, y1] = l.orientation !== '-' ? [yLo, yHi] : [yHi, yLo];
@@ -1268,10 +1291,10 @@ SYN.computeOffsets = function(order, sizes) {
     return offsets;
 };
 
-// The non-similarity order: target reads left-to-right, comparison
+// The non-similarity order: target reads left-to-right, reference
 // bottom-to-top, both in whichever of {size, natural (FASTA)} order
 // SYN.state.orderBySize currently selects (see size_order_toggle) -- no
-// reversal (an earlier version reversed the comparison list, putting the
+// reversal (an earlier version reversed the reference list, putting the
 // first name at the top -- flipped per explicit request): SYN.computeOffsets
 // gives the first name in its list the lowest -- bottommost -- position,
 // same convention the x-axis already uses (see Dataset.__init__'s
@@ -1354,7 +1377,7 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
     for (const name of subjectOrder) {
         const size = SYN.data.subjectSizes[name], y0 = subjectOffsets[name];
         sXs.push([-rx, -rx, 0, 0]); sYs.push([y0, y0 + size, y0 + size, y0]);
-        sName.push(name); sSize.push((size / 1e6).toFixed(2) + ' Mb'); sGroup.push('comparison');
+        sName.push(name); sSize.push((size / 1e6).toFixed(2) + ' Mb'); sGroup.push('reference');
         sIdx.push(SYN.data.subjectColorIndex[name]);
     }
 
@@ -1447,8 +1470,8 @@ SYN.buildDotplotGapLines = function() {
             label.push(SYN.formatGapLabel(chrom, g.start, g.end));
         }
     }
-    for (const chrom in SYN.data.comparisonGapsByChrom) {
-        for (const g of SYN.data.comparisonGapsByChrom[chrom]) {
+    for (const chrom in SYN.data.referenceGapsByChrom) {
+        for (const g of SYN.data.referenceGapsByChrom[chrom]) {
             const mid = SYN.state.dpSubjectOffsets[chrom] + (g.start + g.end) / 2;
             xs.push([-rx, totalX]); ys.push([mid, mid]);
             label.push(SYN.formatGapLabel(chrom, g.start, g.end));
@@ -1472,14 +1495,14 @@ SYN.buildOffsetsLinear = function(chroms, gap) {
     return [offsets, cum - gap];
 };
 
-// 'target' -> SYN.data.targetGapsByChrom, 'comparison' -> ...GapsByChrom --
+// 'target' -> SYN.data.targetGapsByChrom, 'reference' -> ...GapsByChrom --
 // both the zoom panel builders below need this same per-chromosome lookup
 // (as opposed to the ring's flat wedge-polygon list, see SYN.buildRingLayout)
 // to know which genome's gap list a given bar's chromosome name belongs to,
-// since target and comparison chromosomes can share names (see
+// since target and reference chromosomes can share names (see
 // Dataset.__init__'s own comment on this).
 SYN.gapsForChrom = function(role, name) {
-    return (role === 'target' ? SYN.data.targetGapsByChrom : SYN.data.comparisonGapsByChrom)[name] || [];
+    return (role === 'target' ? SYN.data.targetGapsByChrom : SYN.data.referenceGapsByChrom)[name] || [];
 };
 
 SYN.emptyDetail = function(title) {
@@ -1493,26 +1516,26 @@ SYN.emptyDetail = function(title) {
     };
 };
 
-// pivotSide is 'subject' (comparison) or 'query' (target) -- whichever side
+// pivotSide is 'subject' (reference) or 'query' (target) -- whichever side
 // was clicked. That chromosome is drawn alone on its own row; the other
 // side's chromosomes involved in its links are packed on the opposite row.
-// Comparison-associated bars/ribbons always end up on the top row, target-
+// Reference-associated bars/ribbons always end up on the top row, target-
 // associated ones on the bottom row, regardless of which side is the pivot.
 SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     if (!pivotName) { return SYN.emptyDetail(); }
     const isPivotSubject = pivotSide === 'subject';
-    const links = ((isPivotSubject ? SYN.data.linksByComparison[pivotName] : SYN.data.linksByQuery[pivotName]) || [])
+    const links = ((isPivotSubject ? SYN.data.linksByReference[pivotName] : SYN.data.linksByQuery[pivotName]) || [])
         .filter((l) => l.score >= minScore);
     const pivotSize = isPivotSubject ? SYN.data.subjectSizes[pivotName] : SYN.data.querySizes[pivotName];
     const pivotColor = isPivotSubject ? SYN.paletteColor(SYN.data.subjectColorIndex[pivotName], k) : SYN.data.targetGrey;
-    const pivotKind = isPivotSubject ? SYN.state.comparisonLabel : SYN.state.targetLabel;
-    const otherKind = isPivotSubject ? SYN.state.targetLabel : SYN.state.comparisonLabel;
+    const pivotKind = isPivotSubject ? SYN.state.referenceLabel : SYN.state.targetLabel;
+    const otherKind = isPivotSubject ? SYN.state.targetLabel : SYN.state.referenceLabel;
 
     const barH = 0.32, topY = 1.2, botY = 0.0;
     const pivotRowY = isPivotSubject ? topY : botY;
     const otherRowY = isPivotSubject ? botY : topY;
-    const pivotRole = isPivotSubject ? 'comparison' : 'target';
-    const otherRole = isPivotSubject ? 'target' : 'comparison';
+    const pivotRole = isPivotSubject ? 'reference' : 'target';
+    const otherRole = isPivotSubject ? 'target' : 'reference';
 
     // gap ticks for one bar -- same thin-rect-over-the-bar idea as the
     // ring's wedge markers, just linear: x0 is the bar's own left edge (0
@@ -1611,7 +1634,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     };
 };
 
-// One dotplot grid cell (a single target chromosome x single comparison
+// One dotplot grid cell (a single target chromosome x single reference
 // chromosome pair) -- always exactly two bars, no packing needed since
 // there's only ever one chromosome per side. Unlike buildDetailData, this
 // has to handle the zero-link case as a normal, expected outcome (not an
@@ -1652,7 +1675,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
             gapLabel.push(SYN.formatGapLabel(name, g.start, g.end));
         }
     };
-    addGapTicks('comparison', subjectName, topY);
+    addGapTicks('reference', subjectName, topY);
     addGapTicks('target', targetName, botY);
     const gaps = {xs: gapXs, ys: gapYs, label: gapLabel};
 
@@ -1663,7 +1686,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
             labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
             gaps,
             x_range: baseX, y_range: baseY,
-            title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.comparisonLabel}) -- no links`,
+            title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.referenceLabel}) -- no links`,
         };
     }
 
@@ -1684,18 +1707,18 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
         labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
         gaps,
         x_range: baseX, y_range: baseY,
-        title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.comparisonLabel}) -- ${links.length} link(s)`,
+        title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.referenceLabel}) -- ${links.length} link(s)`,
     };
 };
 
 // mirrors format_link_label() in this file's Python -- mean_identity/
 // anchor_density are null for links.tsv files predating those columns, so
 // that line is simply omitted rather than printing "null". topLabel/
-// bottomLabel default to the normal cross-genome case (Comparison/Target);
+// bottomLabel default to the normal cross-genome case (Reference/Target);
 // a homeolog caller passes both as that one genome's own name instead --
 // see format_link_label's Python docstring for why.
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
-    topLabel = topLabel || 'Comparison';
+    topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
     let stats = `${l.score} protein alignment(s)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
@@ -1931,13 +1954,13 @@ SYN.exportFigure = function(figModel, panel, format) {
 SYN.buildExportFilename = function(panel, format) {
     const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     const t = sanitize(SYN.state.targetLabel) || 'target';
-    const r = sanitize(SYN.state.comparisonLabel) || 'comparison';
+    const r = sanitize(SYN.state.referenceLabel) || 'reference';
     const ext = format === 'JPEG' ? 'jpg' : format.toLowerCase();
     return `${t}_vs_${r}_${panel}.${ext}`;
 };
 
 // Every title/bar-label a viewer might export reads SYN.state.targetLabel/
-// comparisonLabel rather than the pipeline's literal "target"/"comparison"
+// referenceLabel rather than the pipeline's literal "target"/"reference"
 // role tags (see SYN.buildDetailData/SYN.buildPairDetailData above) -- this
 // is what actually changes those two values and refreshes the handful of
 // sources/titles that don't go through a rebuild-on-every-redraw path the
@@ -1945,21 +1968,17 @@ SYN.buildExportFilename = function(panel, format) {
 // also calls SYN.refreshDetail and SYN.applyStats after this). The 'group'
 // field feeds each ruler/wedge source's hover tooltip ("Group": "@group")
 // only -- nothing else reads it, so overwriting every entry is safe.
-SYN.applyLabels = function(targetLabel, comparisonLabel, ctx) {
+SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
     SYN.state.targetLabel = targetLabel;
-    SYN.state.comparisonLabel = comparisonLabel;
-    ctx.overview.title.text = `${targetLabel} (target) vs ${comparisonLabel} (comparison)`;
-    ctx.dotplotFig.title.text = `${targetLabel} vs ${comparisonLabel} -- click a band or a grid square to zoom`;
-    if (ctx.headerDiv) {
-        ctx.headerDiv.text = `<h2>${SYN.escapeHtml(targetLabel)} vs ${SYN.escapeHtml(comparisonLabel)} `
-            + `-- interactive synteny</h2>`;
-    }
+    SYN.state.referenceLabel = referenceLabel;
+    ctx.overview.title.text = `${referenceLabel} (reference) vs ${targetLabel} (target)`;
+    ctx.dotplotFig.title.text = `${targetLabel} vs ${referenceLabel} -- click a band or a grid square to zoom`;
     for (const src of ctx.queryLikeSources) {
         src.data.group = src.data.group.map(() => targetLabel);
         src.change.emit();
     }
     for (const src of ctx.subjectLikeSources) {
-        src.data.group = src.data.group.map(() => comparisonLabel);
+        src.data.group = src.data.group.map(() => referenceLabel);
         src.change.emit();
     }
 };
@@ -1975,7 +1994,7 @@ SYN.trunc1 = function(x) {
     return Math.floor(x * 10) / 10;
 };
 
-SYN.buildStatsHtml = function(targetLabel, comparisonLabel) {
+SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     const s = SYN.data.alignmentStats;
     if (!s) { return ''; }
     const pct = (n) => s.proteome_total ? SYN.trunc1(n / s.proteome_total * 100).toFixed(1) : '0.0';
@@ -2003,13 +2022,13 @@ SYN.buildStatsHtml = function(targetLabel, comparisonLabel) {
                     <th style="text-align:right;padding-right:20px">aligned</th>
                     <th style="text-align:right">avg identity</th></tr>
                 ${row(targetLabel, s.query_aligned, s.query_mean_identity)}
-                ${row(comparisonLabel, s.subject_aligned, s.subject_mean_identity)}
+                ${row(referenceLabel, s.subject_aligned, s.subject_mean_identity)}
             </table>
         </div>`;
 };
 
-SYN.applyStats = function(targetLabel, comparisonLabel, statsDiv) {
-    statsDiv.text = SYN.buildStatsHtml(targetLabel, comparisonLabel);
+SYN.applyStats = function(targetLabel, referenceLabel, statsDiv) {
+    statsDiv.text = SYN.buildStatsHtml(targetLabel, referenceLabel);
 };
 
 """
@@ -2047,7 +2066,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # wiring below) and is the only one that needs to exist at all.
     overview = figure(width=620, height=620, match_aspect=True,
                        x_range=Range1d(-lim, lim), y_range=Range1d(-lim, lim),
-                       title=f"{query_name} (target) vs {subject_name} (comparison)",
+                       title=f"{subject_subtitle or subject_name} (reference) vs "
+                             f"{query_subtitle or query_name} (target)",
                        tools="pan,wheel_zoom,reset",
                        output_backend="svg")
     overview.axis.visible = False
@@ -2108,7 +2128,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         ribbon_source.selected.indices = [];
     """))
 
-    # Whole-genome dotplot: target along x, comparison along y, each block
+    # Whole-genome dotplot: target along x, reference along y, each block
     # drawn as the line segment its own (query, subject) span traces out --
     # the standard synteny-dotplot convention (a diagonal streak per
     # collinear block, anti-diagonal for an inversion). The chromosome-ruler
@@ -2123,7 +2143,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # Dotplot gap lines (nice-to-have companion to the ring's gap wedges,
     # same "Show gaps" switch) -- unlike the ring's gap_src, this has no
     # Python-computed initial geometry: SYN.buildDotplotGapLines rebuilds it
-    # entirely client-side from SYN.data.targetGapsByChrom/comparisonGaps
+    # entirely client-side from SYN.data.targetGapsByChrom/referenceGaps
     # ByChrom + SYN.state.dpQueryOffsets/dpSubjectOffsets (already seeded at
     # load, see build_page()'s seed_js) whenever it's needed, the same way
     # SYN.buildDotplotSegmentsForLayout has no Python-side equivalent either.
@@ -2133,7 +2153,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # *3 (not just enough room for the ruler strip itself) leaves space for
     # the chromosome-name labels drawn just outside each ruler (see
     # build_dotplot_sources()'s q_label/s_label -- text_align='right' for the
-    # comparison labels means they extend further left from their anchor, so
+    # reference labels means they extend further left from their anchor, so
     # the range has to clear that too, not just the ruler). Confirmed by
     # rendering against real data: *2.2 and *2.6 clip a 5-character name like
     # "chr13" down to "13"/"hr13"; *3 leaves every label fully visible with a
@@ -2150,7 +2170,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_fig.grid.visible = False
     dotplot_fig.toolbar.logo = None
 
-    # invisible hit-target layer, one patch per (target chromosome, comparison
+    # invisible hit-target layer, one patch per (target chromosome, reference
     # chromosome) grid cell -- drawn first (bottom of the stack) so it never
     # visually covers the gridlines/segments/rulers above it. This is what
     # makes every cell clickable for the pairwise zoom below, including
@@ -2265,12 +2285,20 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         fig.y_range.start = r.y0; fig.y_range.end = r.y1;
     """))
 
-    # default to the literal role tags (today's look, unchanged) -- a viewer
-    # can retype either to the actual species/genome name before exporting a
-    # panel, see SYN.applyLabels
-    target_label_input = TextInput(title="Target label", value=query_name, width=TOP_CONTROL_WIDTH)
-    comparison_label_input = TextInput(title="Comparison label", value=subject_name,
-                                        width=TOP_CONTROL_WIDTH)
+    # default to the actual input file name/accession (query_subtitle/
+    # subject_subtitle -- see --query_subtitle/--subject_subtitle) rather
+    # than the literal "target"/"reference" role tags, so a viewer sees
+    # which physical genome is which immediately, right in the box itself --
+    # there used to be a separate "target: <file>" Div below the header for
+    # this; removed now that it would just repeat what this box already
+    # says. Falls back to the role tag itself when no subtitle was given
+    # (--query_subtitle/--subject_subtitle are both optional). A viewer can
+    # still retype either box to anything else before exporting a panel,
+    # see SYN.applyLabels.
+    target_label_input = TextInput(title="Target label", value=query_subtitle or query_name,
+                                    width=TOP_CONTROL_WIDTH)
+    reference_label_input = TextInput(title="Reference label", value=subject_subtitle or subject_name,
+                                       width=TOP_CONTROL_WIDTH)
 
     palette_select = Select(title="Color palette", value=DEFAULT_PALETTE_NAME,
                              options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
@@ -2287,11 +2315,16 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                            step=1, value=MBA_SLIDER_MIN, width=TOP_CONTROL_WIDTH)
     reset_btn = Button(label="✕ clear zoom", button_type="default", width=140,
                         height=TOOLBAR_CONTROL_HEIGHT)
-    save_ring_btn = Button(label="⬇ save ring", button_type="default", width=130,
+    # label is just "save" (not "save ring"/"save zoom"/"save dotplot") and
+    # the button narrow to match -- which panel it saves is already obvious
+    # from its position directly under that panel, so the longer label was
+    # only ever spending width, not clarity
+    SAVE_BUTTON_WIDTH = 70
+    save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                             height=TOOLBAR_CONTROL_HEIGHT)
-    save_zoom_btn = Button(label="⬇ save zoom", button_type="default", width=130,
+    save_zoom_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                             height=TOOLBAR_CONTROL_HEIGHT)
-    save_dotplot_btn = Button(label="⬇ save dotplot", button_type="default", width=130,
+    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                                height=TOOLBAR_CONTROL_HEIGHT)
     # format choice lives next to each save button rather than as a second
     # button per panel -- adds ~50px to a row instead of ~130px, which
@@ -2309,7 +2342,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # recognize their chromosomes by, and reordering only pays off when the
     # two genomes are close enough that a near-1:1 correspondence exists to
     # reveal in the first place (see SYN.computeSimilarityOrder's docstring)
-    order_toggle = Toggle(label="Order chromosomes by similarity", active=False,
+    order_toggle = Toggle(label="Order by similarity", active=False,
                            button_type="default", width=160, height=TOOLBAR_CONTROL_HEIGHT)
     # Global -- affects the ring AND the dotplot alike, but lives in the
     # ring's own row (next to show_gaps_toggle, itself global -- see its own
@@ -2325,7 +2358,39 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # "natural" itself means, for whichever panel is currently showing it.
     # See SYN.dpNaturalOrder (dotplot + the shared order concept) and
     # SYN.applyRingLayout (the ring, which has no similarity concept at all).
-    size_order_toggle = Switch(label="Order by size", active=True)
+    # explicit width -- all four ring-row switches below now share one row
+    # with the save button and format dropdown (see left_col), and none of
+    # their unconstrained natural widths fit together under the ring's own
+    # 620px. There's no width here that keeps every label on one line AND
+    # the row under 620px -- Bokeh's Switch reserves real estate for the
+    # toggle control itself before any label text, so even the shortest
+    # label ("Show gaps") needs more room than this to stay on one line.
+    # Trading that off deliberately: a label wrapping to two lines only
+    # makes this one row a few px taller, not wider, so it doesn't reopen
+    # the ring/zoom gap the row split (see left_col's git history) was
+    # fixing in the first place -- width chosen for a comfortable margin
+    # under 620px, not to chase single-line labels that don't fit regardless.
+    RING_SWITCH_WIDTH = 95
+    # tighter gap between each switch and its own label (Bokeh's own default
+    # is 6px) and centered vertically against it -- matters especially now
+    # that a wrapped two-line label (see RING_SWITCH_WIDTH above) is taller
+    # than the toggle control itself, which otherwise sits pinned to the top
+    # of that extra height instead of centered against the full label block.
+    # :host is the styling entry point for every Bokeh widget's own shadow
+    # DOM -- see Switch.stylesheets' docstring.
+    RING_SWITCH_CSS = ':host{gap:2px;align-items:center;}'
+    # same, plus a thin divider on this switch's leading edge, in the small
+    # gap Bokeh already leaves between adjacent row items -- marks where one
+    # text+toggle section ends and the next begins. Not applied to
+    # self_links_toggle (the first of these four in the row -- see
+    # left_col below): nothing of its own kind precedes it to divide from.
+    # var(--divider-color) is Bokeh's own theme token for exactly this
+    # (already used for the divider between this widget and its neighbors
+    # in Bokeh's stock toolbars), not a hardcoded color of this file's own.
+    RING_SWITCH_DIVIDER_CSS = (':host{gap:2px;align-items:center;'
+                                'border-left:1px solid var(--divider-color);padding-left:6px;}')
+    size_order_toggle = Switch(label="Order by size", active=True, width=RING_SWITCH_WIDTH,
+                                stylesheets=[RING_SWITCH_DIVIDER_CSS])
     # Switch, not Toggle -- a checkbox-style on/off switch rather than a
     # pressable button, for these two specifically (order_toggle above stays
     # a button; only these ring-display toggles were asked to become
@@ -2336,7 +2401,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # drawn only on the ring -- build_dotplot_sources() explicitly excludes
     # homeolog records, so they never appear on the zoom or dotplot panels
     # either.
-    self_links_toggle = Switch(label="Show self-links", active=False)
+    self_links_toggle = Switch(label="Show self-links", active=False, width=RING_SWITCH_WIDTH,
+                                stylesheets=[RING_SWITCH_CSS])
     # off by default -- hides cross-genome synteny ribbons, leaving only
     # self-links on screen if self_links_toggle is also on (see the combined
     # predicate in SYN.buildOverviewRibbons: is_homeolog records are governed
@@ -2344,7 +2410,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # are governed by this switch regardless of self_links_toggle -- the two
     # compose independently, including the "both off" case, which is a valid
     # (if visually empty) combination, not specially prevented).
-    hide_synteny_toggle = Switch(label="Hide synteny", active=False)
+    hide_synteny_toggle = Switch(label="Hide synteny", active=False, width=RING_SWITCH_WIDTH,
+                                  stylesheets=[RING_SWITCH_DIVIDER_CSS])
     # off by default -- an assembly gap marker is a diagnostic/QC detail
     # (see bin/find_assembly_gaps.py), not something every viewer needs on
     # screen by default, and a draft-quality assembly can have thousands of
@@ -2356,7 +2423,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # ring-only, this one switch is intentionally the single on/off control
     # for every panel's gap markers, since "show gaps" is one concept
     # regardless of which panel is currently displaying them.
-    show_gaps_toggle = Switch(label="Show gaps", active=False)
+    show_gaps_toggle = Switch(label="Show gaps", active=False, width=RING_SWITCH_WIDTH,
+                               stylesheets=[RING_SWITCH_DIVIDER_CSS])
 
     save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview, fmt=ring_format_sel), code="""
         SYN.exportFigure(fig, 'ring', fmt.value);
@@ -2488,7 +2556,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     r_src.selected.js_on_change('indices', ribbon_tap_callback)
 
     # Tapping a dotplot grid cell zooms the detail panel into exactly that
-    # (target chromosome, comparison chromosome) pair -- unlike the pivot
+    # (target chromosome, reference chromosome) pair -- unlike the pivot
     # callback above, this always shows exactly two bars, and handles zero
     # links as a normal result (see SYN.buildPairDetailData) rather than
     # refusing the click, since "no synteny here" is itself the answer for
@@ -2637,6 +2705,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     reset_btn.js_on_click(reset_callback)
 
+    # not currently shown on the page -- left out of `layout` below, for now,
+    # per explicit request to drop the usage instructions -- kept defined
+    # here rather than deleted so it's a one-line change to bring back
     hint = Div(text="<p style='color:#666;font-size:13px'>Click any chromosome wedge on the "
                      "ring, or any chromosome band on the dotplot's axes, to zoom into its "
                      "links against the other genome -- both trigger the same zoom, and a "
@@ -2646,10 +2717,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "ribbon on the ring instead to highlight just that one and dim the rest -- "
                      "click empty ring space, double-click the ring, or click a wedge/dotplot "
                      "cell to clear the highlight. Target "
-                     "label/Comparison label relabel the genomes everywhere a title or bar shows "
+                     "label/Reference label relabel the genomes everywhere a title or bar shows "
                      "them, so an exported panel can show the actual species/genome name "
-                     "instead of \"target\"/\"comparison\". Color palette switches the set of "
-                     "colors comparison chromosomes cycle through; Colors changes how many "
+                     "instead of \"target\"/\"reference\". Color palette switches the set of "
+                     "colors reference chromosomes cycle through; Colors changes how many "
                      "discrete colors from it they cycle through. Min block anchors filters "
                      "out synteny blocks with fewer than that many supporting protein alignments "
                      "-- raise it to cut noise, lower it to see more (shorter, less certain) "
@@ -2676,43 +2747,28 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "paste into a slide or document), whichever the dropdown next to that "
                      "button is set to.</p>")
 
-    # split across two rows, not one -- all six widgets on a single row ran
-    # wider than the ring figure itself (620px), which stretched left_col
-    # past that width and pushed mid_col/right_col to the right by the
-    # overflow, opening a much bigger gap after the ring than the one
-    # between mid_col and right_col. Split by scope instead: ring-only
-    # controls (export + the two switches that affect only the ring's own
-    # ribbons) on top, the two switches that are global (show_gaps_toggle,
-    # size_order_toggle -- see their own comments) below -- both rows stay
-    # well under 620px, so left_col's width goes back to matching the ring
-    # figure exactly.
     left_col = column(overview,
-                       row(save_ring_btn, ring_format_sel, self_links_toggle, hide_synteny_toggle),
-                       row(show_gaps_toggle, size_order_toggle))
+                       row(save_ring_btn, ring_format_sel, self_links_toggle, hide_synteny_toggle,
+                           show_gaps_toggle, size_order_toggle))
     right_col = column(dotplot_fig, row(save_dotplot_btn, dotplot_format_sel, order_toggle))
 
-    # reactive (see SYN.applyLabels) -- shows the current target_label_input/
-    # comparison_label_input values, not the literal "target"/"comparison"
-    # role tags, once a viewer changes either
-    header_title_div = Div(text=f"<h2>{html.escape(query_name)} vs {html.escape(subject_name)} "
-                                 "-- interactive synteny</h2>")
+    # static -- the tool's own name/tagline, not this run's target/reference
+    # (that's the target/reference label inputs' job) -- unlike those, never
+    # rewritten by label_callback
+    header_title_div = Div(text="<h2>quick_synteny - fast and annotation-free synteny "
+                                 "visualisation using spliced protein alignments</h2>")
 
-    subtitle_div = None
-    if query_subtitle or subject_subtitle:
-        # the input file name/accession behind "target"/"comparison", so a
-        # viewer doesn't have to guess which physical genome each role is --
-        # this deliberately never changes when the labels above do, since
-        # its whole point is mapping the fixed role to the actual input file
-        subtitle_div = Div(text=(
-            "<p style='color:#666;font-size:13px;margin:2px 0 8px 0'>"
-            f"{html.escape(query_name)}: {html.escape(query_subtitle or '?')}<br>"
-            f"{html.escape(subject_name)}: {html.escape(subject_subtitle or '?')}"
-            "</p>"
-        ))
+    # No separate "target: <file>" / "reference: <file>" line here any more --
+    # target_label_input/reference_label_input above default to exactly that
+    # (query_subtitle/subject_subtitle, falling back to the role tag), so
+    # showing the input file name a second time in its own Div would just be
+    # the same information twice. That does mean the file name is no longer
+    # visible once a viewer *retypes* a label -- accepted tradeoff, since the
+    # box itself is still right there labeled "Target label"/"Reference label".
 
-    # initial render uses the default (literal role-tag) labels, matching
-    # the TextInputs' own defaults -- reactive after that (see SYN.applyStats,
-    # wired below), same split as header_title_div/subtitle_div above.
+    # initial render matches target_label_input/reference_label_input's own
+    # default (query_subtitle/subject_subtitle, falling back to the role
+    # tag) -- reactive after that (see SYN.applyStats, wired below).
     # Empty/invisible if no --stats was given. width=STATS_PANEL_WIDTH makes
     # the box itself (format_stats_html/SYN.buildStatsHtml's markup, which is
     # `display:block` precisely so it stretches to fill this rather than
@@ -2728,7 +2784,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # The vertical breathing room that default margin used to provide is
     # already there regardless, from format_stats_html's own inline
     # `margin:4px 0 8px 0` on the box itself.
-    stats_div = Div(text=format_stats_html(query_name, subject_name, alignment_stats),
+    stats_div = Div(text=format_stats_html(query_subtitle or query_name, subject_subtitle or subject_name,
+                                            alignment_stats),
                      width=STATS_PANEL_WIDTH, margin=(0, 0, 0, 0))
 
     # placed under the zoom panel specifically (not a full-width bar under
@@ -2737,34 +2794,33 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     mid_col = column(detail_fig, row(reset_btn, save_zoom_btn, zoom_format_sel), stats_div)
 
     label_callback = CustomJS(args=dict(
-        target_label_input=target_label_input, comparison_label_input=comparison_label_input,
-        overview=overview, dotplot_fig=dotplot_fig, header_div=header_title_div, stats_div=stats_div,
+        target_label_input=target_label_input, reference_label_input=reference_label_input,
+        overview=overview, dotplot_fig=dotplot_fig, stats_div=stats_div,
         q_src=q_src, dp_q_src=dp_q_src, s_src=s_src, dp_s_src=dp_s_src,
         color_spinner=color_spinner, mba_spinner=mba_spinner,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         const targetLabel = target_label_input.value.trim() || 'target';
-        const comparisonLabel = comparison_label_input.value.trim() || 'comparison';
-        SYN.applyLabels(targetLabel, comparisonLabel, {
-            overview, dotplotFig: dotplot_fig, headerDiv: header_div,
+        const referenceLabel = reference_label_input.value.trim() || 'reference';
+        SYN.applyLabels(targetLabel, referenceLabel, {
+            overview, dotplotFig: dotplot_fig,
             queryLikeSources: [q_src, dp_q_src], subjectLikeSources: [s_src, dp_s_src],
         });
         SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source, label_source,
                            detail_fig, detail_gap_source);
-        SYN.applyStats(targetLabel, comparisonLabel, stats_div);
+        SYN.applyStats(targetLabel, referenceLabel, stats_div);
     """)
     target_label_input.js_on_change('value', label_callback)
-    comparison_label_input.js_on_change('value', label_callback)
-
-    header_children = [header_title_div]
-    if subtitle_div is not None:
-        header_children.append(subtitle_div)
+    reference_label_input.js_on_change('value', label_callback)
 
     layout = column(
-        *header_children,
-        row(target_label_input, comparison_label_input, palette_select, color_spinner, mba_spinner),
-        hint,
+        header_title_div,
+        row(reference_label_input, target_label_input, palette_select, color_spinner, mba_spinner),
+        # hint left out of the layout for now (not deleted -- still built
+        # above, just not attached to anything file_html walks/serializes)
+        # per explicit request to drop the usage instructions from the page
+        # -- reinstate by adding `hint,` back here
         # spacing=20 -- row()'s default is 0, so without this the three
         # panels would sit flush against each other (or worse, apart by
         # whatever a child happens to overflow to, see left_col's own
@@ -2780,9 +2836,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                 'score': l['score'], 'orientation': l['orientation'],
                 'mean_identity': l.get('mean_identity'), 'anchor_density': l.get('anchor_density')}
 
-    links_by_comparison, links_by_query = {}, {}
+    links_by_reference, links_by_query = {}, {}
     for name, _ in ds.subject_chroms:
-        links_by_comparison[name] = [embed_link(l) for l in ds.links if l['s_chrom'] == name]
+        links_by_reference[name] = [embed_link(l) for l in ds.links if l['s_chrom'] == name]
     for name, _ in ds.query_chroms:
         links_by_query[name] = [embed_link(l) for l in ds.links if l['q_chrom'] == name]
     # Flat (not grouped-by-chromosome) -- SYN.buildRingLayout is the only
@@ -2790,15 +2846,24 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # chromosome it's on, same as build_overview_sources does in Python.
     # There's no dotplot equivalent (homeolog links never appear there --
     # see build_overview_sources' comment on why), so unlike linksByQuery/
-    # linksByComparison above, no grouped form is needed.
+    # linksByReference above, no grouped form is needed.
     target_homeolog_links_flat = [embed_link(l) for l in ds.target_homeolog_links]
-    comparison_homeolog_links_flat = [embed_link(l) for l in ds.comparison_homeolog_links]
+    reference_homeolog_links_flat = [embed_link(l) for l in ds.comparison_homeolog_links]
     syn_data = {
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
         'palettes': PALETTES,
         'targetGrey': TARGET_GREY,
         'targetName': query_name,
-        'comparisonName': subject_name,
+        'referenceName': subject_name,
+        # the *editable* label's own default (query_subtitle/subject_subtitle
+        # -- the actual input file name/accession -- falling back to the
+        # role tag above when none was given), distinct from targetName/
+        # referenceName above: those stay the fixed "target"/"comparison"
+        # role identity even after a viewer retypes the label, since some
+        # tooltips (see SYN.buildPairDetailData) deliberately show both
+        # together, e.g. "target (Dmel) x reference (Dyak)"
+        'targetLabelDefault': query_subtitle or query_name,
+        'referenceLabelDefault': subject_subtitle or subject_name,
         'queryNames': query_names,
         'subjectNames': subject_names,
         # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
@@ -2814,21 +2879,21 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # target's own homeolog ribbons can still be colored per-chromosome,
         # exactly mirroring build_overview_sources' target_homeolog_links loop
         'queryColorIndex': query_index,
-        'linksByComparison': links_by_comparison,
+        'linksByReference': links_by_reference,
         'linksByQuery': links_by_query,
         'targetHomeologLinks': target_homeolog_links_flat,
-        'comparisonHomeologLinks': comparison_homeolog_links_flat,
+        'referenceHomeologLinks': reference_homeolog_links_flat,
         'ribbons': ribbon_records,
         'maxScore': ds.max_score(),
         # per-chromosome assembly-gap lookup, one genome's own gaps each --
         # separate dicts (not a single by-name lookup) since target and
-        # comparison chromosomes can share names, same reasoning as
+        # reference chromosomes can share names, same reasoning as
         # queryColorIndex/subjectColorIndex above. Read by SYN.buildRingLayout
         # (ring wedges), SYN.buildDotplotGapLines (dotplot lines), and
         # SYN.gapsForChrom (zoom panel bars) -- one source of raw gap data,
         # three different geometries built from it.
         'targetGapsByChrom': group_gaps_by_chrom(ds.query_gaps),
-        'comparisonGapsByChrom': group_gaps_by_chrom(ds.subject_gaps),
+        'referenceGapsByChrom': group_gaps_by_chrom(ds.subject_gaps),
         # the ring's CURRENT (default = size order) gap wedge polygons --
         # replaced wholesale on a reorder (see SYN.applyRingLayout), same
         # "master list, filtered display source" split as 'ribbons' above
@@ -2857,7 +2922,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # and SHARED_JS's SYN.dpNaturalOrder) so the color/palette/min-block-
     # anchors callbacks have a valid SYN.state.dpQueryOffsets/dpSubjectOffsets
     # to redraw against before the order-by-similarity toggle is ever touched.
-    # targetLabel/comparisonLabel seed to the same default the label
+    # targetLabel/referenceLabel seed to the same default the label
     # TextInputs show, so the very first pivot/pair click (before either
     # input is ever touched) already reads a real string, not null.
     seed_js = """
@@ -2865,13 +2930,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         const natural = SYN.dpNaturalOrder();
         SYN.state.dpQueryOffsets = SYN.computeOffsets(natural.queryOrder, SYN.data.querySizes);
         SYN.state.dpSubjectOffsets = SYN.computeOffsets(natural.subjectOrder, SYN.data.subjectSizes);
-        SYN.state.targetLabel = SYN.data.targetName;
-        SYN.state.comparisonLabel = SYN.data.comparisonName;
+        SYN.state.targetLabel = SYN.data.targetLabelDefault;
+        SYN.state.referenceLabel = SYN.data.referenceLabelDefault;
     })();
     """
     injected = ("<script>\n" + SHARED_JS + "\nSYN.data = " + json.dumps(syn_data) + ";\n"
                 + seed_js + "\n</script>\n</body>")
-    return page_html.replace("</body>", injected, 1), links_by_comparison, links_by_query
+    return page_html.replace("</body>", injected, 1), links_by_reference, links_by_query
 
 
 def main():
@@ -2884,11 +2949,11 @@ def main():
     parser.add_argument('--target_homeolog_links', default=None,
                          help='optional target-vs-itself links TSV -- drawn as ribbons '
                               'within the target half of the ring (not included in the '
-                              'zoom panel, which only shows target<->comparison links for the '
+                              'zoom panel, which only shows target<->reference links for the '
                               'clicked chromosome)')
     parser.add_argument('--comparison_homeolog_links', default=None,
-                         help='optional comparison-vs-itself links TSV -- drawn as ribbons '
-                              'within the comparison half of the ring (ditto, not included in '
+                         help='optional reference-vs-itself links TSV -- drawn as ribbons '
+                              'within the reference half of the ring (ditto, not included in '
                               'the zoom panel)')
     parser.add_argument('--stats', default=None,
                          help='optional compute_alignment_stats.py JSON -- shown as a small '
@@ -2898,15 +2963,15 @@ def main():
     parser.add_argument('--query_subtitle', default=None,
                          help='optional subtitle under the query/target name in the page '
                               'header -- e.g. the input file name, so a viewer can tell '
-                              'which physical genome "target"/"comparison" refer to')
+                              'which physical genome "target"/"reference" refer to')
     parser.add_argument('--subject_subtitle', default=None,
-                         help='ditto, under the subject/comparison name')
+                         help='ditto, under the subject/reference name')
     parser.add_argument('--target_gaps', default=None,
                          help='optional find_assembly_gaps.py output (chrom, start, end TSV, '
                               'no header) for the target genome -- drawn as gap markers on the '
                               'ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
     parser.add_argument('--comparison_gaps', default=None,
-                         help='ditto, for the comparison genome')
+                         help='ditto, for the reference genome')
     parser.add_argument('--out_prefix', required=True)
     args = parser.parse_args()
 
@@ -2922,7 +2987,7 @@ def main():
         with open(args.stats) as f:
             alignment_stats = json.load(f)
 
-    page_html, links_by_comparison, links_by_query = build_page(
+    page_html, links_by_reference, links_by_query = build_page(
         ds, args.query_name, args.subject_name, args.query_subtitle, args.subject_subtitle,
         alignment_stats)
 
@@ -2930,15 +2995,15 @@ def main():
     with open(out_path, 'w') as f:
         f.write(page_html)
 
-    total_links = sum(len(v) for v in links_by_comparison.values())
+    total_links = sum(len(v) for v in links_by_reference.values())
     homeolog_bits = []
     if args.target_homeolog_links:
         homeolog_bits.append(f"{len(ds.target_homeolog_links)} target homeolog link(s)")
     if args.comparison_homeolog_links:
-        homeolog_bits.append(f"{len(ds.comparison_homeolog_links)} comparison homeolog link(s)")
+        homeolog_bits.append(f"{len(ds.comparison_homeolog_links)} reference homeolog link(s)")
     if args.target_gaps or args.comparison_gaps:
-        homeolog_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} comparison assembly gap(s)")
-    print(f"[plot_synteny_interactive] wrote {out_path} ({len(links_by_comparison)} comparison / "
+        homeolog_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} reference assembly gap(s)")
+    print(f"[plot_synteny_interactive] wrote {out_path} ({len(links_by_reference)} reference / "
           f"{len(links_by_query)} target chromosome(s), {total_links} link(s) embedded"
           + ((f"; {'; '.join(homeolog_bits)}") if homeolog_bits else '') + ")",
           file=sys.stderr)
