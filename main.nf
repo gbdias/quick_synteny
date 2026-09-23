@@ -47,12 +47,20 @@ def helpMessage() {
       --min_asm_gap <int>       Minimum run of N's (bp) counted as an assembly gap, shown
                                  by the plot's "Show gaps" switch (default: 100).
 
-    Synteny chaining:
-      --min_identity <float>   Per-hit identity (0-1) below which a candidate synteny
-                                anchor is dropped. Default: auto-tuned from the observed
-                                mean identity of the weaker genome's alignment, so a
-                                divergent species pair isn't forced through a threshold
+    Synteny chaining (the interactive page can re-chain with any values; these
+    set its starting point and the published links.tsv):
+      --min_identity <float>   Per-hit identity (miniprot Positive=, 0-1) below which a
+                                hit is ignored. Default: auto-tuned from the weaker
+                                genome's mean best-hit identity, clamped to [0.3, 0.9],
+                                so a divergent pair isn't forced through a threshold
                                 tuned for close relatives. Pass a value to override.
+      --max_gap <int>          Max number of genes skipped between consecutive genes of
+                                a synteny block, on either genome (default: 25). Counted
+                                in genes, not bp, so it means the same thing in a
+                                gene-dense and a gene-sparse genome.
+      --min_block <int>        Min genes (distinct loci on both genomes) per block in
+                                links.tsv. Default: auto -- 15 for close relatives (weaker
+                                mean identity >= 0.8), 5 otherwise.
 
     Resource tuning:
       --miniprot_m <int>       Miniprot k-mer sampling exponent: samples 1/2^INT
@@ -243,7 +251,9 @@ workflow {
     // safe to pass through a process `val` input the same way every call site
     // expects (falsy-but-interpolatable), so it's normalized to '' here once
     def min_identity = params.min_identity ?: ''
-    synteny = BUILD_SYNTENY(target_gff, comparison_gff, proteome_fasta, params.show_homeologs, min_identity,
+    def min_block = params.min_block ?: ''
+    synteny = BUILD_SYNTENY(target_gff, comparison_gff, target_chrom_sizes, comparison_chrom_sizes,
+                             proteome_fasta, params.show_homeologs, min_identity, params.max_gap, min_block,
                              proteome_display_name)
 
     PYGENOMEVIZ_PLOT(

@@ -66,7 +66,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     path stats              // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
     val target_subtitle     // input file name/accession, shown under the target label
     val comparison_subtitle // ditto, for the comparison label
-    path target_gaps        // FIND_ASSEMBLY_GAPS output -- always a real file (unconditional, unlike the homeolog links above)
+    path target_gaps        // RENAME_SEQUENCES gaps output -- always a real file (unconditional, unlike the homeolog links above)
     path comparison_gaps    // ditto
 
     output:
@@ -99,7 +99,7 @@ workflow PYGENOMEVIZ_PLOT {
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
     comparison_subtitle    // val -- comparison genome's input file name/accession, ditto
-    target_gaps            // tuple(name, path gaps.tsv) -- FIND_ASSEMBLY_GAPS output
+    target_gaps            // tuple(name, path gaps.tsv) -- RENAME_SEQUENCES gaps output
     comparison_gaps
 
     main:

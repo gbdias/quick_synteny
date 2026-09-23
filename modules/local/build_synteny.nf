@@ -1,68 +1,90 @@
-// Replaces the old extract_cds.nf + jcvi_ortholog.nf + jcvi_synteny_screen.nf
-// chain entirely: bin/build_synteny_blocks.py works directly off the two
-// miniprot GFFs (already produced by MINIPROT_ALIGN with loosened --outs/-N)
-// with no separate ortholog aligner needed -- see that script's docstring.
-// Runs in a plain Python container; no jcvi, no LAST, no gffread.
+// Synteny blocks straight from the two miniprot GFFs -- no separate
+// ortholog aligner: the proteome was already aligned to both genomes, and
+// every protein's hit positions in the two genomes ARE the synteny anchors.
+// bin/extract_hits.py turns each GFF into a per-genome hit table, and
+// bin/chain.js (via bin/chain_blocks.mjs) chains them -- the same chainer the
+// interactive page runs client-side. Contract: docs/specs/hit_table.md.
 
-// Feeds the interactive plot's min-block-anchors slider (see
-// plot_synteny_interactive.py's MBA_SLIDER_MIN). That slider works by
-// filtering already-computed blocks by their anchor count client-side,
-// which only reproduces what a real re-run at a higher threshold would have
-// found because find_blocks() in build_synteny_blocks.py discovers blocks
-// largest-first per chromosome pair and simply stops once the next chain is
-// too small -- so a run's output at any threshold is exactly the "score >=
-// threshold" subset of a run at any lower threshold. Forcing 5 (the
-// slider's minimum) here means every block the slider could ever want to
-// show already exists in this one file; nothing above 5 needs its own run,
-// and this is the only synteny-chaining run this pipeline does per
-// comparison -- there used to be a second, auto-tuned-threshold run feeding
-// a since-removed static plot, but the interactive HTML is the only
-// consumer now and it always wants the permissive floor.
-process BUILD_CROSS_SYNTENY_FOR_SLIDER {
-    tag "${target_name} vs ${comparison_name} (slider)"
+// CHAIN_* run node 22 pinned by digest (a multi-arch manifest list,
+// node:22-bookworm as of 2026-09-23): chain.js is plain, dependency-free JS,
+// so any node >= 18 would do, but the digest keeps runs reproducible. Not the
+// -slim variant: Nextflow needs `ps` (procps) in every task container to
+// collect task metrics, and -slim doesn't ship it.
+//
+// The *.slider_*links.tsv files are always chained with --min_block 5, the
+// interactive page's min-block-anchors spinner floor
+// (plot_synteny_interactive.py's MBA_SLIDER_MIN), and filtered client-side:
+// extraction in chain.js is independent of the minimum block size (spec
+// section 4.6), so the blocks at any higher threshold are exactly that
+// file's blocks with score >= it.
+
+process EXTRACT_HITS {
+    tag "${name}"
     label 'process_low'
     container 'quay.io/biocontainers/python:3.13.7'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
-    tuple val(target_name), path(target_gff)
-    tuple val(comparison_name), path(comparison_gff)
-    val min_identity  // '' auto-tunes (see build_synteny_blocks.py); otherwise an explicit 0-1 override
+    tuple val(name), path(gff), path(chrom_sizes)
 
     output:
-    tuple val(target_name), val(comparison_name), path("${target_name}.${comparison_name}.slider_links.tsv"), emit: links
+    tuple val(name), path("${name}.hits.tsv.gz"), emit: hits
 
     script:
-    def minIdentityFlag = min_identity ? "--min_identity ${min_identity}" : ''
     """
-    build_synteny_blocks.py \\
-        --query_gff ${target_gff} --subject_gff ${comparison_gff} \\
-        ${minIdentityFlag} \\
-        --min_block_anchors 5 \\
+    extract_hits.py --gff ${gff} --chrom_sizes ${chrom_sizes} --out ${name}.hits.tsv.gz
+    """
+}
+
+process CHAIN_CROSS {
+    tag "${target_name} vs ${comparison_name}"
+    label 'process_low'
+    container 'node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844'
+    publishDir "${params.outdir}/synteny", mode: 'copy'
+
+    input:
+    tuple val(target_name), path(target_hits)
+    tuple val(comparison_name), path(comparison_hits)
+    val min_identity  // '' auto-tunes (see chain.js autoParams); otherwise an explicit 0-1 floor
+    val max_gap
+    val min_block     // '' auto-tunes; the slider file always uses 5 (see top of file)
+
+    output:
+    tuple val(target_name), val(comparison_name), path("${target_name}.${comparison_name}.slider_links.tsv"), emit: slider
+    tuple val(target_name), val(comparison_name), path("${target_name}.${comparison_name}.links.tsv"), emit: links
+
+    script:
+    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def blockFlag = min_block ? "--min_block ${min_block}" : ''
+    """
+    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${comparison_hits} \\
+        ${idFlag} --max_gap ${max_gap} ${blockFlag} \\
+        --out ${target_name}.${comparison_name}.links.tsv
+    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${comparison_hits} \\
+        ${idFlag} --max_gap ${max_gap} --min_block 5 \\
         --out ${target_name}.${comparison_name}.slider_links.tsv
     """
 }
 
-process BUILD_HOMEOLOG_SYNTENY_FOR_SLIDER {
-    tag "${name} self (slider)"
+process CHAIN_SELF {
+    tag "${name} self"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    container 'node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
-    tuple val(name), path(gff)
-    val min_identity  // '' auto-tunes (see build_synteny_blocks.py); otherwise an explicit 0-1 override
+    tuple val(name), path(hits)
+    val min_identity
+    val max_gap
 
     output:
-    tuple val(name), path("${name}.slider_homeolog_links.tsv"), emit: links
+    tuple val(name), path("${name}.slider_homeolog_links.tsv"), emit: slider
 
     script:
-    def minIdentityFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
     """
-    build_synteny_blocks.py \\
-        --query_gff ${gff} --subject_gff ${gff} --self \\
-        ${minIdentityFlag} \\
-        --min_block_anchors 5 \\
+    chain_blocks.mjs --query_hits ${hits} --self \\
+        ${idFlag} --max_gap ${max_gap} --min_block 5 \\
         --out ${name}.slider_homeolog_links.tsv
     """
 }
@@ -70,9 +92,8 @@ process BUILD_HOMEOLOG_SYNTENY_FOR_SLIDER {
 // Small standalone summary for the interactive HTML's stats panel (see
 // pygenomeviz_plot.nf and plot_synteny_interactive.py's --stats) -- proteome
 // size plus each genome's aligned-protein count/mean identity, straight from
-// the same miniprot GFFs BUILD_CROSS_SYNTENY_FOR_SLIDER already consumes.
-// Kept as its own process rather than folded into that one since it needs
-// the proteome fasta too, which that process has no other use for.
+// the miniprot GFFs. Kept as its own process since it needs the proteome
+// fasta too, which nothing else in this module reads.
 process COMPUTE_ALIGNMENT_STATS {
     tag "${target_name} vs ${comparison_name}"
     label 'process_low'
@@ -102,34 +123,45 @@ process COMPUTE_ALIGNMENT_STATS {
 
 workflow BUILD_SYNTENY {
     take:
-    target_gff       // tuple(name, path gff) from MINIPROT_ALIGN
+    target_gff              // tuple(name, path gff), seqids already renamed (RENAME_GFF)
     comparison_gff
-    proteome         // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
-    find_homeologs   // '', 'target', 'comparison', or 'both' -- which genome(s) to self-compare
-    min_identity     // '' auto-tunes (see build_synteny_blocks.py); otherwise an explicit 0-1 override
-    proteome_origin  // species name (auto-discovered) or filename (user-supplied), for the stats panel
+    target_chrom_sizes      // tuple(name, path chrom.sizes) -- hits on sequences not listed are dropped
+    comparison_chrom_sizes
+    proteome                // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
+    find_homeologs          // '', 'target', 'comparison', or 'both' -- which genome(s) to self-compare
+    min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
+    max_gap                 // max gene-rank step between consecutive chain members
+    min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
+    proteome_origin         // species name (auto-discovered) or filename (user-supplied), for the stats panel
 
     main:
-    cross_slider = BUILD_CROSS_SYNTENY_FOR_SLIDER(target_gff, comparison_gff, min_identity).links
-    stats        = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, proteome_origin).stats
+    // one EXTRACT_HITS call over both genomes (a DSL2 process can't be
+    // invoked twice in one scope), split back by the role name each tuple
+    // carries
+    hits = EXTRACT_HITS(target_gff.join(target_chrom_sizes).mix(comparison_gff.join(comparison_chrom_sizes))).hits
+    hits_by_role = hits.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
 
-    // target_gff/comparison_gff tuples already carry their own role name as
-    // element 0 (from main.nf's .branch{} split), so one process call over
-    // whichever of them was asked for handles 'target', 'comparison', and
-    // 'both' alike -- and an empty input channel (find_homeologs == '')
-    // naturally yields an empty output channel, so there's nothing to
-    // special-case there either.
+    chained = CHAIN_CROSS(hits_by_role.target, hits_by_role.comparison, min_identity, max_gap, min_block)
+    stats   = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, proteome_origin).stats
+
+    // an empty input channel (find_homeologs == '') yields an empty output
+    // channel, so 'target', 'comparison', 'both' and '' need no special cases
     homeolog_inputs = Channel.empty()
     if (find_homeologs == 'target' || find_homeologs == 'both') {
-        homeolog_inputs = homeolog_inputs.mix(target_gff)
+        homeolog_inputs = homeolog_inputs.mix(hits_by_role.target)
     }
     if (find_homeologs == 'comparison' || find_homeologs == 'both') {
-        homeolog_inputs = homeolog_inputs.mix(comparison_gff)
+        homeolog_inputs = homeolog_inputs.mix(hits_by_role.comparison)
     }
-    homeolog_slider = BUILD_HOMEOLOG_SYNTENY_FOR_SLIDER(homeolog_inputs, min_identity).links
+    homeolog_slider = CHAIN_SELF(homeolog_inputs, min_identity, max_gap).slider
 
     emit:
-    cross_slider    = cross_slider
+    cross_slider    = chained.slider
+    cross_links     = chained.links
     homeolog_slider = homeolog_slider
     stats           = stats
+    hits            = hits
 }

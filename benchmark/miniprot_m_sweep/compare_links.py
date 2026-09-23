@@ -3,7 +3,7 @@
 -M k-mer sampling exponents (see modules/local/miniprot_align.nf).
 
 Reads the pipeline's own slider_links.tsv format directly (same file
-build_synteny_blocks.py writes and plot_synteny_interactive.py reads --
+bin/chain_blocks.mjs writes and plot_synteny_interactive.py reads --
 query_chrom, query_start, query_end, subject_chrom, subject_start,
 subject_end, score, orientation, mean_identity, anchor_density), so this
 runs unmodified against real pipeline output, not a bespoke re-derivation.

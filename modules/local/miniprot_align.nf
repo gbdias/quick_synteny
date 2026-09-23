@@ -3,8 +3,8 @@
 //
 // --outs/-N are loosened from miniprot's stock defaults (0.99 / 30) so
 // secondary alignments -- a protein's OTHER hits, at a lower score than its
-// best one -- are actually retained in the output. build_synteny_blocks.nf
-// uses exactly these secondary hits as its raw synteny/homeolog anchors,
+// best one -- are actually retained in the output. build_synteny.nf uses
+// exactly these secondary hits as its raw synteny/homeolog anchors,
 // so this alignment doubles as the "ortholog search" a separate aligner
 // would otherwise be needed for.
 //

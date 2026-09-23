@@ -2,16 +2,13 @@
 """Summarize the proteome-vs-genome miniprot alignments for the interactive
 HTML's stats panel (see plot_synteny_interactive.py --stats).
 
-Reuses the same miniprot GFF Target=/Positive=/Rank= attributes
-build_synteny_blocks.py parses (including its choice of Positive= over the
-stricter Identity=, see that file's parse_gff() for why), but only needs
-per-protein counts and each protein's best-hit score here, not a full
-anchors structure -- kept as a separate small script rather than importing
-that module, since these are read-only summary numbers with no chaining
-involved. Using the same metric here as the chainer uses matters: this is
-what the auto-tuned --min_identity/--min_block_anchors values are computed
-from, so the stats panel would otherwise show a different "identity" number
-than the one actually driving the guardrails.
+Reads the same miniprot GFF Target=/Positive=/Rank= attributes
+extract_hits.py puts in the hit table, but only needs per-protein counts and
+each protein's best-hit score. Uses the same metric as the chainer on
+purpose: Positive= (identical or positively-scoring residues) is what the
+auto-tuned --min_identity/--min_block values in bin/chain.js are computed
+from, so the stats panel shows the same "identity" number that drives
+those defaults.
 """
 import argparse
 import json
@@ -33,8 +30,10 @@ def count_proteome(path):
 def gff_stats(path):
     """(n_aligned_proteins, mean identity of each aligned protein's best hit).
 
-    "identity" here is miniprot's Positive= score, not its stricter Identity=
-    -- see build_synteny_blocks.py's parse_gff() docstring."""
+    "identity" here is miniprot's Positive= score, not its stricter Identity=:
+    conservative substitutions accumulate long before radical ones as two
+    genomes diverge, so Positive stays informative for real orthologs well
+    after Identity alone would make them look like noise."""
     rank1_identity = {}
     max_identity = {}
     with open(path) as f:

@@ -39,22 +39,27 @@ to build gene models on assemblies that may have no annotation of their own.
 That alignment is reused directly as the synteny signal: `miniprot` reports
 each protein's secondary hits (`-N 5 --outs=0.7`, i.e. up to 5 alternative
 loci scoring within 70% of its best hit) alongside its primary one, so a
-protein's positions in genome A and genome B **are** the raw anchors --
-`bin/build_synteny_blocks.py` groups them by chromosome pair and chains
-collinear runs (longest-monotonic-subsequence, gap-bounded on both axes so
-scattered-but-individually-real hits can't chain into one spurious genome-
-spanning block, the same bounded-gap idea DAGchainer/MCScanX use). Guardrails:
-`--min_identity` drops weak hits -- by default this is auto-tuned to the
-observed mean identity of the weaker genome's alignment (`max(0.3, min(0.9,
+protein's positions in genome A and genome B **are** the raw anchors.
+
+`bin/extract_hits.py` turns each genome's alignments into a hit table and
+groups overlapping hits into loci (hits sharing coding exons, so isoforms
+count once while genes nested in another gene's intron stay separate).
+`bin/chain.js` then chains anchors in **gene order** rather than base pairs,
+MCScanX-style: consecutive genes of a block may skip at most `--max_gap`
+genes (default 25) on either genome, and must be strictly increasing on
+both genomes (`+` blocks) or increasing on one and decreasing on the other
+(`-`, inverted blocks). Counting in genes makes the same setting work for a
+gene-dense 120 Mb genome and a gene-sparse 30 Gb one. A block's score is
+its number of genes, i.e. distinct loci on both genomes.
+
+Guardrails: `--min_identity` ignores weak hits. By default it's auto-tuned
+to the weaker genome's mean best-hit identity, `max(0.3, min(0.9,
 weaker_mean))`, using miniprot's Positive= "similar-or-identical residue"
-score, not its stricter Identity=), rather than a fixed cutoff, so a
-divergent species pair isn't forced through a threshold tuned for close
-relatives; pass a value to pin it yourself. `--min_block_anchors` drops
-short/sparse spurious chains -- also auto-tuned by default, off that same
-weaker-genome mean identity: 15 for a close-relative pair (mean identity
->= 0.8), 5 for a divergent one, since divergent pairs carry real signal in
-many short locally-collinear chains rather than long ones; pass a value to
-pin it yourself.
+score rather than its stricter Identity=, so a divergent pair isn't forced
+through a threshold tuned for close relatives. `--min_block` drops short
+chains; it's auto-tuned off the same number (15 for a close-relative pair,
+5 for a divergent one). Pass either to pin it yourself. The exact
+chaining rules are specified in `docs/specs/hit_table.md`.
 
 This intentionally replaces a separate ortholog-finding aligner (an earlier
 version of this pipeline used jcvi + LAST) with something cruder but much
