@@ -58,8 +58,12 @@ weaker_mean))`, using miniprot's Positive= "similar-or-identical residue"
 score rather than its stricter Identity=, so a divergent pair isn't forced
 through a threshold tuned for close relatives. `--min_block` drops short
 chains; it's auto-tuned off the same number (15 for a close-relative pair,
-5 for a divergent one). Pass either to pin it yourself. The exact
-chaining rules are specified in `docs/specs/hit_table.md`.
+5 for a divergent one). Pass either to pin it yourself. These only set the
+starting point: the interactive page embeds both genomes' hit tables and
+re-chains in the browser (a Web Worker running the same `bin/chain.js`), so
+min identity, max gap, hit rank and min block size can all be changed live,
+and the blocks currently on screen downloaded as a TSV. The exact chaining
+rules are specified in `docs/specs/hit_table.md`.
 
 This intentionally replaces a separate ortholog-finding aligner (an earlier
 version of this pipeline used jcvi + LAST) with something cruder but much
