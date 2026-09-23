@@ -316,9 +316,9 @@ workflow {
                              proteome_display_name)
 
     PYGENOMEVIZ_PLOT(
-        synteny.cross_slider,
+        synteny.hits,
         target_chrom_sizes, comparison_chrom_sizes,
-        synteny.homeolog_slider,
+        min_identity, params.max_gap, min_block,
         synteny.stats,
         target_display_name, comparison_display_name,
         target_gaps, comparison_gaps,
