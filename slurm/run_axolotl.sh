@@ -82,6 +82,18 @@ MINIPROT_EXCLUSIVE="${MINIPROT_EXCLUSIVE-1}"                       # whole-node 
 # MINIPROT_MEM_GB above isn't available on your cluster, and treat the
 # resulting synteny as unverified against the M=default result.
 MINIPROT_M="${MINIPROT_M:-}"
+# --miniprot_chunk_gb: align against ~this many Gb of genome per task, in
+# parallel, instead of one whole-genome index (see main.nf --help and
+# modules/local/miniprot_align.nf). Each chunk task requests ~11 GB per Gb of
+# chunk + 4 GB (3 -> ~37 GB), so it doesn't need MINIPROT_NODE: when this is
+# set, the MINIPROT_ALIGN pin/memory above goes unused and the chunk tasks
+# land anywhere. Leave empty for the single whole-genome job.
+MINIPROT_CHUNK_GB="${MINIPROT_CHUNK_GB:-}"
+# --exclude_target: never pick a same-species comparison genome. The first
+# run's discovery picked the target's own assembly (GCF_040938575.1) as the
+# comparison, i.e. axolotl vs itself; set EXCLUDE_TARGET=1 for a
+# cross-species comparison instead.
+EXCLUDE_TARGET="${EXCLUDE_TARGET:-}"
 
 # module loads -- EDIT to your cluster's actual module names, or drop this
 # entirely if nextflow/apptainer are already on PATH
@@ -161,12 +173,15 @@ process {
         // above -- everything else is left free to land anywhere
         clusterOptions = '${cluster_opts_str}'
     }
-    // RENAME_SEQUENCES/FIND_ASSEMBLY_GAPS/CHROM_SIZES all stream the FASTA
-    // line-by-line rather than loading a whole sequence into memory (see
-    // bin/find_assembly_gaps.py's docstring), so RAM stays fine at
-    // process_low's default -- but a pure-Python byte-by-byte pass over a
-    // multi-Gb chromosome can still run well past its 30m default time cap.
-    // Time only; memory is untouched.
+    // chunked alignment (MINIPROT_CHUNK_GB): no node pin, the process sizes
+    // its own memory per chunk; only the time cap is raised here
+    withName: 'MINIPROT_ALIGN_CHUNK' {
+        time = '${MINIPROT_TIME}'
+    }
+    // RENAME_SEQUENCES streams the FASTA once (lengths + gaps in the same
+    // pass), so RAM stays fine at process_low's default -- but one pass over
+    // a ~30 GB FASTA can still run past its 30m default time cap. Time only;
+    // memory is untouched.
     withLabel: 'process_low' {
         time = '6.h'
     }
@@ -179,6 +194,8 @@ echo "outdir:             $OUTDIR"
 echo "miniprot node:      $MINIPROT_NODE (MINIPROT_ALIGN: ${MINIPROT_CPUS} cpus, ${MINIPROT_MEM_GB}GB, ${MINIPROT_TIME}, exclusive=${MINIPROT_EXCLUSIVE:-no})"
 echo "everything else:    unconstrained (no partitions on this cluster)"
 echo "miniprot_m:         ${MINIPROT_M:-(pipeline default)}"
+echo "miniprot_chunk_gb:  ${MINIPROT_CHUNK_GB:-(off: one whole-genome job)}"
+echo "exclude_target:     ${EXCLUDE_TARGET:-(off)}"
 echo "singularity cache:  $SINGULARITY_CACHE"
 echo
 
@@ -190,6 +207,8 @@ nextflow run main.nf \
     --outdir "$OUTDIR" \
     --singularity_cache_dir "$SINGULARITY_CACHE" \
     ${MINIPROT_M:+--miniprot_m "$MINIPROT_M"} \
+    ${MINIPROT_CHUNK_GB:+--miniprot_chunk_gb "$MINIPROT_CHUNK_GB"} \
+    ${EXCLUDE_TARGET:+--exclude_target} \
     -profile slurm \
     -c "$OVERRIDE_CONFIG" \
     -resume
