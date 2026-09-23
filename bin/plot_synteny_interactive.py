@@ -1987,7 +1987,7 @@ SYN.runChainers = function(chainers, params, seq) {
 // type="text/plain" id="synchain-src"> copy build_page() emits, plus
 // SYN.WORKER_SHIM_SRC) so a re-chain never blocks the UI thread, or, if
 // constructing the Worker throws (e.g. a `data:`/`file:` page in a browser
-// that restricts Worker creation there -- see the plan's own note), a
+// that restricts Worker creation there), a
 // synchronous main-thread fallback with exactly one console.warn, never a
 // hard failure.
 SYN.startChainer = async function(payload) {
@@ -2028,7 +2028,7 @@ SYN.showComputingStatus = function() {
 // reply older than the latest one actually applied, which can otherwise
 // happen if the main-thread fallback and a slow Worker reply somehow race
 // (they can't in practice -- one browser uses exactly one path -- but the
-// check is free and matches the plan's own wording).
+// check is free).
 SYN.requestChain = function(params) {
     SYN.chain.seq++;
     const seq = SYN.chain.seq;
@@ -3201,9 +3201,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # every widget/source SYN.init stashes into SYN.ui (see that function's
     # own comment) -- new code (SYN.requestChain, SYN.applyChainResult,
     # SYN.exportBlocksTsv) reads/writes through that registry instead of
-    # each getting its own CustomJS args=dict(...), unlike the pre-existing
-    # callbacks above, which are left as they were (see the plan's own
-    # instruction not to refactor beyond what's needed).
+    # each getting its own CustomJS args=dict(...), unlike the older
+    # callbacks above.
     doc.js_on_event(DocumentReady, CustomJS(args=dict(
         q_src=q_src, s_src=s_src, r_src=r_src, label_src=label_src, gap_src=gap_src,
         dp_q_src=dp_q_src, dp_s_src=dp_s_src, dp_grid_src=dp_grid_src,
@@ -3311,13 +3310,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # implementation of the chaining algorithm, run in a Web Worker (or, if
     # that fails, synchronously on the main thread -- see SYN.startChainer).
     # A second, inert copy goes in its own <script type="text/plain"> tag
-    # (BEFORE this one, so this stays the LAST <script> in the page --
-    # tests/js/page_geometry.mjs and tests/js/page_chain_parity.mjs both
-    # assume that) purely so SYN.startChainer can read the raw source text
+    # (before this one) purely so SYN.startChainer can read the raw source text
     # back out at runtime to build the Worker's own Blob -- a Worker can't
     # share the main thread's already-parsed <script>, and this avoids a
     # runtime fetch()/XHR of bin/chain.js, which wouldn't work at all from a
-    # file:// page (see the plan's own note on this).
+    # file:// page.
     synchain_src_tag = f'<script type="text/plain" id="synchain-src">{chain_js_src}</script>\n'
     injected = (synchain_src_tag + "<script>\n" + chain_js_src + "\n" + SHARED_JS
                 + "\nSYN.data = " + json.dumps(syn_data) + ";\nSYN.hitsPayload = "

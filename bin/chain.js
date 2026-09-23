@@ -69,14 +69,13 @@
 //      T' < T filtered to length >= T -- a min-block control is a pure filter.
 //   7. Strict monotonicity on both genomes makes every chain member a distinct
 //      locus on both sides, so block size = number of independent loci.
-//   Consequences (both covered by tests/chain/):
+//   Consequences:
 //   (a) Gene deserts don't break chains: distance counts passing loci, so two
 //       genes with nothing between them are adjacent however many bp apart.
 //       That is what makes chaining genome-size invariant (a bp limit found
 //       0.3 % of axolotl-vs-itself; this finds 98.5 %).
 //   (b) Noise can extend a block's ends, never its interior: monotonicity
-//       only leaves room beyond a block's last true gene. On the synthetic
-//       benchmark all false members sit within 2 positions of an end.
+//       only leaves room beyond a block's last true gene.
 //
 // OUTPUTS: Block = {qChrom, sChrom (chrom indices), qStart, qEnd, sStart,
 //   sEnd (min start / max end over member hits), orientation, nAnchors

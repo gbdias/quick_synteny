@@ -25,8 +25,8 @@
 // The interactive page doesn't read any links file -- it embeds the hit
 // tables and re-chains client-side (see pygenomeviz_plot.nf). links.tsv is
 // the published result at the run's parameters; the *.slider_*links.tsv
-// files are chained with --min_block 5 for downstream comparisons
-// (benchmark/miniprot_m_sweep/compare_links.py): extraction in chain.js is
+// files are chained with --min_block 5 for downstream comparisons:
+// extraction in chain.js is
 // independent of the minimum block size (bin/chain.js's CHAINING RULES header, rule 6), so the blocks
 // at any higher threshold are exactly that file's blocks with score >= it.
 

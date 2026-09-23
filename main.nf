@@ -68,8 +68,7 @@ def helpMessage() {
                                 values cut peak alignment RAM at some cost to
                                 sensitivity -- useful on RAM-constrained hardware
                                 (a laptop, a small VM). Default: unset (miniprot's
-                                own default applies). See benchmark/miniprot_m_sweep/
-                                for the measured RAM-vs-concordance tradeoff.
+                                own default applies).
       --miniprot_chunk_gb <float>  Align the proteome against genome chunks of about
                                 this many Gb each, in parallel, instead of one
                                 whole-genome index -- caps miniprot's peak RAM

@@ -23,9 +23,7 @@
 //
 // -M (miniprot_m, optional) trades sensitivity for RAM: it samples 1/2^M of
 // genomic k-mers when building the index. Unset by default (miniprot's own
-// default applies); see main.nf --miniprot_m and benchmark/miniprot_m_sweep/
-// for the measured RAM-vs-concordance tradeoff this buys on RAM-constrained
-// hardware.
+// default applies); see main.nf --miniprot_m.
 
 process MINIPROT_ALIGN {
     tag "${name}"
@@ -62,8 +60,7 @@ process MINIPROT_ALIGN {
 // script's docstring for why this is exact, and its two gotchas (an
 // explicit -G computed from the WHOLE genome's length, since -I would
 // otherwise derive max intron size from a chunk's own, smaller length;
-// and per-chunk k-mer statistics that can shift sensitivity slightly,
-// which is what the plan's acceptance checks measure).
+// and per-chunk k-mer statistics that can shift sensitivity slightly).
 // ---------------------------------------------------------------------------
 
 process SPLIT_GENOME {
@@ -91,9 +88,8 @@ process SPLIT_GENOME {
 // a label (whose memory Nextflow config would otherwise win over anything
 // set here). cpus is lower than MINIPROT_ALIGN's process_high default
 // because chunking already spreads the alignment across N parallel tasks
-// instead of one -- the original single-job benchmark ran 32 threads at
-// only 392% CPU (APPLICATION_NOTE_PLAN.md Sec 2), so a handful of threads
-// per chunk is already proportionate.
+// instead of one -- a single whole-genome job given 32 threads used only
+// ~4 cores' worth, so a handful of threads per chunk is already proportionate.
 process MINIPROT_ALIGN_CHUNK {
     tag "${name}:${chunk_fasta.baseName}"
     container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'

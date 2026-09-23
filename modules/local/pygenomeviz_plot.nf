@@ -2,8 +2,7 @@
 // BUILD_SYNTENY's EXTRACT_HITS) directly -- see bin/chain.js's EMBEDDED
 // PAYLOAD header -- and chains them client-side (bin/chain.js, inlined into the page), so
 // this module ships raw hits, not precomputed links/blocks. build_synteny.nf
-// still emits links.tsv/slider_links.tsv for other consumers (e.g.
-// benchmark/miniprot_m_sweep/compare_links.py), just not this one.
+// still emits links.tsv/slider_links.tsv for other consumers, just not this one.
 //
 // This pipeline's one plot output is the interactive HTML below: a Circos-
 // style ring, a linear zoom panel, and a whole-genome dotplot, all built
