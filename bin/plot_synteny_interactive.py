@@ -841,6 +841,26 @@ SYN.state = {
     // default (see build_page()) -- kept in sync deliberately, same as
     // every other default-state pair in this file.
     showGaps: false,
+    // bp floor read by SYN.filterBySize -- chromosomes shorter than this are
+    // dropped from every panel (see min_seq_size_spinner in build_page()).
+    // 0 by default: --min_seq_size already dropped anything smaller than the
+    // pipeline's own threshold before this script ever saw the data (see
+    // prepare_synteny_inputs.nf's CHROM_SIZES process), so 0 here means "show
+    // everything actually embedded in this page", not "no filtering ever
+    // happened upstream".
+    minSeqSize: 0,
+    // the dotplot's current total span and ruler-strip thickness -- unlike
+    // dpQueryOffsets/dpSubjectOffsets these used to be fixed at the values
+    // Python computed for the full, unfiltered chromosome set (a pure
+    // reorder never changes them), but the min-length filter above CAN
+    // shrink them (fewer/smaller chromosomes -> smaller total), so
+    // SYN.buildDotplotLayout now recomputes them on every call and
+    // SYN.applyDotplotOrder refreshes these four alongside the offsets.
+    // Seeded from SYN.data's own Python-rendered initial values (see
+    // build_page()'s seed_js) so the dotplot's DoubleTap-to-reset handler and
+    // SYN.buildDotplotGapLines have a valid value before either is ever
+    // touched.
+    dpTotalX: null, dpTotalY: null, dpRx: null, dpRy: null,
 };
 
 // how dim the OTHER ribbons go while one is highlighted -- low enough to
@@ -1133,6 +1153,11 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
     const ribbons = [];
     const allCross = [].concat(...Object.values(SYN.data.linksByQuery));
     for (const l of allCross) {
+        // either endpoint's chromosome may have been dropped by the min-
+        // length filter (see SYN.filterBySize) -- bpToAngleJS would throw
+        // destructuring offsets[chrom] === undefined, so skip rather than
+        // draw a ribbon to a chromosome no longer on the ring at all
+        if (!(l.q_chrom in queryOffsets) || !(l.s_chrom in subjectOffsets)) { continue; }
         const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.querySizes, queryOffsets);
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
@@ -1145,6 +1170,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         });
     }
     for (const l of SYN.data.targetHomeologLinks) {
+        if (!(l.q_chrom in queryOffsets) || !(l.s_chrom in queryOffsets)) { continue; }
         const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.querySizes, queryOffsets);
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.querySizes, queryOffsets);
@@ -1158,6 +1184,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         });
     }
     for (const l of SYN.data.referenceHomeologLinks) {
+        if (!(l.q_chrom in subjectOffsets) || !(l.s_chrom in subjectOffsets)) { continue; }
         const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.subjectSizes, subjectOffsets);
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.subjectSizes, subjectOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
@@ -1184,6 +1211,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
     // self-links).
     const gaps = [];
     for (const chrom in SYN.data.targetGapsByChrom) {
+        if (!(chrom in queryOffsets)) { continue; }
         for (const g of SYN.data.targetGapsByChrom[chrom]) {
             const a0 = SYN.bpToAngleJS(chrom, g.start, SYN.data.querySizes, queryOffsets);
             const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.querySizes, queryOffsets);
@@ -1193,6 +1221,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         }
     }
     for (const chrom in SYN.data.referenceGapsByChrom) {
+        if (!(chrom in subjectOffsets)) { continue; }
         for (const g of SYN.data.referenceGapsByChrom[chrom]) {
             const a0 = SYN.bpToAngleJS(chrom, g.start, SYN.data.subjectSizes, subjectOffsets);
             const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.subjectSizes, subjectOffsets);
@@ -1260,6 +1289,9 @@ SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minSc
     for (const qName in SYN.data.linksByQuery) {
         for (const l of SYN.data.linksByQuery[qName]) {
             if (l.score < minScore) { continue; }
+            // either chromosome may be below the min-length filter (see
+            // SYN.filterBySize) and absent from this order's offsets
+            if (!(l.q_chrom in queryOffsets) || !(l.s_chrom in subjectOffsets)) { continue; }
             const x0 = queryOffsets[l.q_chrom] + l.q_start;
             const x1 = queryOffsets[l.q_chrom] + l.q_end;
             const yLo = subjectOffsets[l.s_chrom] + l.s_start;
@@ -1307,6 +1339,35 @@ SYN.dpNaturalOrder = function() {
     return {
         queryOrder: (bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural).slice(),
         subjectOrder: (bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural).slice(),
+    };
+};
+
+// Drops any chromosome shorter than SYN.state.minSeqSize (see
+// min_seq_size_spinner in build_page()) from an order list -- composes with
+// whichever ordering is currently active rather than being its own separate
+// order, since min_seq_size_spinner's own callback (and every other control
+// that can change the active order) always re-derives its order through
+// SYN.ringOrderFor/SYN.dpOrderFor below, never the raw name lists directly.
+SYN.filterBySize = function(order, sizes) {
+    return order.filter((name) => sizes[name] >= SYN.state.minSeqSize);
+};
+
+// The ring's currently-active order (size vs. natural -- it has no
+// similarity concept, see SYN.buildRingLayout's own comment), length-filtered.
+SYN.ringOrderFor = function(bySize) {
+    return {
+        queryOrder: SYN.filterBySize(bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural, SYN.data.querySizes),
+        subjectOrder: SYN.filterBySize(bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural, SYN.data.subjectSizes),
+    };
+};
+
+// The dotplot's currently-active order (similarity vs. SYN.dpNaturalOrder's
+// size/natural pair, mirroring order_toggle's own ternary), length-filtered.
+SYN.dpOrderFor = function(useSimilarity) {
+    const order = useSimilarity ? SYN.computeSimilarityOrder() : SYN.dpNaturalOrder();
+    return {
+        queryOrder: SYN.filterBySize(order.queryOrder, SYN.data.querySizes),
+        subjectOrder: SYN.filterBySize(order.subjectOrder, SYN.data.subjectSizes),
     };
 };
 
@@ -1358,12 +1419,21 @@ SYN.computeSimilarityOrder = function() {
 // (queryOrder, subjectOrder) pair -- a JS port of build_dotplot_sources(),
 // kept in sync deliberately (see module docstring on why this geometry
 // exists twice) since the order can now change after page load, which
-// Python's one-time render can't react to. rx/ry/totalX/totalY never change
-// under a reorder (same chromosomes, same sizes, just shuffled), so they
-// come from the initial Python render rather than being recomputed here.
+// Python's one-time render can't react to. rx/ry/totalX/totalY used to come
+// straight from the initial Python render, back when a reorder was the only
+// way this ever got called again (same chromosomes, same sizes, just
+// shuffled -- the totals never actually changed). The min-length filter (see
+// SYN.filterBySize) can now also DROP chromosomes between calls, which does
+// change the total span, so these are recomputed from whichever order/sizes
+// were actually passed in -- a no-op arithmetically for a pure reorder,
+// which is why this was safe to change unconditionally.
 SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
-    const rx = SYN.data.dpRx, ry = SYN.data.dpRy;
-    const totalX = SYN.data.dpTotalX, totalY = SYN.data.dpTotalY;
+    // the `|| 1` floor mirrors SYN.computeCircularOffsets' own totalBp
+    // fallback -- keeps the figure/ruler math sane (not NaN/zero-width) in
+    // the degenerate case where the filter has emptied one whole side
+    const totalX = queryOrder.reduce((sum, name) => sum + SYN.data.querySizes[name], 0) || 1;
+    const totalY = subjectOrder.reduce((sum, name) => sum + SYN.data.subjectSizes[name], 0) || 1;
+    const rx = totalX * SYN.data.dpRulerFrac, ry = totalY * SYN.data.dpRulerFrac;
     const queryOffsets = SYN.computeOffsets(queryOrder, SYN.data.querySizes);
     const subjectOffsets = SYN.computeOffsets(subjectOrder, SYN.data.subjectSizes);
 
@@ -1386,16 +1456,22 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
         const x0 = queryOffsets[name];
         gridXs.push([x0, x0]); gridYs.push([-ry, totalY]);
     }
-    const lastQ = queryOrder[queryOrder.length - 1];
-    gridXs.push([queryOffsets[lastQ] + SYN.data.querySizes[lastQ], queryOffsets[lastQ] + SYN.data.querySizes[lastQ]]);
-    gridYs.push([-ry, totalY]);
+    // the min-length filter (see SYN.filterBySize) can empty one whole side
+    // -- nothing to draw a trailing boundary line for in that case
+    if (queryOrder.length) {
+        const lastQ = queryOrder[queryOrder.length - 1];
+        gridXs.push([queryOffsets[lastQ] + SYN.data.querySizes[lastQ], queryOffsets[lastQ] + SYN.data.querySizes[lastQ]]);
+        gridYs.push([-ry, totalY]);
+    }
     for (const name of subjectOrder) {
         const y0 = subjectOffsets[name];
         gridXs.push([-rx, totalX]); gridYs.push([y0, y0]);
     }
-    const lastS = subjectOrder[subjectOrder.length - 1];
-    gridXs.push([-rx, totalX]);
-    gridYs.push([subjectOffsets[lastS] + SYN.data.subjectSizes[lastS], subjectOffsets[lastS] + SYN.data.subjectSizes[lastS]]);
+    if (subjectOrder.length) {
+        const lastS = subjectOrder[subjectOrder.length - 1];
+        gridXs.push([-rx, totalX]);
+        gridYs.push([subjectOffsets[lastS] + SYN.data.subjectSizes[lastS], subjectOffsets[lastS] + SYN.data.subjectSizes[lastS]]);
+    }
 
     const qLabelX = [], qLabelY = [], qLabelText = [];
     for (const name of queryOrder) {
@@ -1420,7 +1496,7 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
     }
 
     return {
-        queryOffsets, subjectOffsets,
+        queryOffsets, subjectOffsets, totalX, totalY, rx, ry,
         queryRuler: {xs: qXs, ys: qYs, fill_color: queryOrder.map(() => SYN.data.targetGrey),
                      name: qName, size_label: qSize, group: qGroup},
         subjectRuler: {xs: sXs, ys: sYs, fill_color: sIdx.map((idx) => SYN.paletteColor(idx, k)),
@@ -1436,16 +1512,27 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
 // buildDotplotLayout) and updates SYN.state's offsets so every later
 // recolor/refilter (color spinner, palette dropdown, min-block-anchors) draws
 // against the new order without needing to know a reorder happened.
+// sources.fig, if given, is the dotplot figure itself -- its x_range/y_range
+// are refreshed to the new totalX/totalY so a min-length filter (see
+// SYN.filterBySize) that shrinks the visible chromosome set doesn't leave a
+// stale range showing dead space beyond wherever the plot now actually ends;
+// a no-op for a pure reorder, since the total is unchanged then.
 SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources) {
     const layout = SYN.buildDotplotLayout(queryOrder, subjectOrder, k);
     SYN.state.dpQueryOffsets = layout.queryOffsets;
     SYN.state.dpSubjectOffsets = layout.subjectOffsets;
+    SYN.state.dpTotalX = layout.totalX; SYN.state.dpTotalY = layout.totalY;
+    SYN.state.dpRx = layout.rx; SYN.state.dpRy = layout.ry;
     sources.query.data = layout.queryRuler; sources.query.change.emit();
     sources.subject.data = layout.subjectRuler; sources.subject.change.emit();
     sources.grid.data = layout.grid; sources.grid.change.emit();
     sources.queryLabel.data = layout.queryLabels; sources.queryLabel.change.emit();
     sources.subjectLabel.data = layout.subjectLabels; sources.subjectLabel.change.emit();
     sources.cell.data = layout.cells; sources.cell.change.emit();
+    if (sources.fig) {
+        sources.fig.x_range.start = -layout.rx * 3; sources.fig.x_range.end = layout.totalX * 1.02;
+        sources.fig.y_range.start = -layout.ry * 3; sources.fig.y_range.end = layout.totalY * 1.02;
+    }
     SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, sources.segment);
     if (sources.gap) { SYN.applyDotplotGapVisibility(sources.gap); }
 };
@@ -1455,15 +1542,18 @@ SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources)
 // bounds convention as build_dotplot_sources' own boundary gridlines. No
 // Python-side equivalent (see dp_gap_src's own comment in build_page() for
 // why) -- entirely client-side, reading SYN.state.dpQueryOffsets/
-// dpSubjectOffsets directly (always current -- SYN.applyDotplotOrder sets
-// them before this ever runs) rather than taking offsets as parameters, so
-// show_gaps_toggle's own callback can call this without needing to know
-// which order is currently active.
+// dpSubjectOffsets/dpRx/dpRy/dpTotalX/dpTotalY directly (always current --
+// SYN.applyDotplotOrder sets all of them before this ever runs) rather than
+// taking offsets as parameters, so show_gaps_toggle's own callback can call
+// this without needing to know which order (or min-length filter, see
+// SYN.filterBySize) is currently active.
 SYN.buildDotplotGapLines = function() {
-    const rx = SYN.data.dpRx, ry = SYN.data.dpRy;
-    const totalX = SYN.data.dpTotalX, totalY = SYN.data.dpTotalY;
+    const rx = SYN.state.dpRx, ry = SYN.state.dpRy;
+    const totalX = SYN.state.dpTotalX, totalY = SYN.state.dpTotalY;
     const xs = [], ys = [], label = [];
     for (const chrom in SYN.data.targetGapsByChrom) {
+        // dropped by the min-length filter -- no offset to place this at
+        if (!(chrom in SYN.state.dpQueryOffsets)) { continue; }
         for (const g of SYN.data.targetGapsByChrom[chrom]) {
             const mid = SYN.state.dpQueryOffsets[chrom] + (g.start + g.end) / 2;
             xs.push([mid, mid]); ys.push([-ry, totalY]);
@@ -1471,6 +1561,7 @@ SYN.buildDotplotGapLines = function() {
         }
     }
     for (const chrom in SYN.data.referenceGapsByChrom) {
+        if (!(chrom in SYN.state.dpSubjectOffsets)) { continue; }
         for (const g of SYN.data.referenceGapsByChrom[chrom]) {
             const mid = SYN.state.dpSubjectOffsets[chrom] + (g.start + g.end) / 2;
             xs.push([-rx, totalX]); ys.push([mid, mid]);
@@ -2227,13 +2318,15 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_tap = TapTool(renderers=[dp_query_renderer, dp_subject_renderer, dp_cell_renderer], visible=False)
     dotplot_fig.add_tools(dotplot_tap)
     dotplot_fig.toolbar.active_tap = dotplot_tap
-    # double-click to reset -- see overview's identical handler above; the
-    # dotplot's range is likewise fixed at creation and never reprogrammed
-    # (reordering chromosomes only changes their offsets within that same
-    # fixed total span, see SYN.buildDotplotLayout)
-    dotplot_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=dotplot_fig), code=f"""
-        fig.x_range.start = {-dp_rx * 3}; fig.x_range.end = {dp_total_x * 1.02};
-        fig.y_range.start = {-dp_ry * 3}; fig.y_range.end = {dp_total_y * 1.02};
+    # double-click to reset -- see overview's identical handler above.
+    # Reads SYN.state's CURRENT rx/ry/totalX/totalY rather than the literal
+    # values Python computed at render time: a reorder alone never changes
+    # them, but the min-length filter (see SYN.filterBySize) can shrink them,
+    # and resetting to the ORIGINAL (pre-filter) span would leave dead margin
+    # beyond wherever the plot now actually ends.
+    dotplot_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=dotplot_fig), code="""
+        fig.x_range.start = -SYN.state.dpRx * 3; fig.x_range.end = SYN.state.dpTotalX * 1.02;
+        fig.y_range.start = -SYN.state.dpRy * 3; fig.y_range.end = SYN.state.dpTotalY * 1.02;
     """))
 
     detail_bar_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[]))
@@ -2297,7 +2390,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # see SYN.applyLabels.
     target_label_input = TextInput(title="Target label", value=query_subtitle or query_name,
                                     width=TOP_CONTROL_WIDTH)
-    reference_label_input = TextInput(title="Reference label", value=subject_subtitle or subject_name,
+    # "reference", not subject_name -- subject_name is "comparison", the
+    # internal pipeline role tag (channel/filename convention, see main.nf),
+    # not the user-facing term this box's own title already uses
+    reference_label_input = TextInput(title="Reference label", value=subject_subtitle or "reference",
                                        width=TOP_CONTROL_WIDTH)
 
     palette_select = Select(title="Color palette", value=DEFAULT_PALETTE_NAME,
@@ -2313,6 +2409,21 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     max_observed_score = max((r['score'] for r in ribbon_records), default=MBA_SLIDER_MIN)
     mba_spinner = Spinner(title="Min block anchors", low=MBA_SLIDER_MIN, high=max_observed_score,
                            step=1, value=MBA_SLIDER_MIN, width=TOP_CONTROL_WIDTH)
+    # Post-hoc chromosome-length filter for the ring + dotplot, independent
+    # of --min_seq_size: that pipeline flag already dropped anything shorter
+    # than its own threshold before this script ever saw the data (see
+    # prepare_synteny_inputs.nf's CHROM_SIZES process), so this control can
+    # only ever filter what actually made it into the page, never recover
+    # what didn't. Starts at 0 (Mb, like the ruler size labels elsewhere on
+    # this page) -- 0 means "show every chromosome embedded in this page",
+    # not "no filtering ever happened upstream". high is this dataset's own
+    # largest chromosome, same "don't cap at an arbitrary round number"
+    # reasoning as max_observed_score above -- `or 1` guards the degenerate
+    # empty-dataset case, where Spinner would otherwise get low == high == 0.
+    max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
+    min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
+                                    high=round(max_seq_size / 1e6, 2) or 1,
+                                    step=0.1, value=0, width=TOP_CONTROL_WIDTH)
     reset_btn = Button(label="✕ clear zoom", button_type="default", width=140,
                         height=TOOLBAR_CONTROL_HEIGHT)
     # label is just "save" (not "save ring"/"save zoom"/"save dotplot") and
@@ -2442,16 +2553,19 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # the dotplot too, via SYN.applyDotplotSegmentsForCurrentLayout) pick up
     # the new order automatically without needing to know a reorder happened.
     order_toggle_callback = CustomJS(args=dict(
-        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
         dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
         dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
     ), code="""
-        const order = cb_obj.active ? SYN.computeSimilarityOrder() : SYN.dpNaturalOrder();
+        // SYN.dpOrderFor also applies the current min-length filter (see
+        // min_seq_size_spinner below) on top of similarity/natural order, so
+        // toggling this never silently drops that filter
+        const order = SYN.dpOrderFor(cb_obj.active);
         SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, color_spinner.value, mba_spinner.value, {
             query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
             queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-            cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source,
+            cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
         });
     """)
     order_toggle.js_on_click(order_toggle_callback)
@@ -2463,7 +2577,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # own comment above for why this is layered rather than independent.
     size_order_toggle_callback = CustomJS(args=dict(
         query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
-        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
         self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         order_toggle=order_toggle, gap_source=gap_src,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
@@ -2471,33 +2585,81 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
     ), code="""
         SYN.state.orderBySize = cb_obj.active;
-        const bySize = cb_obj.active;
-        // The ring builds its own subject order directly here (see
-        // Dataset.__init__: circular_offsets(self.subject_chroms, ...))
-        // rather than reusing SYN.dpNaturalOrder()'s subjectOrder below --
-        // the two happen to be identical lists today (neither is reversed
-        // any more), but they're two independently-defined conventions (the
-        // ring's own angular layout vs. the dotplot's bottom-up linear one),
-        // kept as separate computations so a future change to either one
-        // doesn't silently break the other.
-        const ringQueryOrder = (bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural).slice();
-        const ringSubjectOrder = (bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural).slice();
-        SYN.applyRingLayout(ringQueryOrder, ringSubjectOrder, {
+        // SYN.ringOrderFor/SYN.dpOrderFor apply the current min-length
+        // filter (see min_seq_size_spinner below) on top of whichever
+        // size/natural order this switch selects, so toggling it never
+        // silently drops that filter.
+        const ringOrder = SYN.ringOrderFor(cb_obj.active);
+        SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
             minScore: mba_spinner.value, k: color_spinner.value,
             showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
         });
         if (!order_toggle.active) {
-            const dpOrder = SYN.dpNaturalOrder();
+            const dpOrder = SYN.dpOrderFor(false);
             SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, mba_spinner.value, {
                 query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
                 queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-                cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source,
+                cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
             });
         }
     """)
     size_order_toggle.js_on_change('active', size_order_toggle_callback)
+
+    # Global, like show_gaps_toggle above it -- filters both the ring and the
+    # dotplot down to chromosomes at or above this length, composing with
+    # whichever order/similarity toggle is currently active (via
+    # SYN.ringOrderFor/SYN.dpOrderFor, the same helpers order_toggle/
+    # size_order_toggle's own callbacks now go through). Any active pivot/
+    # pair zoom is cleared on change, same as reset_btn -- the chromosome it
+    # was zoomed into may no longer be visible at all.
+    min_seq_size_callback = CustomJS(args=dict(
+        order_toggle=order_toggle, size_order_toggle=size_order_toggle,
+        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
+        query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
+        gap_source=gap_src, self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
+        dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
+        dp_cell_source=dp_cell_src, dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
+        bar_source=detail_bar_src, detail_ribbon_source=detail_rib_src,
+        detail_label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
+    ), code="""
+        SYN.state.minSeqSize = cb_obj.value * 1e6;
+
+        const ringOrder = SYN.ringOrderFor(size_order_toggle.active);
+        SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
+            querySource: query_source, subjectSource: subject_source,
+            labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
+            minScore: mba_spinner.value, k: color_spinner.value,
+            showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
+        });
+
+        const dpOrder = SYN.dpOrderFor(order_toggle.active);
+        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, mba_spinner.value, {
+            query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
+            queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
+            cell: dp_cell_source, segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
+        });
+
+        // same as reset_btn's own callback -- a filtered-out chromosome may
+        // be the current pivot/pair, and there's no cheap way to tell from
+        // here, so always clear rather than risk a stale zoom panel
+        SYN.state.mode = null;
+        SYN.state.pivotSide = null;
+        SYN.state.pivotName = null;
+        SYN.state.pairTarget = null;
+        SYN.state.pairSubject = null;
+        query_source.selected.indices = [];
+        subject_source.selected.indices = [];
+        dp_query_source.selected.indices = [];
+        dp_subject_source.selected.indices = [];
+        dp_cell_source.selected.indices = [];
+        ribbon_source.selected.indices = [];
+        SYN.applyDetail(SYN.emptyDetail(), bar_source, detail_ribbon_source, detail_label_source,
+                         detail_fig, detail_gap_source);
+    """)
+    min_seq_size_spinner.js_on_change('value', min_seq_size_callback)
 
     # Tapping a chromosome region -- a ring wedge, a dotplot ruler cell, or a
     # dotplot grid cell -- clears every OTHER clickable source's selection,
@@ -2816,7 +2978,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     layout = column(
         header_title_div,
-        row(reference_label_input, target_label_input, palette_select, color_spinner, mba_spinner),
+        row(reference_label_input, target_label_input, palette_select, color_spinner, mba_spinner,
+            min_seq_size_spinner),
         # hint left out of the layout for now (not deleted -- still built
         # above, just not attached to anything file_html walks/serializes)
         # per explicit request to drop the usage instructions from the page
@@ -2856,14 +3019,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'targetName': query_name,
         'referenceName': subject_name,
         # the *editable* label's own default (query_subtitle/subject_subtitle
-        # -- the actual input file name/accession -- falling back to the
-        # role tag above when none was given), distinct from targetName/
-        # referenceName above: those stay the fixed "target"/"comparison"
-        # role identity even after a viewer retypes the label, since some
-        # tooltips (see SYN.buildPairDetailData) deliberately show both
-        # together, e.g. "target (Dmel) x reference (Dyak)"
+        # -- the actual input file name/accession -- falling back to
+        # "target"/"reference" when none was given, same fallback
+        # target_label_input/reference_label_input themselves use, NOT
+        # query_name/subject_name above -- those are "target"/"comparison",
+        # the internal pipeline role tags (see main.nf), not this page's own
+        # user-facing terms
         'targetLabelDefault': query_subtitle or query_name,
-        'referenceLabelDefault': subject_subtitle or subject_name,
+        'referenceLabelDefault': subject_subtitle or "reference",
         'queryNames': query_names,
         'subjectNames': subject_names,
         # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
@@ -2907,11 +3070,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
         'detailFigWidth': DETAIL_FIG_WIDTH,
         'statsPanelWidth': STATS_PANEL_WIDTH,
-        # rx/ry/totalX/totalY never change when the dotplot is reordered --
-        # same chromosomes, same sizes, just shuffled -- so the "order by
-        # similarity" toggle's client-side rebuild (see SHARED_JS's
-        # SYN.buildDotplotLayout) reuses these rather than recomputing them
+        # this run's INITIAL rx/ry/totalX/totalY -- only used to seed
+        # SYN.state (see seed_js below) before any reorder/filter callback
+        # has run. SYN.buildDotplotLayout recomputes its own rx/ry/totalX/
+        # totalY from whatever order/filter is actually active on every
+        # later call (a min-length filter, unlike a pure reorder, can change
+        # them -- see that function's own comment), using dpRulerFrac below.
         'dpRx': dp_rx, 'dpRy': dp_ry, 'dpTotalX': dp_total_x, 'dpTotalY': dp_total_y,
+        'dpRulerFrac': DP_RULER_FRAC,
         # None (-> JSON null, falsy in JS) if --stats wasn't given -- every
         # reader of this (SYN.buildStatsHtml) already treats that as "no
         # panel to show"
@@ -2930,6 +3096,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         const natural = SYN.dpNaturalOrder();
         SYN.state.dpQueryOffsets = SYN.computeOffsets(natural.queryOrder, SYN.data.querySizes);
         SYN.state.dpSubjectOffsets = SYN.computeOffsets(natural.subjectOrder, SYN.data.subjectSizes);
+        SYN.state.dpTotalX = SYN.data.dpTotalX; SYN.state.dpTotalY = SYN.data.dpTotalY;
+        SYN.state.dpRx = SYN.data.dpRx; SYN.state.dpRy = SYN.data.dpRy;
         SYN.state.targetLabel = SYN.data.targetLabelDefault;
         SYN.state.referenceLabel = SYN.data.referenceLabelDefault;
     })();

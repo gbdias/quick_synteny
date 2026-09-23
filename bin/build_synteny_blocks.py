@@ -247,15 +247,16 @@ def collapse_tandem(anchors):
     return kept
 
 
-def longest_monotonic_run(anchors_sorted_by_a, increasing, max_gap):
+def longest_monotonic_run(anchors_sorted_by_a, increasing, max_dist):
     """DP longest-subsequence of pos_b monotonic in pos_a order. Consecutive
-    anchors in the chain must be within max_gap on BOTH axes -- bounding
-    only the pos_b regression (as an earlier version of this did) lets two
-    anchors hundreds of Mb apart on pos_a still "chain" as long as pos_b
-    happens to be ordered, which isn't collinearity, it's coincidence. Real
-    synteny chaining (DAGchainer, MCScanX) always bounds the gap on both
-    sides; this is that same idea, simplified. O(n^2); fine per chromosome-
-    pair group, not genome-wide."""
+    anchors in the chain must be within max_dist (a proxy for intergenic
+    distance) on BOTH axes -- bounding only the pos_b regression (as an
+    earlier version of this did) lets two anchors hundreds of Mb apart on
+    pos_a still "chain" as long as pos_b happens to be ordered, which isn't
+    collinearity, it's coincidence. Real synteny chaining (DAGchainer,
+    MCScanX) always bounds the distance on both sides; this is that same
+    idea, simplified. O(n^2); fine per chromosome-pair group, not
+    genome-wide."""
     n = len(anchors_sorted_by_a)
     if n == 0:
         return []
@@ -264,9 +265,9 @@ def longest_monotonic_run(anchors_sorted_by_a, increasing, max_gap):
     parent = [-1] * n
     for i in range(n):
         for j in range(i):
-            a_gap = anchors_sorted_by_a[i]['pos_a'] - anchors_sorted_by_a[j]['pos_a']
-            b_gap = key(anchors_sorted_by_a[i]) - key(anchors_sorted_by_a[j])
-            if 0 <= a_gap <= max_gap and -max_gap <= b_gap <= max_gap and dp[j] + 1 > dp[i]:
+            a_dist = anchors_sorted_by_a[i]['pos_a'] - anchors_sorted_by_a[j]['pos_a']
+            b_dist = key(anchors_sorted_by_a[i]) - key(anchors_sorted_by_a[j])
+            if 0 <= a_dist <= max_dist and -max_dist <= b_dist <= max_dist and dp[j] + 1 > dp[i]:
                 dp[i] = dp[j] + 1
                 parent[i] = j
     best_i = max(range(n), key=lambda i: dp[i])
@@ -277,7 +278,7 @@ def longest_monotonic_run(anchors_sorted_by_a, increasing, max_gap):
     return list(reversed(chain))
 
 
-def find_blocks(anchors, min_block_anchors, max_gap):
+def find_blocks(anchors, min_block_anchors, max_dist):
     """min_block_anchors filters on DISTINCT SUPPORTING PROTEINS, not raw
     anchor-pair count -- see build_raw_anchors()'s docstring: a single
     protein with several hits on one or both sides (miniprot secondary
@@ -303,8 +304,8 @@ def find_blocks(anchors, min_block_anchors, max_gap):
     for (chrom_a, chrom_b), group in by_pair.items():
         remaining = sorted(group, key=lambda a: a['pos_a'])
         while True:
-            fwd = longest_monotonic_run(remaining, True, max_gap)
-            rev = longest_monotonic_run(remaining, False, max_gap)
+            fwd = longest_monotonic_run(remaining, True, max_dist)
+            rev = longest_monotonic_run(remaining, False, max_dist)
             chosen, orientation = (fwd, '+') if len(fwd) >= len(rev) else (rev, '-')
             # a lower bound on distinct proteins, cheap to check before the
             # (slightly more expensive) set() below -- if there aren't even
@@ -369,10 +370,11 @@ def main():
                               'same chromosome pair before trusting any single short one. '
                               'Pass a value explicitly to disable auto-tuning and pin it '
                               'yourself')
-    parser.add_argument('--max_gap', type=int, default=300000,
+    parser.add_argument('--max_dist', type=int, default=300000,
                          help='max bp between consecutive anchors in a chain, on both '
-                              'sides -- bounds collinearity locally so anchors that are '
-                              'individually real but scattered across huge distances '
+                              'sides -- a proxy for intergenic distance, bounding '
+                              'collinearity locally so anchors that are individually real '
+                              'but scattered across huge distances '
                               "can't chain together into one spurious genome-spanning block")
     parser.add_argument('--self', action='store_true',
                          help='query and subject are the same genome (homeolog scan)')
@@ -404,7 +406,7 @@ def main():
 
     raw = build_raw_anchors(query_hits, subject_hits, min_identity)
     collapsed = collapse_tandem(raw)
-    blocks = find_blocks(collapsed, min_block_anchors, args.max_gap)
+    blocks = find_blocks(collapsed, min_block_anchors, args.max_dist)
     write_links(blocks, args.out)
 
     print(f"[build_synteny_blocks] {len(raw)} raw anchor(s) -> "

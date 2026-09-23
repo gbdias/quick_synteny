@@ -36,7 +36,7 @@ def helpMessage() {
       --max_rank <rank>        How far to climb the taxonomy ladder before giving up.
                                 One of: ${RANKS().join(',')} (default: order).
       --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
-                                plot (default: 0, no filtering).
+                                plot (default: 500000; pass 0 to disable filtering).
       --exclude_target         Never pick a comparison genome or proteome source of the
                                 same species as the target, even a chromosome-level one.
                                 Off by default: a same-species result is kept -- it's a
