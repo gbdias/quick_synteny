@@ -49,7 +49,7 @@ process EXTRACT_HITS {
 }
 
 process CHAIN_CROSS {
-    tag "${target_name} vs ${comparison_name}"
+    tag "${target_name} vs ${reference_name}"
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
@@ -58,25 +58,25 @@ process CHAIN_CROSS {
 
     input:
     tuple val(target_name), path(target_hits)
-    tuple val(comparison_name), path(comparison_hits)
+    tuple val(reference_name), path(reference_hits)
     val min_identity  // '' auto-tunes (see chain.js autoParams); otherwise an explicit 0-1 floor
     val max_gap
     val min_block     // '' auto-tunes; the slider file always uses 5 (see top of file)
 
     output:
-    tuple val(target_name), val(comparison_name), path("${target_name}.${comparison_name}.slider_links.tsv"), emit: slider
-    tuple val(target_name), val(comparison_name), path("${target_name}.${comparison_name}.links.tsv"), emit: links
+    tuple val(target_name), val(reference_name), path("${target_name}.${reference_name}.slider_links.tsv"), emit: slider
+    tuple val(target_name), val(reference_name), path("${target_name}.${reference_name}.links.tsv"), emit: links
 
     script:
     def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
     def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
-    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${comparison_hits} \\
+    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${reference_hits} \\
         ${idFlag} --max_gap ${max_gap} ${blockFlag} \\
-        --out ${target_name}.${comparison_name}.links.tsv
-    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${comparison_hits} \\
+        --out ${target_name}.${reference_name}.links.tsv
+    chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${reference_hits} \\
         ${idFlag} --max_gap ${max_gap} --min_block 5 \\
-        --out ${target_name}.${comparison_name}.slider_links.tsv
+        --out ${target_name}.${reference_name}.slider_links.tsv
     """
 }
 
@@ -111,14 +111,14 @@ process CHAIN_SELF {
 // the miniprot GFFs. Kept as its own process since it needs the proteome
 // fasta too, which nothing else in this module reads.
 process COMPUTE_ALIGNMENT_STATS {
-    tag "${target_name} vs ${comparison_name}"
+    tag "${target_name} vs ${reference_name}"
     label 'process_low'
     container 'quay.io/biocontainers/python:3.13.7'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
     tuple val(target_name), path(target_gff)
-    tuple val(comparison_name), path(comparison_gff)
+    tuple val(reference_name), path(reference_gff)
     path proteome
     // what the page names each input by: its filename if user-supplied, else
     // the NCBI accession it was discovered from; plus its species when known
@@ -127,7 +127,7 @@ process COMPUTE_ALIGNMENT_STATS {
           val(proteome_source), val(proteome_species)
 
     output:
-    path "${target_name}.${comparison_name}.stats.json", emit: stats
+    path "${target_name}.${reference_name}.stats.json", emit: stats
 
     script:
     // single-quoted for the shell, so file names/species with spaces or quotes survive
@@ -135,23 +135,23 @@ process COMPUTE_ALIGNMENT_STATS {
     """
     compute_alignment_stats.py \\
         --proteome ${proteome} \\
-        --query_gff ${target_gff} --subject_gff ${comparison_gff} \\
-        --query_name ${target_name} --subject_name ${comparison_name} \\
+        --query_gff ${target_gff} --subject_gff ${reference_gff} \\
+        --query_name ${target_name} --subject_name ${reference_name} \\
         --query_source ${q(query_source)} --query_species ${q(query_species)} \\
         --subject_source ${q(subject_source)} --subject_species ${q(subject_species)} \\
         --proteome_source ${q(proteome_source)} --proteome_species ${q(proteome_species)} \\
-        --out ${target_name}.${comparison_name}.stats.json
+        --out ${target_name}.${reference_name}.stats.json
     """
 }
 
 workflow BUILD_SYNTENY {
     take:
     target_gff              // tuple(name, path gff), seqids already renamed (RENAME_GFF)
-    comparison_gff
+    reference_gff
     target_chrom_sizes      // tuple(name, path chrom.sizes) -- hits on sequences not listed are dropped
-    comparison_chrom_sizes
+    reference_chrom_sizes
     proteome                // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
-    find_homeologs          // '', 'target', 'comparison', or 'both' -- which genome(s) to self-compare
+    find_homeologs          // '', 'target', 'reference', or 'both' -- which genome(s) to self-compare
     min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
     max_gap                 // max gene-rank step between consecutive chain members
     min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
@@ -162,23 +162,23 @@ workflow BUILD_SYNTENY {
     // one EXTRACT_HITS call over both genomes (a DSL2 process can't be
     // invoked twice in one scope), split back by the role name each tuple
     // carries
-    hits = EXTRACT_HITS(target_gff.join(target_chrom_sizes).mix(comparison_gff.join(comparison_chrom_sizes))).hits
+    hits = EXTRACT_HITS(target_gff.join(target_chrom_sizes).mix(reference_gff.join(reference_chrom_sizes))).hits
     hits_by_role = hits.branch {
         target: it[0] == 'target'
-        comparison: it[0] == 'comparison'
+        reference: it[0] == 'reference'
     }
 
-    chained = CHAIN_CROSS(hits_by_role.target, hits_by_role.comparison, min_identity, max_gap, min_block)
-    stats   = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, input_sources).stats
+    chained = CHAIN_CROSS(hits_by_role.target, hits_by_role.reference, min_identity, max_gap, min_block)
+    stats   = COMPUTE_ALIGNMENT_STATS(target_gff, reference_gff, proteome, input_sources).stats
 
     // an empty input channel (find_homeologs == '') yields an empty output
-    // channel, so 'target', 'comparison', 'both' and '' need no special cases
+    // channel, so 'target', 'reference', 'both' and '' need no special cases
     homeolog_inputs = Channel.empty()
     if (find_homeologs == 'target' || find_homeologs == 'both') {
         homeolog_inputs = homeolog_inputs.mix(hits_by_role.target)
     }
-    if (find_homeologs == 'comparison' || find_homeologs == 'both') {
-        homeolog_inputs = homeolog_inputs.mix(hits_by_role.comparison)
+    if (find_homeologs == 'reference' || find_homeologs == 'both') {
+        homeolog_inputs = homeolog_inputs.mix(hits_by_role.reference)
     }
     homeolog_slider = CHAIN_SELF(homeolog_inputs, min_identity, max_gap).slider
 

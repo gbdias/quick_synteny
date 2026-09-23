@@ -19,7 +19,7 @@
 // needs a candidate's protein sequences, so a scaffold-level annotated
 // assembly is fine there (see find_proteome_assembly.nf).
 
-process QUERY_GENOME_LADDER_COMPARISON {
+process QUERY_GENOME_LADDER_REFERENCE {
     tag "max_rank=${max_rank}"
     label 'process_low'
     container 'quay.io/staphb/ncbi-datasets:18.35.0'
@@ -46,10 +46,10 @@ process QUERY_GENOME_LADDER_COMPARISON {
     """
 }
 
-process SELECT_COMPARISON_ASSEMBLY {
+process SELECT_REFERENCE_ASSEMBLY {
     label 'process_low'
     container 'quay.io/biocontainers/python:3.13.7'
-    publishDir "${params.outdir}/pipeline_info", mode: 'copy', pattern: 'comparison_*'
+    publishDir "${params.outdir}/pipeline_info", mode: 'copy', pattern: 'reference_*'
 
     input:
     path lineage
@@ -58,27 +58,27 @@ process SELECT_COMPARISON_ASSEMBLY {
     val exclude_target  // true: drop every same-species candidate outright (see find_closest_assembly.py)
 
     output:
-    path 'comparison_selection.json', emit: selection
-    path 'comparison_candidates.tsv'
-    path 'comparison_search_log.tsv'
+    path 'reference_selection.json', emit: selection
+    path 'reference_candidates.tsv'
+    path 'reference_search_log.tsv'
 
     script:
     def excludeFlag = exclude_target ? '--exclude_target' : ''
     """
-    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix comparison \\
+    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix reference \\
         --require_chromosome_level ${excludeFlag}
     """
 }
 
-workflow FIND_COMPARISON_ASSEMBLY {
+workflow FIND_REFERENCE_ASSEMBLY {
     take:
     lineage
     max_rank
     exclude_target
 
     main:
-    ladder = QUERY_GENOME_LADDER_COMPARISON(lineage, max_rank)
-    sel    = SELECT_COMPARISON_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target)
+    ladder = QUERY_GENOME_LADDER_REFERENCE(lineage, max_rank)
+    sel    = SELECT_REFERENCE_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target)
 
     emit:
     selection = sel.selection

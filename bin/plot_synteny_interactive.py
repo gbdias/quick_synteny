@@ -218,7 +218,7 @@ def read_chrom_sizes(path):
 def read_gaps(path):
     """bin/rename_sequences.py's --out_gaps output: chrom, start, end -- no
     header, 0-based half-open. Returns [] for path=None (no --target_gaps/
-    --comparison_gaps given)."""
+    --reference_gaps given)."""
     if not path:
         return []
     gaps = []
@@ -317,7 +317,7 @@ def build_genome_columns(hits, chrom_names, prot_index):
     }
 
 
-def build_hits_payload(target_hits_path, comparison_hits_path, target_chrom_names, comparison_chrom_names):
+def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names, reference_chrom_names):
     """SYN.hitsPayload (bin/chain.js's EMBEDDED PAYLOAD header) -- the one thing
     Python ships instead of precomputed links/blocks. `reference:
     'same_as_target'` (skipping a second, redundant copy of the same bytes)
@@ -328,24 +328,24 @@ def build_hits_payload(target_hits_path, comparison_hits_path, target_chrom_name
     correct if chromosome N means the same thing on both sides."""
     with open(target_hits_path, 'rb') as f:
         target_bytes = f.read()
-    same_genome = target_chrom_names == comparison_chrom_names
+    same_genome = target_chrom_names == reference_chrom_names
     if same_genome:
-        with open(comparison_hits_path, 'rb') as f:
+        with open(reference_hits_path, 'rb') as f:
             same_genome = f.read() == target_bytes
 
     target_hits = read_hits_tsv(target_bytes)
-    comparison_hits = None if same_genome else read_hits_tsv(open(comparison_hits_path, 'rb').read())
+    reference_hits = None if same_genome else read_hits_tsv(open(reference_hits_path, 'rb').read())
 
     # union of both genomes' accessions, sorted lexicographically (bin/chain.js's
     # HIT TABLE header) -- ASCII protein accessions sort identically under Python's
     # code-point order and JS's default (UTF-16 code unit) Array.sort()
-    all_proteins = set(target_hits['protein']) | (set(comparison_hits['protein']) if comparison_hits else set())
+    all_proteins = set(target_hits['protein']) | (set(reference_hits['protein']) if reference_hits else set())
     proteins = sorted(all_proteins)
     prot_index = {p: i for i, p in enumerate(proteins)}
 
     target_cols = build_genome_columns(target_hits, target_chrom_names, prot_index)
     reference_cols = ('same_as_target' if same_genome
-                       else build_genome_columns(comparison_hits, comparison_chrom_names, prot_index))
+                       else build_genome_columns(reference_hits, reference_chrom_names, prot_index))
 
     proteins_gz = gzip.compress('\n'.join(proteins).encode('utf-8'), mtime=0)
     return {
@@ -2463,9 +2463,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # see SYN.applyLabels.
     target_label_input = TextInput(title="Target label", value=query_subtitle or query_name,
                                     width=TOP_CONTROL_WIDTH)
-    # "reference", not subject_name -- subject_name is "comparison", the
-    # internal pipeline role tag (channel/filename convention, see main.nf),
-    # not the user-facing term this box's own title already uses
+    # falls back to the literal "reference" rather than subject_name, which
+    # is the pipeline's role tag for the same genome (see main.nf)
     reference_label_input = TextInput(title="Reference label", value=subject_subtitle or "reference",
                                        width=TOP_CONTROL_WIDTH)
 
@@ -3242,10 +3241,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # the *editable* label's own default (query_subtitle/subject_subtitle
         # -- the actual input file name/accession -- falling back to
         # "target"/"reference" when none was given, same fallback
-        # target_label_input/reference_label_input themselves use, NOT
-        # query_name/subject_name above -- those are "target"/"comparison",
-        # the internal pipeline role tags (see main.nf), not this page's own
-        # user-facing terms
+        # target_label_input/reference_label_input themselves use
         'targetLabelDefault': query_subtitle or query_name,
         'referenceLabelDefault': subject_subtitle or "reference",
         'queryNames': query_names,
@@ -3332,7 +3328,7 @@ def main():
                          help="bin/extract_hits.py output for the target genome "
                               "(format: that script's docstring) -- embedded as SYN.hitsPayload "
                               "and chained client-side; Python never chains anything")
-    parser.add_argument('--comparison_hits', required=True, help='ditto, for the reference genome')
+    parser.add_argument('--reference_hits', required=True, help='ditto, for the reference genome')
     parser.add_argument('--min_identity', type=float, default=None,
                          help='initial Min identity (%%) control value, as a 0-1 fraction -- '
                               'default (unset): SYNCHAIN.autoParams picks it client-side from the '
@@ -3358,12 +3354,12 @@ def main():
                          help="optional bin/rename_sequences.py --out_gaps output (chrom, start, "
                               "end TSV, no header) for the target genome -- drawn as gap markers "
                               'on the ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
-    parser.add_argument('--comparison_gaps', default=None,
+    parser.add_argument('--reference_gaps', default=None,
                          help='ditto, for the reference genome')
     parser.add_argument('--out_prefix', required=True)
     args = parser.parse_args()
 
-    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.comparison_gaps)
+    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.reference_gaps)
     if not ds.query_chroms or not ds.subject_chroms:
         sys.exit("ERROR: no chromosomes to plot -- check --min_seq_size isn't "
                   "filtering out everything")
@@ -3373,7 +3369,7 @@ def main():
         with open(args.stats) as f:
             alignment_stats = json.load(f)
 
-    hits_payload = build_hits_payload(args.target_hits, args.comparison_hits,
+    hits_payload = build_hits_payload(args.target_hits, args.reference_hits,
                                        [n for n, _ in ds.query_chroms_natural],
                                        [n for n, _ in ds.subject_chroms_natural])
     chain_js_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chain.js')
@@ -3392,7 +3388,7 @@ def main():
     target_n = hits_payload['genomes']['target']['n']
     reference_n = target_n if same_reference else hits_payload['genomes']['reference']['n']
     gap_bits = []
-    if args.target_gaps or args.comparison_gaps:
+    if args.target_gaps or args.reference_gaps:
         gap_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} reference assembly gap(s)")
     print(f"[plot_synteny_interactive] wrote {out_path} ({target_n} target / {reference_n} reference "
           f"hit(s) embedded, chained client-side"

@@ -1,7 +1,7 @@
-// The comparison genome only ever needs its genome FASTA (miniprot aligns
+// The reference genome only ever needs its genome FASTA (miniprot aligns
 // the proteome against it; its own GFF3/protein are never used) and
 // proteome only ever needs its protein FASTA. Because each accession's role only ever needs ONE
-// distinct file type, a same-accession comparison-genome+proteome pair each
+// distinct file type, a same-accession reference-genome+proteome pair each
 // fetch different content (genome vs. protein), so no separate dedup branch
 // is needed: there is no redundant download to avoid.
 

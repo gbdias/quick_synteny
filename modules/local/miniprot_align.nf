@@ -1,5 +1,5 @@
 // Generic (genome, proteome) -> gff aligner, called twice from main.nf
-// (target, comparison) rather than as two separate modules.
+// (target, reference) rather than as two separate modules.
 //
 // --outs/-N are loosened from miniprot's stock defaults (0.99 / 30) so
 // secondary alignments -- a protein's OTHER hits, at a lower score than its

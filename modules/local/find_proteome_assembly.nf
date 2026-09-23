@@ -1,4 +1,4 @@
-// Same ladder-walk as find_comparison_assembly.nf, filtered for annotation
+// Same ladder-walk as find_reference_assembly.nf, filtered for annotation
 // availability instead of assembly level -- a scaffold-level annotated
 // assembly is fine here since only its proteins are used. Unlike that
 // query, this one has no --assembly-level filter of its own, so
@@ -42,7 +42,7 @@ process SELECT_PROTEOME_ASSEMBLY {
     path jsonl_files
     val max_rank
     val exclude_target  // true: drop every same-species candidate outright (see find_closest_assembly.py)
-    val prefer_taxid    // the comparison genome's species taxid ('' if user-supplied): its own
+    val prefer_taxid    // the reference genome's species taxid ('' if user-supplied): its own
                         // annotation wins over the quality ranking when it has one
 
     output:

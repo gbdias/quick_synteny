@@ -91,7 +91,7 @@ def main():
                               "below that quality bar is dropped either way, same-species or not.")
     parser.add_argument('--require_chromosome_level', action='store_true',
                          help="require EVERY candidate, same-species or not, to be chromosome- or "
-                              "complete-genome-level -- used for comparison-genome discovery, where "
+                              "complete-genome-level -- used for reference-genome discovery, where "
                               "a low-quality genome makes a poor synteny comparison regardless of "
                               "species. Off for proteome discovery, which only needs a candidate's "
                               "protein sequences and is deliberately more permissive (a scaffold-"
@@ -101,7 +101,7 @@ def main():
     parser.add_argument('--prefer_taxid', default='',
                          help="species taxid to prefer: if any kept candidate at any searched rank "
                               "is of this species, the best of those wins over the usual ranking. "
-                              "Proteome discovery passes the chosen comparison genome's species, so "
+                              "Proteome discovery passes the chosen reference genome's species, so "
                               "the proteome comes from the reference species whenever it has an "
                               "annotated assembly -- the ranking below knows assembly quality, "
                               "not relatedness.")
@@ -127,7 +127,7 @@ def main():
 
     def keep(r):
         # explicit and self-contained here, rather than relying solely on
-        # find_comparison_assembly.nf's own upstream --assembly-level
+        # find_reference_assembly.nf's own upstream --assembly-level
         # chromosome,complete query filter to make this true incidentally
         if args.require_chromosome_level and not is_chromosome_level(r):
             return False

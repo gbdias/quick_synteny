@@ -59,7 +59,7 @@
 // restoring the same "one container line, works under either profile"
 // property every other process in this pipeline already has.
 process RENDER_SYNTENY_INTERACTIVE {
-    tag "${target_name} vs ${comparison_name}"
+    tag "${target_name} vs ${reference_name}"
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001'
@@ -68,67 +68,67 @@ process RENDER_SYNTENY_INTERACTIVE {
 
     input:
     tuple val(target_name), path(target_hits)
-    tuple val(comparison_name), path(comparison_hits)
+    tuple val(reference_name), path(reference_hits)
     path target_chrom_sizes
-    path comparison_chrom_sizes
+    path reference_chrom_sizes
     val min_identity        // '' auto-tunes client-side (SYNCHAIN.autoParams); otherwise an explicit 0-1 floor
     val max_gap
     val min_block           // '' auto-tunes client-side; otherwise the initial Min block size control value
     path stats               // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
     val target_subtitle      // input file name/accession, shown under the target label
-    val comparison_subtitle  // ditto, for the comparison label
+    val reference_subtitle  // ditto, for the reference label
     path target_gaps         // RENAME_SEQUENCES gaps output -- always a real file (unconditional)
-    path comparison_gaps     // ditto
+    path reference_gaps     // ditto
 
     output:
-    path "${target_name}.${comparison_name}.synteny.interactive.html"
+    path "${target_name}.${reference_name}.synteny.interactive.html"
 
     script:
     def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
     def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
     plot_synteny_interactive.py \\
-        --query_name ${target_name} --subject_name ${comparison_name} \\
+        --query_name ${target_name} --subject_name ${reference_name} \\
         --query_chrom_sizes ${target_chrom_sizes} \\
-        --subject_chrom_sizes ${comparison_chrom_sizes} \\
-        --target_hits ${target_hits} --comparison_hits ${comparison_hits} \\
+        --subject_chrom_sizes ${reference_chrom_sizes} \\
+        --target_hits ${target_hits} --reference_hits ${reference_hits} \\
         ${idFlag} --max_gap ${max_gap} ${blockFlag} \\
         --stats ${stats} \\
-        --query_subtitle "${target_subtitle}" --subject_subtitle "${comparison_subtitle}" \\
-        --target_gaps ${target_gaps} --comparison_gaps ${comparison_gaps} \\
-        --out_prefix ${target_name}.${comparison_name}.synteny
+        --query_subtitle "${target_subtitle}" --subject_subtitle "${reference_subtitle}" \\
+        --target_gaps ${target_gaps} --reference_gaps ${reference_gaps} \\
+        --out_prefix ${target_name}.${reference_name}.synteny
     """
 }
 
 workflow PYGENOMEVIZ_PLOT {
     take:
-    hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and comparison mixed together
+    hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and reference mixed together
     target_chrom_sizes     // tuple(name, path chrom.sizes)
-    comparison_chrom_sizes
+    reference_chrom_sizes
     min_identity           // '' auto-tunes; otherwise an explicit 0-1 floor (the page's initial control value)
     max_gap                // max gene-rank step between consecutive chain members (the page's initial control value)
     min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
-    comparison_subtitle    // val -- comparison genome's input file name/accession, ditto
+    reference_subtitle    // val -- reference genome's input file name/accession, ditto
     target_gaps            // tuple(name, path gaps.tsv) -- RENAME_SEQUENCES gaps output
-    comparison_gaps
+    reference_gaps
 
     main:
     hits_by_role = hits.branch {
         target: it[0] == 'target'
-        comparison: it[0] == 'comparison'
+        reference: it[0] == 'reference'
     }
 
     RENDER_SYNTENY_INTERACTIVE(
         hits_by_role.target,
-        hits_by_role.comparison,
+        hits_by_role.reference,
         target_chrom_sizes.map { it[1] },
-        comparison_chrom_sizes.map { it[1] },
+        reference_chrom_sizes.map { it[1] },
         min_identity, max_gap, min_block,
         stats,
-        target_subtitle, comparison_subtitle,
+        target_subtitle, reference_subtitle,
         target_gaps.map { it[1] },
-        comparison_gaps.map { it[1] },
+        reference_gaps.map { it[1] },
     )
 }
