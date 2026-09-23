@@ -16,79 +16,74 @@ set -euo pipefail
 # --help. Nothing here pins a specific comparison/proteome accession.
 #
 # Why this needs more than `nextflow run main.nf --taxid 8296 ...
-# -profile slurm`: axolotl is enormous (~28 Gb assembled) and this repo's
-# OWN prior memory benchmark (APPLICATION_NOTE_PLAN.md section 2, measured
-# 2026-09-20) put miniprot's peak RSS for it at ~260.6 GB at default
-# settings -- far past conf/slurm.config's 'process_high' label (32 GB),
-# which is sized for ordinary genomes, not this one. Rather than edit that
-# shipped profile (which would then be wrong for every other genome), this
-# script layers a run-specific override on top of it with -c, targeting
-# just the one process (MINIPROT_ALIGN) that needs it. Whatever comparison
-# genome auto-discovery lands on is likely to be another large, chromosome-
-# level Caudata genome (the same benchmark's own axolotl/Pleurodeles pairing
-# note) and to need close to as much RAM, so the override applies to BOTH
-# of MINIPROT_ALIGN's two calls (target + comparison), not just axolotl's.
+# -profile slurm`: axolotl is enormous (~29 Gb assembled), and miniprot's
+# peak RAM is dominated by its genome index, ~10-12 GB per Gb of genome.
+# A single whole-genome alignment peaked at 355 GB (target) / 340 GB
+# (comparison) in the 2026-09-22 run, which only one node here can hold.
 #
-# This has NOT been run end-to-end against the real pipeline before --
-# the 260 GB figure comes from raw miniprot index/align profiling
-# (benchmark/memory_profile/), not from quick_synteny's own MINIPROT_ALIGN
-# process, which uses the same miniprot commands but has never been
-# measured at this genome size. Treat the numbers below as an informed
-# starting point, not a guarantee -- watch the first run and adjust.
+# So by default this script aligns in CHUNKS (--miniprot_chunk_gb, see
+# main.nf --help and modules/local/miniprot_align.nf): the genome is split
+# into ~MINIPROT_CHUNK_GB-sized pieces of whole sequences, each aligned as
+# its own SLURM task with memory sized to that chunk (~11 GB per Gb of
+# chunk + 4 GB), then merged into a result equivalent to one whole-genome
+# run. At the default 2 Gb every chunk task asks for at most ~26 GB, so no
+# special node is needed and the chunks run in parallel wherever they fit.
+# Whatever comparison genome auto-discovery lands on (likely another large
+# Caudata genome) is chunked the same way.
+#
+# The old single whole-genome job is still available: set MINIPROT_CHUNK_GB
+# to an empty value (MINIPROT_CHUNK_GB= sbatch ...). Only then do the
+# MINIPROT_NODE / MINIPROT_CPUS / MINIPROT_MEM_GB / MINIPROT_EXCLUSIVE
+# settings below apply, pinning MINIPROT_ALIGN to the high-memory node.
+#
+# Chunked mode hasn't run at this scale yet: after the first run, check
+# peak_rss for the MINIPROT_ALIGN_CHUNK tasks in
+# $OUTDIR/pipeline_info/execution_trace.txt, and adjust MINIPROT_CHUNK_GB or
+# the pipeline's --miniprot_gb_per_gb (default 11) if they're far off.
 #
 # !! EDIT THE "cluster-specific" SECTION BELOW BEFORE SUBMITTING. !!
 ########################################################################
 
 # ---- cluster-specific: EDIT THESE -------------------------------------
 REPO_DIR="${REPO_DIR:-$HOME/quick_synteny}"                        # this checkout (has main.nf)
-ASSEMBLY_FASTA="${ASSEMBLY_FASTA:-/active/guilherme/axolotl/GCF_040938575.1_UKY_AmexF1_1_genomic.fna.gz}"    # target FASTA -- must already exist, see below
-MINIPROT_NODE="${MINIPROT_NODE:-node-c01}"                        # the one high-mem node MINIPROT_ALIGN must land
-                                                                     # on -- everything else is left unconstrained
-                                                                     # (no `queue`/partition set anywhere below: this
-                                                                     # cluster has none, and nextflow.config's own
-                                                                     # default --slurm_queue='normal' would otherwise
-                                                                     # still attach a nonexistent `--partition=normal`
-                                                                     # to every job -- see the override config below)
+ASSEMBLY_FASTA="${ASSEMBLY_FASTA:-/active/guilherme/axolotl/GCF_040938575.1_UKY_AmexF1_1_genomic.fna.gz}"    # target FASTA, plain or gzipped -- must already exist, see below
 ACCOUNT="${ACCOUNT:-}"                                             # leave empty if your cluster needs none
 SINGULARITY_CACHE="${SINGULARITY_CACHE:-/scratch/$USER/quick_synteny_singularity}"
 OUTDIR="${OUTDIR:-$PWD/results_axolotl}"
+
+# -- chunked alignment (default) --
+MINIPROT_CHUNK_GB="${MINIPROT_CHUNK_GB-2}"                         # Gb of genome per miniprot task. Axolotl's largest
+                                                                     # chromosome is 1.74 Gb, so at 2 each chunk holds
+                                                                     # one big chromosome (or several smaller ones):
+                                                                     # <= ~26 GB per task. No ':' in the default on
+                                                                     # purpose: MINIPROT_CHUNK_GB= (set but empty)
+                                                                     # switches to the whole-genome job below, which
+                                                                     # ':-' would make impossible to tell from unset
+MINIPROT_CHUNK_CPUS="${MINIPROT_CHUNK_CPUS:-8}"                    # threads per chunk task
+MINIPROT_CHUNK_TIME="${MINIPROT_CHUNK_TIME:-12.h}"                 # Nextflow duration syntax (NOT SLURM's
+                                                                     # HH:MM:SS -- process.time doesn't accept that)
+
+# -- whole-genome alignment (only when MINIPROT_CHUNK_GB is empty) --
+MINIPROT_NODE="${MINIPROT_NODE:-node-c01}"                        # the one high-mem node MINIPROT_ALIGN must land
+                                                                     # on -- everything else is left unconstrained
 MINIPROT_CPUS="${MINIPROT_CPUS:-32}"                               # threads for MINIPROT_ALIGN; confirmed to fit
                                                                      # node-c01's actual core count -- 2026-09-22
-MINIPROT_MEM_GB="${MINIPROT_MEM_GB:-320}"                          # ~260 GB measured + headroom, see header --
-                                                                     # measured on GCA_002915635.3, not the
-                                                                     # GCF_040938575.1 assembly below, so treat this
-                                                                     # as ballpark, not exact, for this specific file.
-                                                                     # Confirmed to fit node-c01 -- 2026-09-22
-MINIPROT_TIME="${MINIPROT_TIME:-48.h}"                             # Nextflow duration syntax (NOT SLURM's
-                                                                     # HH:MM:SS -- process.time doesn't accept that)
+MINIPROT_MEM_GB="${MINIPROT_MEM_GB:-320}"                          # confirmed to fit node-c01 -- 2026-09-22; that
+                                                                     # run peaked at 355 GB, above this request (the
+                                                                     # cluster doesn't hard-enforce --mem)
+MINIPROT_TIME="${MINIPROT_TIME:-48.h}"
 MINIPROT_EXCLUSIVE="${MINIPROT_EXCLUSIVE-1}"                       # whole-node allocation -- on a cluster that
                                                                      # doesn't hard-enforce --mem, a job this size
                                                                      # can otherwise be OOM-killed by a co-scheduled
                                                                      # neighbour's overshoot even while under its
                                                                      # own cap (see benchmark/memory_profile/submit.sh);
-                                                                     # pass MINIPROT_EXCLUSIVE= (set but empty) to
-                                                                     # disable -- note the missing ':', deliberate:
-                                                                     # with ':-' an explicit empty value can never be
-                                                                     # told apart from "unset", so it'd always fall
-                                                                     # back to the default and the toggle would be
-                                                                     # impossible to actually turn off
+                                                                     # MINIPROT_EXCLUSIVE= (set but empty) disables it
+
 # -M: miniprot's k-mer sampling exponent, trades sensitivity for less RAM
-# (see main.nf --miniprot_m / modules/local/miniprot_align.nf). Leave empty
-# to use miniprot's own default (what the 260 GB figure above was measured
-# at). benchmark/miniprot_m_sweep/ exists to find a value that brings this
-# genome under a smaller RAM ceiling, but per APPLICATION_NOTE_PLAN.md
-# section 2 that sweep hasn't actually been run yet -- so there is no
-# validated M value to default to here. Set one yourself only if
-# MINIPROT_MEM_GB above isn't available on your cluster, and treat the
-# resulting synteny as unverified against the M=default result.
+# (see main.nf --miniprot_m / modules/local/miniprot_align.nf). Chunking
+# caps RAM without that sensitivity cost, so leave this empty unless you
+# have a specific reason; benchmark/miniprot_m_sweep/ measures the tradeoff.
 MINIPROT_M="${MINIPROT_M:-}"
-# --miniprot_chunk_gb: align against ~this many Gb of genome per task, in
-# parallel, instead of one whole-genome index (see main.nf --help and
-# modules/local/miniprot_align.nf). Each chunk task requests ~11 GB per Gb of
-# chunk + 4 GB (3 -> ~37 GB), so it doesn't need MINIPROT_NODE: when this is
-# set, the MINIPROT_ALIGN pin/memory above goes unused and the chunk tasks
-# land anywhere. Leave empty for the single whole-genome job.
-MINIPROT_CHUNK_GB="${MINIPROT_CHUNK_GB:-}"
 # --exclude_target: never pick a same-species comparison genome. The first
 # run's discovery picked the target's own assembly (GCF_040938575.1) as the
 # comparison, i.e. axolotl vs itself; set EXCLUDE_TARGET=1 for a
@@ -117,42 +112,44 @@ if [[ ! -f "$ASSEMBLY_FASTA" ]]; then
     echo "different one if you specifically want another axolotl assembly.)" >&2
     exit 1
 fi
-
-# --assembly must be a plain (uncompressed) FASTA: RENAME_SEQUENCES --
-# the very first process it hits -- runs bin/rename_sequences.py, which
-# does a plain `open(fasta_path)` text read (see its parse_fasta_headers);
-# fed a .gz it doesn't crash cleanly, it reads gzip's binary bytes as text
-# and either throws a UnicodeDecodeError or, worse, silently produces a
-# garbage rename mapping. Decompressed once here (skipped on a rerun/
-# -resume if already done) rather than inside the pipeline itself, so this
-# stays a plain shell concern, not a pipeline one.
-if [[ "$ASSEMBLY_FASTA" == *.gz ]]; then
-    DECOMPRESSED_DIR="/scratch/$USER/quick_synteny_axolotl"
-    DECOMPRESSED_FASTA="$DECOMPRESSED_DIR/$(basename "${ASSEMBLY_FASTA%.gz}")"
-    if [[ ! -f "$DECOMPRESSED_FASTA" ]]; then
-        echo "ASSEMBLY_FASTA is gzipped ($ASSEMBLY_FASTA) -- decompressing once to $DECOMPRESSED_FASTA"
-        mkdir -p "$DECOMPRESSED_DIR"
-        gunzip -c "$ASSEMBLY_FASTA" > "$DECOMPRESSED_FASTA"
-    else
-        echo "Using already-decompressed $DECOMPRESSED_FASTA (from a previous run)"
-    fi
-    ASSEMBLY_FASTA="$DECOMPRESSED_FASTA"
-fi
+# A gzipped --assembly is passed through as is: rename_sequences.py,
+# split_genome.py and miniprot all read gzip directly.
 
 mkdir -p "$SINGULARITY_CACHE" "$OUTDIR"
 
 # per-run resource override, layered on top of -profile slurm (conf/
 # slurm.config) via -c rather than edited in place, so that shipped
 # profile stays correct for every genome that ISN'T this size. withName
-# beats withLabel regardless of file/CLI order, so this cleanly overrides
-# just MINIPROT_ALIGN's inherited 'process_high' values below.
+# beats withLabel and the process's own directives regardless of file/CLI
+# order.
 OVERRIDE_CONFIG="$(mktemp)"
 trap 'rm -f "$OVERRIDE_CONFIG"' EXIT
 
-cluster_opts=("--nodelist=${MINIPROT_NODE}")
-[[ -n "$ACCOUNT" ]] && cluster_opts+=("--account=${ACCOUNT}")
-[[ -n "$MINIPROT_EXCLUSIVE" ]] && cluster_opts+=("--exclusive")
-cluster_opts_str="${cluster_opts[*]}"
+account_opt=""
+[[ -n "$ACCOUNT" ]] && account_opt="--account=${ACCOUNT}"
+
+if [[ -n "$MINIPROT_CHUNK_GB" ]]; then
+    # memory is left to MINIPROT_ALIGN_CHUNK's own per-chunk formula (setting
+    # it here would override that); no node pin -- chunks land anywhere
+    miniprot_block="    withName: 'MINIPROT_ALIGN_CHUNK' {
+        cpus           = ${MINIPROT_CHUNK_CPUS}
+        time           = '${MINIPROT_CHUNK_TIME}'
+        clusterOptions = '${account_opt}'
+    }"
+    miniprot_summary="chunked, ~${MINIPROT_CHUNK_GB} Gb per task (${MINIPROT_CHUNK_CPUS} cpus, ${MINIPROT_CHUNK_TIME}, memory sized per chunk), any node"
+else
+    cluster_opts=("--nodelist=${MINIPROT_NODE}")
+    [[ -n "$account_opt" ]] && cluster_opts+=("$account_opt")
+    [[ -n "$MINIPROT_EXCLUSIVE" ]] && cluster_opts+=("--exclusive")
+    # pinned to the one node with enough RAM -- see MINIPROT_NODE above
+    miniprot_block="    withName: 'MINIPROT_ALIGN' {
+        cpus           = ${MINIPROT_CPUS}
+        memory         = '${MINIPROT_MEM_GB}.GB'
+        time           = '${MINIPROT_TIME}'
+        clusterOptions = '${cluster_opts[*]}'
+    }"
+    miniprot_summary="whole genome on ${MINIPROT_NODE} (${MINIPROT_CPUS} cpus, ${MINIPROT_MEM_GB}GB, ${MINIPROT_TIME}, exclusive=${MINIPROT_EXCLUSIVE:-no})"
+fi
 
 cat > "$OVERRIDE_CONFIG" <<EOF
 process {
@@ -165,19 +162,7 @@ process {
     // earlier one) makes every process submit with no --partition at all.
     queue = null
 
-    withName: 'MINIPROT_ALIGN' {
-        cpus           = ${MINIPROT_CPUS}
-        memory         = '${MINIPROT_MEM_GB}.GB'
-        time           = '${MINIPROT_TIME}'
-        // pinned to the one node with enough RAM -- see MINIPROT_NODE
-        // above -- everything else is left free to land anywhere
-        clusterOptions = '${cluster_opts_str}'
-    }
-    // chunked alignment (MINIPROT_CHUNK_GB): no node pin, the process sizes
-    // its own memory per chunk; only the time cap is raised here
-    withName: 'MINIPROT_ALIGN_CHUNK' {
-        time = '${MINIPROT_TIME}'
-    }
+${miniprot_block}
     // RENAME_SEQUENCES streams the FASTA once (lengths + gaps in the same
     // pass), so RAM stays fine at process_low's default -- but one pass over
     // a ~30 GB FASTA can still run past its 30m default time cap. Time only;
@@ -188,13 +173,12 @@ process {
 }
 EOF
 
-echo "assembly:          $ASSEMBLY_FASTA"
+echo "assembly:           $ASSEMBLY_FASTA"
 echo "taxid:              $TAXID (Ambystoma mexicanum)"
 echo "outdir:             $OUTDIR"
-echo "miniprot node:      $MINIPROT_NODE (MINIPROT_ALIGN: ${MINIPROT_CPUS} cpus, ${MINIPROT_MEM_GB}GB, ${MINIPROT_TIME}, exclusive=${MINIPROT_EXCLUSIVE:-no})"
+echo "miniprot:           $miniprot_summary"
 echo "everything else:    unconstrained (no partitions on this cluster)"
 echo "miniprot_m:         ${MINIPROT_M:-(pipeline default)}"
-echo "miniprot_chunk_gb:  ${MINIPROT_CHUNK_GB:-(off: one whole-genome job)}"
 echo "exclude_target:     ${EXCLUDE_TARGET:-(off)}"
 echo "singularity cache:  $SINGULARITY_CACHE"
 echo
