@@ -63,7 +63,7 @@ starting point: the interactive page embeds both genomes' hit tables and
 re-chains in the browser (a Web Worker running the same `bin/chain.js`), so
 min identity, max gap, hit rank and min block size can all be changed live,
 and the blocks currently on screen downloaded as a TSV. The exact chaining
-rules are specified in `docs/specs/hit_table.md`.
+rules are specified in the header of `bin/chain.js`.
 
 This intentionally replaces a separate ortholog-finding aligner (an earlier
 version of this pipeline used jcvi + LAST) with something cruder but much

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Deterministic test-fixture generator for plan A (pipeline I/O) and plan D
-(chunked miniprot). Standard library only, so it runs unmodified on both the
+"""Deterministic test-fixture generator for the genome-scan tests
+(tests/test_prepare_genome.py) and the chunked-miniprot tests
+(tests/test_chunked_miniprot.sh). Standard library only, so it runs unmodified on both the
 host's Python 3.10 and the pipeline containers' Python 3.13.
 
 Two independent fixture sets, both written to --outdir:

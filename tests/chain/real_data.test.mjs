@@ -1,7 +1,7 @@
 // End-to-end on the real GFF pairs in test_data/ (gitignored; skipped when
 // absent): GFF -> bin/extract_hits.py -> bin/chain.js, plus parity with the
 // bin/chain_blocks.mjs CLI. Coverage/depth floors come from the prototype
-// run of 2026-09-23 (docs/plans/C1_chain_core.md).
+// run of 2026-09-23 (axolotl-vs-itself 98.5 %, thaliana vs suecica 99.7 %).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

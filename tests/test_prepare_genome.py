@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Equivalence test for the one-pass rewrite of bin/rename_sequences.py
-(plan A: pipeline I/O).
+"""Equivalence test for the one-pass rewrite of bin/rename_sequences.py,
+which renames sequences and computes chrom sizes and assembly gaps in a
+single read of the genome.
 
 Compares the new script's output against the two scripts it replaces --
 the old bin/rename_sequences.py (rename + write a renamed FASTA) and the old
 bin/find_assembly_gaps.py (gap scan over that renamed FASTA), both fetched
 straight from git at commit eac2c86 so there's no risk of testing against a
 stale local copy -- plus faSize -detailed, run through the ucsc-fasize
-container per docs/plans/README.md, as the oracle for --out_sizes.
+container (quay.io/biocontainers/ucsc-fasize:482--h0b57e2e_0), as the oracle
+for --out_sizes.
 
 Plain asserts, no pytest, no third-party libraries: this has to run
 unmodified under both the host's Python 3.10 and the pipeline containers'

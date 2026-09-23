@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Pipeline entry point for bin/chain.js: chains one comparison (two genomes'
 // hit tables, or one genome against itself with --self) and writes
-// links.tsv (docs/specs/hit_table.md section 5). Any parameter left out is
+// links.tsv (bin/chain.js's OUTPUTS header). Any parameter left out is
 // auto-tuned by SYNCHAIN.autoParams, the same function the interactive page
 // uses for its initial control values.
 import fs from 'node:fs';

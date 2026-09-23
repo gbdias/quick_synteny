@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Checks for bin/extract_hits.py against a hand-made miniprot-style GFF
-(docs/specs/hit_table.md section 1). Plain asserts; run with
+(the format is specified in its docstring). Plain asserts; run with
 `python3 tests/test_extract_hits.py`."""
 import gzip
 import os

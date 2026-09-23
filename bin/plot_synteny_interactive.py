@@ -26,8 +26,8 @@ chromosomes cycle through, and a numeric spinner recolors every panel by
 cycling through 1-MAX_COLORS discrete colors from whichever one is active
 instead of one color per chromosome; a min-block-size spinner filters every
 panel down to blocks with at least that many supporting anchors -- since
-extraction is independent of the minimum block size (docs/specs/hit_table.md
-section 4.6), the chainer is always run at minBlock=3 and this spinner is a
+extraction is independent of the minimum block size (bin/chain.js's
+CHAINING RULES header, rule 6), the chainer is always run at minBlock=3 and this spinner is a
 pure client-side filter on the result (see SYN.data.ribbons, built by
 SYN.buildRingLayout from whatever SYN.applyChainResult most recently put in
 SYN.data.linksByQuery/linksByReference, and SYN.buildOverviewRibbons). Min
@@ -51,7 +51,7 @@ reuses, so the browser can rebuild an arbitrary (pivot side, pivot chromosome,
 color count, min block size, chromosome order) combination instead of only
 combinations precomputed ahead of time. Python never computes any geometry,
 nor any synteny block, at all: it only ships each genome's raw hit table
-(docs/specs/hit_table.md section 6, SYN.hitsPayload) plus chromosome sizes
+(bin/chain.js's EMBEDDED PAYLOAD header, SYN.hitsPayload) plus chromosome sizes
 and palette indices, as embedded JSON, and inlines bin/chain.js so the browser
 can chain (and re-chain, on every parameter change) client-side, in a Web
 Worker when one is available -- see SYN.startChainer/SYN.applyChainResult.
@@ -229,11 +229,11 @@ HITS_TSV_HEADER = ['chrom', 'start', 'end', 'strand', 'positive', 'identity', 's
 
 
 def read_hits_tsv(raw_bytes):
-    """Parses one bin/extract_hits.py output (docs/specs/hit_table.md section
-    1) already read into memory as raw gzip bytes -- into per-column lists,
-    in TSV row order (already sorted by (chrom, start, end, protein, rank),
+    """Parses one bin/extract_hits.py output (format: that script's
+    docstring), already read into memory as raw gzip bytes, into per-column
+    lists, in TSV row order (already sorted by (chrom, start, end, protein, rank),
     see that script). `identity`/`score` aren't part of the in-memory
-    HitTable (spec section 2) and are dropped here."""
+    HitTable (bin/chain.js's HIT TABLE header) and are dropped here."""
     text = gzip.decompress(raw_bytes).decode('utf-8')
     lines = text.split('\n')
     header = lines[0].split('\t')
@@ -252,7 +252,7 @@ def read_hits_tsv(raw_bytes):
 
 
 def encode_hits_column(values, dtype):
-    """One GenomeColumns column (docs/specs/hit_table.md section 6): little-
+    """One GenomeColumns column (bin/chain.js's EMBEDDED PAYLOAD header): little-
     endian typed array, gzip'd, base64'd. numpy is used only for the
     explicit little-endian dtypes and fast bulk casting -- it ships in the
     bokeh container (see modules/local/pygenomeviz_plot.nf)."""
@@ -262,13 +262,13 @@ def encode_hits_column(values, dtype):
 
 
 def widened_dtype(values, narrow, wide, limit):
-    """spec section 6: startDelta/length are u32, f64 "if any value >= 2**32"
+    """bin/chain.js's EMBEDDED PAYLOAD header: startDelta/length are u32, f64 "if any value >= 2**32"
     (a chromosome bigger than 4.29 Gb)."""
     return wide if values and max(values) >= limit else narrow
 
 
 def build_genome_columns(hits, chrom_names, prot_index):
-    """One GenomeColumns dict (docs/specs/hit_table.md section 6) for a
+    """One GenomeColumns dict (bin/chain.js's EMBEDDED PAYLOAD header) for a
     single genome's parsed hit table (read_hits_tsv). chrom_names is that
     genome's FULL chrom.sizes-order name list (Dataset's own *_chroms_natural,
     not filtered by --min_seq_size or anything else) -- read_hits_tsv's rows
@@ -278,7 +278,7 @@ def build_genome_columns(hits, chrom_names, prot_index):
     n = len(hits['chrom'])
     chrom_idx = [chrom_index[c] for c in hits['chrom']]
 
-    # startDelta (spec section 6): start minus the previous row's start on
+    # startDelta (bin/chain.js's EMBEDDED PAYLOAD header): start minus the previous row's start on
     # the same chrom, first row per chrom relative to 0 -- rows are already
     # grouped by chrom (TSV row order, see read_hits_tsv's docstring)
     start_delta = [0] * n
@@ -311,7 +311,7 @@ def build_genome_columns(hits, chrom_names, prot_index):
 
 
 def build_hits_payload(target_hits_path, comparison_hits_path, target_chrom_names, comparison_chrom_names):
-    """SYN.hitsPayload (docs/specs/hit_table.md section 6) -- the one thing
+    """SYN.hitsPayload (bin/chain.js's EMBEDDED PAYLOAD header) -- the one thing
     Python ships instead of precomputed links/blocks. `reference:
     'same_as_target'` (skipping a second, redundant copy of the same bytes)
     only when both the raw hit tables AND the two genomes' chrom.sizes
@@ -329,8 +329,8 @@ def build_hits_payload(target_hits_path, comparison_hits_path, target_chrom_name
     target_hits = read_hits_tsv(target_bytes)
     comparison_hits = None if same_genome else read_hits_tsv(open(comparison_hits_path, 'rb').read())
 
-    # union of both genomes' accessions, sorted lexicographically (spec
-    # section 2) -- ASCII protein accessions sort identically under Python's
+    # union of both genomes' accessions, sorted lexicographically (bin/chain.js's
+    # HIT TABLE header) -- ASCII protein accessions sort identically under Python's
     # code-point order and JS's default (UTF-16 code unit) Array.sort()
     all_proteins = set(target_hits['protein']) | (set(comparison_hits['protein']) if comparison_hits else set())
     proteins = sorted(all_proteins)
@@ -601,7 +601,7 @@ SYN.recolorSubjectWedges = function(k, subjectSource) {
 // SYN.data.ribbons holds EVERY ribbon (built by SYN.buildRingLayout from
 // whatever SYN.applyChainResult most recently put in SYN.data.linksByQuery/
 // targetHomeologLinks/referenceHomeologLinks -- the chainer is always run at
-// minBlock=3, docs/specs/hit_table.md section 4.6's least strict floor), so
+// minBlock=3, the least strict floor rule 6 of bin/chain.js's CHAINING RULES allows), so
 // filtering by min block size, recoloring by the current color count, and
 // showing/hiding self-links (is_homeolog records -- a protein hitting two
 // loci within the SAME genome) all happen together here, client-side, on
@@ -1886,15 +1886,15 @@ SYN.applyStats = function(targetLabel, referenceLabel, statsDiv) {
     statsDiv.text = SYN.buildStatsHtml(targetLabel, referenceLabel);
 };
 
-// ---- client-side chaining (docs/specs/hit_table.md): decode the embedded
+// ---- client-side chaining (bin/chain.js's header): decode the embedded
 // hit tables, chain them (in a Web Worker when available) at load and on
 // every min-identity/max-gap/hit-rank change, and hand the result to the
 // same buildRingLayout/buildDotplotSegmentsForLayout/buildDetailData
 // functions above -- no separate render path for "the first chain" vs
 // "a re-chain after a control change". ----
 
-// the chainer is always run at this minBlock (docs/specs/hit_table.md
-// section 4.6: extraction doesn't depend on it, so this is the least
+// the chainer is always run at this minBlock (bin/chain.js's
+// CHAINING RULES header, rule 6: extraction doesn't depend on it, so this is the least
 // strict floor that still excludes single/double-anchor noise) -- the min
 // block size control is a pure client-side filter on top of the reply (see
 // SYN.data.ribbons' own comment above), never a reason to re-chain.
@@ -1962,7 +1962,7 @@ self.onmessage = function(e) {
 
 // Three chainers sharing the decoded tables: cross (target vs reference)
 // plus each genome's own self-comparison (homeologs) -- createChainer's own
-// per-stage caching (docs/specs/hit_table.md section 3's own note on this)
+// per-stage caching (see createChainer in bin/chain.js)
 // means a min-identity/max-gap/hit-rank change that doesn't move the anchor
 // set at all (rare, but e.g. a repeated hit-rank click) costs next to
 // nothing on a later .run() call. Used only by SYN.startChainer's
@@ -2093,7 +2093,7 @@ SYN.groupLinksBy = function(links, key) {
 SYN.applyChainResult = function(msg) {
     const ui = SYN.ui;
     // kept flat (sorted, chain.js's own compareBlocks order -- see
-    // docs/specs/hit_table.md section 5) so SYN.exportBlocksTsv can filter
+    // bin/chain.js's OUTPUTS header) so SYN.exportBlocksTsv can filter
     // and re-serialize it without needing to flatten linksByQuery back out
     // in some arbitrary (and here, non-deterministic: Object.values order)
     // order of its own.
@@ -2148,7 +2148,7 @@ SYN.updateChainStatus = function() {
 
 // "the cross blocks currently on screen (min block size filter applied)"
 // (the plan's own wording) -- SYN.data.crossLinksFlat is already sorted in
-// exactly the order docs/specs/hit_table.md section 5 specifies (it's
+// exactly the order bin/chain.js's OUTPUTS header specifies (it's
 // chain.js's own blocksToLinks output, untouched -- see SYN.applyChainResult),
 // and filtering a sorted list by a monotonic predicate preserves that order,
 // so this is byte-identical to a fresh `node bin/chain_blocks.mjs --min_block
@@ -2477,7 +2477,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                              options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
     color_spinner = Spinner(title="Colors", low=1, high=MAX_COLORS,
                              step=1, value=DEFAULT_COLORS, width=TOP_CONTROL_WIDTH)
-    # Chain parameters (docs/specs/hit_table.md section 3) -- min identity,
+    # Chain parameters (bin/chain.js's PARAMETERS header) -- min identity,
     # max gap, and hit rank each trigger a fresh client-side re-chain
     # (SYN.requestChain); min block size is a pure post-filter (see
     # SYN.data.ribbons' own comment above) and never re-chains. min_identity/
@@ -2495,7 +2495,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                value=max_gap, width=TOP_CONTROL_WIDTH)
     HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
     hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=TOP_CONTROL_WIDTH)
-    # low=3: docs/specs/hit_table.md's MIN_CHAIN_LENGTH is 2, but a 2-anchor
+    # low=3: bin/chain.js's MIN_CHAIN_LENGTH is 2, but a 2-anchor
     # chain is barely evidence of anything -- 3 is this control's own floor,
     # independent of the (always looser) minBlock=3 every chain request
     # itself is run at (see SYN.data.ribbons' own comment above). high is a
@@ -2536,7 +2536,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                                height=TOOLBAR_CONTROL_HEIGHT)
     # Exports the cross blocks currently on screen (min block size filter
-    # applied) as a links.tsv (docs/specs/hit_table.md section 5) -- lives on
+    # applied) as a links.tsv (bin/chain.js's OUTPUTS header) -- lives on
     # the dotplot row since that's the panel showing every cross-genome block
     # at once, unlike the ring (also self-links) or the zoom panel (one
     # pivot/pair at a time). See SYN.exportBlocksTsv.
@@ -3266,16 +3266,16 @@ def main():
     parser.add_argument('--subject_chrom_sizes', required=True)
     parser.add_argument('--target_hits', required=True,
                          help="bin/extract_hits.py output for the target genome "
-                              "(docs/specs/hit_table.md section 1) -- embedded as SYN.hitsPayload "
-                              "(section 6) and chained client-side; Python never chains anything")
+                              "(format: that script's docstring) -- embedded as SYN.hitsPayload "
+                              "and chained client-side; Python never chains anything")
     parser.add_argument('--comparison_hits', required=True, help='ditto, for the reference genome')
     parser.add_argument('--min_identity', type=float, default=None,
                          help='initial Min identity (%%) control value, as a 0-1 fraction -- '
                               'default (unset): SYNCHAIN.autoParams picks it client-side from the '
                               'actual hit tables')
     parser.add_argument('--max_gap', type=int, default=25,
-                         help='initial Max gap (genes) control value (docs/specs/hit_table.md '
-                              'section 3)')
+                         help="initial Max gap (genes) control value (bin/chain.js's PARAMETERS "
+                              "header)")
     parser.add_argument('--min_block', type=int, default=None,
                          help='initial Min block size control value -- default (unset): '
                               'SYNCHAIN.autoParams picks it client-side, same as --min_identity')

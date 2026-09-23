@@ -1,18 +1,35 @@
 #!/usr/bin/env python3
 """Turn one genome's miniprot GFF into the per-genome hit table that
-bin/chain.js chains -- the contract is docs/specs/hit_table.md section 1.
+bin/chain.js chains (its header specifies everything downstream of this
+file). This docstring is the specification of the file format itself.
 
-One row per miniprot mRNA (one alignment of one proteome protein) on a
-sequence kept in chrom.sizes, plus a threshold-independent `locus` id:
-hits on the same chrom and strand whose coding exons (CDS rows) overlap are
-the same locus. Isoforms share coding exons, so they collapse into one
-locus and can't count twice as independent synteny evidence; a gene nested
-in another gene's intron shares no exon with it, so it stays separate --
-which overlapping mRNA *spans* would not give, since in large genomes a
-single span can cover several neighbouring genes.
+<role>.hits.tsv.gz -- gzip'd TSV, header line exactly:
+    chrom  start  end  strand  positive  identity  score  rank  protein  locus
+one row per miniprot mRNA (one alignment of one proteome protein) whose
+seqid is in chrom.sizes (anything dropped by --min_seq_size is excluded):
+    chrom     GFF column 1 (renamed ID)
+    start     GFF column 4 - 1 (0-based)
+    end       GFF column 5 (half-open)
+    strand    GFF column 7
+    positive  Positive= to 4 dp (Identity= if absent)
+    identity  Identity= to 4 dp
+    score     GFF column 6, miniprot's alignment score
+    rank      Rank= (default 1)
+    protein   first token of Target=
+    locus     see below
+Rows are sorted by (chrom index in chrom.sizes order, start, end, protein,
+rank), and the gzip mtime is fixed, so identical input gives byte-identical
+output.
 
-Output is a gzip'd TSV written with a fixed gzip mtime, so identical input
-gives byte-identical output.
+locus is threshold-independent: hits on the same chrom and strand whose
+coding exons (CDS rows, joined via Parent=) overlap by >= 1 bp are one locus,
+transitively; an mRNA without CDS rows uses its own span. Ids run 0..L-1 in
+order of (chrom index, locus min start, locus max end, smallest row index).
+Isoforms share coding exons, so they collapse into one locus and can't count
+twice as independent synteny evidence; a gene nested in another gene's
+intron shares no exon with it, so it stays separate -- which overlapping mRNA
+*spans* would not give, since in large genomes a single span can cover
+several neighbouring genes.
 """
 import argparse
 import gzip
@@ -135,8 +152,9 @@ def main():
     chrom_names = sorted(chrom_index, key=chrom_index.get)
     hits, cds, n_dropped = parse_gff(args.gff, chrom_index)
 
-    # row order (spec 1): chrom, start, end, protein, rank -- then score and
-    # original position so the order is total even for degenerate duplicates
+    # row order (see the module docstring): chrom, start, end, protein, rank --
+    # then score and original position so the order is total even for
+    # degenerate duplicates
     order = sorted(range(len(hits)), key=lambda i: (hits[i][0], hits[i][1], hits[i][2], hits[i][8],
                                                     hits[i][7], -hits[i][6], i))
     rows = [hits[i] for i in order]

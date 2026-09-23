@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Split a genome FASTA into size-capped chunks for MINIPROT_ALIGN_CHUNK
-(plan D: chunked miniprot) -- so each chunk's miniprot index is a fraction
+(--miniprot_chunk_gb) -- so each chunk's miniprot index is a fraction
 of the whole genome's, capping peak alignment RAM (~10 GB per Gb of genome,
 dominated by the index).
 
@@ -24,7 +24,7 @@ chunk order -- no header line, same convention as rename_sequences.py's
 --out_sizes/--out_gaps) and total_length.txt (the whole genome's length, a
 single integer -- MINIPROT_ALIGN_CHUNK needs this for its -G max-intron
 formula, which is defined on the WHOLE genome's length, not a chunk's; see
-that process and docs/plans/D_chunked_miniprot.md).
+that process).
 """
 import argparse
 import gzip

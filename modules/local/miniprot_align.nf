@@ -55,7 +55,7 @@ process MINIPROT_ALIGN {
 // The point is peak RAM: miniprot's index is ~10 GB per Gb of genome, so
 // aligning against N smaller chunks instead of one whole-genome index caps
 // peak RSS per task at roughly (chunk size / N) instead of the whole
-// genome -- see docs/plans/D_chunked_miniprot.md. Per-chunk outputs are a
+// genome. Per-chunk outputs are a
 // superset of the whole-genome output (same --outs/-N filters, applied to
 // a smaller index), so MERGE_MINIPROT_GFF re-applies both filters globally
 // to recover a result equivalent to one whole-genome run -- see that

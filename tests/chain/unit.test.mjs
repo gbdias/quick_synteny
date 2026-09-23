@@ -1,6 +1,6 @@
 // Behavioural unit tests for bin/chain.js, including regressions for the
-// defects found in the old bin/build_synteny_blocks.py chainer (see
-// prototypes/chain/probe.py): inversions reported as '+', gene-sparse
+// defects found in the old bin/build_synteny_blocks.py chainer (removed; see
+// git history): inversions reported as '+', gene-sparse
 // genomes yielding no blocks, and a tandem family aborting its whole
 // chromosome pair.
 import test from 'node:test';
@@ -147,7 +147,7 @@ test('every anchor lands in exactly one chain', () => {
     for (const b of r.blocks) { for (const m of b.members) { assert.equal(seen[m], 0); seen[m] = 1; } }
 });
 
-test('autoParams follows the spec rules', () => {
+test('autoParams follows the PARAMETERS rules', () => {
     const a = collinear(10, 30_000).map((h) => ({...h, positive: 0.7}));
     const [A, B] = tablesFrom(a, onB(a).map((h) => ({...h, positive: 0.95})));
     const p = SYNCHAIN.autoParams(A, B);
@@ -157,7 +157,7 @@ test('autoParams follows the spec rules', () => {
     assert.equal(SYNCHAIN.autoParams(B).minBlock, 15);
 });
 
-// ---- embedded payload (spec 6) round trip, with a reference encoder
+// ---- embedded payload (bin/chain.js's EMBEDDED PAYLOAD header) round trip, with a reference encoder
 
 function encodeColumn(arr, dtype) {
     const bytes = Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);

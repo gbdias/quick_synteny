@@ -1,6 +1,6 @@
 // plot_synteny_interactive.py embeds each genome's hit table (from
-// BUILD_SYNTENY's EXTRACT_HITS) directly -- docs/specs/hit_table.md section
-// 6 -- and chains them client-side (bin/chain.js, inlined into the page), so
+// BUILD_SYNTENY's EXTRACT_HITS) directly -- see bin/chain.js's EMBEDDED
+// PAYLOAD header -- and chains them client-side (bin/chain.js, inlined into the page), so
 // this module ships raw hits, not precomputed links/blocks. build_synteny.nf
 // still emits links.tsv/slider_links.tsv for other consumers (e.g.
 // benchmark/miniprot_m_sweep/compare_links.py), just not this one.

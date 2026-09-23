@@ -252,8 +252,7 @@ workflow {
         // Chunked path: split each genome into ~miniprot_chunk_gb-sized
         // pieces, align each in its own (smaller-index, lower-RAM) miniprot
         // task, then merge back into a GFF equivalent to a whole-genome run
-        // -- see modules/local/miniprot_align.nf and
-        // docs/plans/D_chunked_miniprot.md.
+        // -- see modules/local/miniprot_align.nf.
         def target_chunk_bp = Math.round(params.miniprot_chunk_gb * 1_000_000_000)
 
         split_ch = SPLIT_GENOME(genomes_in, target_chunk_bp)

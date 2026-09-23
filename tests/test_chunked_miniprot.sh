@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Acceptance checks 1-3 for plan D (chunked miniprot) --
-# docs/plans/D_chunked_miniprot.md. Checks 4 (DAG -preview) and 5 (full
-# local pipeline run, unchunked vs --miniprot_chunk_gb) are separate manual
-# steps using the commands documented in that plan and in
-# docs/plans/README.md's "Status" section.
+# Checks for chunked miniprot (--miniprot_chunk_gb): (1) miniprot's -I equals
+# the explicit -G formula the chunk tasks use, (2) chunked + merged output
+# equals a single whole-genome run, (3) merge_miniprot_gff.py unit cases.
+# The end-to-end check -- the whole pipeline, unchunked vs chunked, giving an
+# identical links.tsv -- is a separate full Nextflow run.
 #
-# Needs docker (every miniprot call goes through the miniprot container, per
-# docs/plans/README.md) and python3. Invoke as:
+# Needs docker (every miniprot call goes through the
+# quay.io/biocontainers/miniprot:0.18--h577a1d6_0 container) and python3.
+# Invoke as:
 #   bash tests/test_chunked_miniprot.sh
 set -euo pipefail
 

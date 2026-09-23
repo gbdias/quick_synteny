@@ -1,11 +1,106 @@
 // Synteny chainer over per-genome hit tables -- the only implementation,
 // shared by the pipeline (node, via bin/chain_blocks.mjs) and the
-// interactive page (inlined into the HTML and run in a Web Worker). The
-// contract -- table layout, parameters, and the exact chaining semantics --
-// is docs/specs/hit_table.md; everything here follows its section numbers.
+// interactive page (inlined into the HTML and run in a Web Worker). This
+// header is the contract every producer and consumer follows; the on-disk
+// hit-table format itself is specified in bin/extract_hits.py's docstring.
+// Changing any rule below means bumping VERSION.
 //
 // Dependency-free and DOM-free on purpose: the same source text must run
 // as a CommonJS module, a classic <script>, and a Worker body.
+//
+// HIT TABLE (in memory; built by makeTables from the TSV, or by
+// decodePayload from the page's embedded copy -- both must give identical
+// arrays):
+//   {name, chromNames (chrom.sizes order), chromSizes, n,
+//    chrom: Uint16 (index into chromNames), start/end: Float64 (exact bp,
+//    safe beyond 4.29 Gb), strand: Uint8 (1 '+', 0 '-'),
+//    positive: Uint16 (round(Positive * 10000)), rank: Uint8 (min(Rank, 255)),
+//    prot: Uint32 (index into the shared proteins list), locus: Uint32, nLoci}
+//   proteins: the union of both genomes' accessions, sorted, shared by both
+//   tables of a comparison. Rows keep the TSV order. prepareTable attaches
+//   derived indexes under _idx; nothing outside this file may rely on them.
+//
+// PARAMETERS:
+//   minPositive  0-1          a hit passes only if positive >= minPositive
+//   maxHitRank   int >= 1     ... and rank <= maxHitRank (default 255: all)
+//   maxGap       int (genes)  max gene-rank step between consecutive chain
+//                             members, on both genomes (default 25)
+//   maxLookback  int          max valid predecessors examined per anchor (50)
+//   gapPenalty   float >= 0   score cost per skipped gene (default 0)
+//   minBlock     int (loci)   minimum chain length reported as a block
+//   selfMode     bool         both sides are the same table (homeolog scan)
+//   Auto defaults (autoParams): meanBest(T) = mean over proteins of their
+//   rank-1 positive (best positive if no rank-1 hit); w = min over the two
+//   genomes (just the one genome in self mode); minPositive = clamp(w, 0.3,
+//   0.9); minBlock = w >= 0.8 ? 15 : 5. Checked 2026-09-23: at minBlock 15,
+//   axolotl-vs-itself gives 22 blocks (one per chromosome arm, 98.5 %
+//   coverage) and A. thaliana vs the allotetraploid A. suecica gives depth
+//   1.99 (its two subgenomes); at 5, Arabidopsis's short ancient-duplication
+//   blocks join in (depth 2.72). The divergent-pair value (5) is unchecked.
+//   gapPenalty stays 0 by default: 0.1 removes the end-extension noise of
+//   note (b) below on synthetic data at no recall cost, but on thaliana vs
+//   suecica it also splits real, gappy ancient-duplication blocks (depth
+//   2.72 -> 2.15). The page runs one parameter set for all three of its
+//   chains (cross and both self), initialised from the cross auto values.
+//
+// CHAINING RULES (normative):
+//   1. A locus passes if any of its hits passes. A passing locus's gene rank
+//      is its 1-based position among passing loci of its chromosome, in
+//      locus-id order; other loci have no rank.
+//   2. Anchors: for each protein, every (passing hit a in A, passing hit b in
+//      B), collapsed to one per (locusA, locusB) keeping the highest
+//      min(positive_a, positive_b); ties -> lower rank_a + rank_b, then lower
+//      a, then lower b.
+//   3. Self mode keeps only locusA < locusB and drops same-chromosome pairs
+//      with |rankA - rankB| <= maxGap (tandem neighbours).
+//   4. DP per (chromA, chromB) and orientation o in {+, -}, anchors sorted by
+//      (rankA, rankB): for anchor i, scan earlier anchors j backwards,
+//      stopping at the first with rankA_i - rankA_j > maxGap or after
+//      maxLookback valid predecessors. j is valid iff rankA_i - rankA_j >= 1
+//      and 1 <= dB <= maxGap, dB = rankB_i - rankB_j for '+' and
+//      rankB_j - rankB_i for '-'. f_i = max(1, max_j f_j + 1 -
+//      gapPenalty * (max(dA, dB) - 1)); the first j found wins ties.
+//   5. Extraction: all (anchor, orientation) pairs by f descending, ties '+'
+//      first, then lower anchor index. From each still-unused anchor, walk
+//      parent links marking anchors used, stopping at the first used one;
+//      each walk is one chain. Anchors are marked whatever the chain length.
+//   6. Blocks are chains with length >= minBlock. Since extraction ignores
+//      minBlock, the blocks at threshold T are exactly the blocks at any
+//      T' < T filtered to length >= T -- a min-block control is a pure filter.
+//   7. Strict monotonicity on both genomes makes every chain member a distinct
+//      locus on both sides, so block size = number of independent loci.
+//   Consequences (both covered by tests/chain/):
+//   (a) Gene deserts don't break chains: distance counts passing loci, so two
+//       genes with nothing between them are adjacent however many bp apart.
+//       That is what makes chaining genome-size invariant (a bp limit found
+//       0.3 % of axolotl-vs-itself; this finds 98.5 %).
+//   (b) Noise can extend a block's ends, never its interior: monotonicity
+//       only leaves room beyond a block's last true gene. On the synthetic
+//       benchmark all false members sit within 2 positions of an end.
+//
+// OUTPUTS: Block = {qChrom, sChrom (chrom indices), qStart, qEnd, sStart,
+//   sEnd (min start / max end over member hits), orientation, nAnchors
+//   (chain length), meanPositive (mean of min(positive_a, positive_b)),
+//   anchorDensity (nAnchors per Mb of query span, span floored at 1 bp),
+//   members (anchor indices in chain order)}. blocksToLinks gives the link
+//   objects the page renders ({q_chrom, ..., score: nAnchors, orientation,
+//   mean_identity, anchor_density}); links.tsv (blocksToTsv, the node CLI)
+//   keeps the historical 10-column format, mean_identity to 4 dp,
+//   anchor_density to 2 dp, rows ordered by (query chrom index, query start,
+//   subject chrom index, subject start, orientation).
+//
+// EMBEDDED PAYLOAD (SYN.hitsPayload, written by plot_synteny_interactive.py,
+// read by decodePayload):
+//   {version, proteins: b64(gzip('\n'-joined accessions)),
+//    genomes: {target: GenomeColumns, reference: GenomeColumns | 'same_as_target'}}
+//   GenomeColumns = {n, nLoci, cols: {name: {dtype: u8|u16|u32|f64,
+//   data: b64(gzip(little-endian bytes))}}}, with columns chrom (u16),
+//   startDelta (u32: start minus the previous row's start on the same chrom,
+//   first row of a chrom relative to 0; f64 if any value >= 2^32), length
+//   (u32 end - start, f64 if needed), strand (u8), positive (u16), rank (u8),
+//   prot (u32), locus (u32). 'same_as_target' only when both genomes' hit
+//   tables and chrom.sizes orders are identical. Chrom names/sizes come from
+//   the page's own size tables.
 (function (root) {
     'use strict';
 
@@ -37,7 +132,7 @@
         return rows;
     }
 
-    // Builds HitTables (spec 2) from parsed TSV rows for one comparison --
+    // Builds HitTables (HIT TABLE above) from parsed TSV rows for one comparison --
     // two genomes, or one for a self-comparison. The protein list is the
     // sorted union of every genome's accessions, so prot indices are shared.
     // chromNames defaults to first appearance order, which is chrom.sizes
@@ -97,7 +192,7 @@
     // ---------------------------------------------------------------- params
 
     // mean over proteins of the rank-1 positive (falling back to the best
-    // positive for a protein without a rank-1 hit) -- spec 3
+    // positive for a protein without a rank-1 hit) -- see PARAMETERS above
     function meanBestPositive(t) {
         const r1 = new Map(), best = new Map();
         for (let i = 0; i < t.n; i++) {
@@ -165,7 +260,7 @@
         return {rank: r, maxRank};
     }
 
-    // spec 4.1-4.3: one anchor per (locusA, locusB), ordered by (chrom pair, rankA, rankB)
+    // CHAINING RULES 1-3: one anchor per (locusA, locusB), ordered by (chrom pair, rankA, rankB)
     function buildAnchors(A, B, q) {
         const thr = q._minPositiveInt, mr = q.maxHitRank, self = q.selfMode;
         const LA = locusRanks(A, thr, mr), LB = self ? LA : locusRanks(B, thr, mr);
@@ -173,7 +268,7 @@
         const pass = (t, i) => t.positive[i] >= thr && t.rank[i] <= mr;
         const offB = B._idx.protOff, byB = B._idx.byProt;
 
-        // best candidate per (locusA, locusB); tie-breaks per spec 4.2
+        // best candidate per (locusA, locusB); tie-breaks per rule 2
         const bestOf = new Map();
         const cHa = [], cHb = [], cQ = [], cR = [];
         for (let a = 0; a < A.n; a++) {
@@ -262,7 +357,7 @@
             s = e;
         }
 
-        // spec 4.5: candidates c = o*n + i, by f descending, ties by c
+        // rule 5: candidates c = o*n + i, by f descending, ties by c
         // ascending ('+' first, then lower anchor index)
         let cand;
         if (pen === 0) {
@@ -330,7 +425,7 @@
 
     // ---------------------------------------------------------------- driver
 
-    // Caches each stage by the parameters it depends on (spec 4): anchors
+    // Caches each stage by the parameters it depends on (CHAINING RULES): anchors
     // by (minPositive, maxHitRank, and maxGap in self mode), chains by the
     // anchor key plus (maxGap, maxLookback, gapPenalty); minBlock is a pure
     // filter over the cached chains, so changing it re-chains nothing.
@@ -393,7 +488,7 @@
 
     // ---------------------------------------------------------------- outputs
 
-    // link objects in the shape the page already renders (spec 5)
+    // link objects in the shape the page already renders (OUTPUTS above)
     function blocksToLinks(result) {
         const A = result.A, B = result.B;
         return result.blocks.map((b) => ({
@@ -418,7 +513,7 @@
 
     function blocksToTsv(result) { return linksToTsv(blocksToLinks(result)); }
 
-    // ---------------------------------------------------------------- embedded payload (spec 6)
+    // ---------------------------------------------------------------- embedded payload (EMBEDDED PAYLOAD above)
 
     function b64ToBytes(b64) {
         if (typeof atob === 'function') {

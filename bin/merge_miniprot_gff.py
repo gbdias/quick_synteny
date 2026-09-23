@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Merge per-chunk miniprot GFFs (plan D: chunked miniprot) back into one
+"""Merge per-chunk miniprot GFFs (--miniprot_chunk_gb) back into one
 GFF equivalent to a single whole-genome miniprot run.
 
-Why this is exact (docs/plans/D_chunked_miniprot.md): for each query
+Why this is exact: for each query
 protein, miniprot keeps alignments with score >= --outs * bestScore, up to
 -N secondaries. A hit in the GLOBAL top N+1 is also in its own chunk's top
 N+1 (a chunk's best score for that protein is <= the whole genome's best),

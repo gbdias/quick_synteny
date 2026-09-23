@@ -3,7 +3,7 @@
 // every protein's hit positions in the two genomes ARE the synteny anchors.
 // bin/extract_hits.py turns each GFF into a per-genome hit table, and
 // bin/chain.js (via bin/chain_blocks.mjs) chains them -- the same chainer the
-// interactive page runs client-side. Contract: docs/specs/hit_table.md.
+// interactive page runs client-side. Contract: bin/chain.js's header.
 
 // CHAIN_* run conda-forge's nodejs 26.8.2 from Seqera Containers, the same
 // way RENDER_SYNTENY_INTERACTIVE gets bokeh (see pygenomeviz_plot.nf for why
@@ -21,7 +21,7 @@
 // the published result at the run's parameters; the *.slider_*links.tsv
 // files are chained with --min_block 5 for downstream comparisons
 // (benchmark/miniprot_m_sweep/compare_links.py): extraction in chain.js is
-// independent of the minimum block size (spec section 4.6), so the blocks
+// independent of the minimum block size (bin/chain.js's CHAINING RULES header, rule 6), so the blocks
 // at any higher threshold are exactly that file's blocks with score >= it.
 
 process EXTRACT_HITS {
