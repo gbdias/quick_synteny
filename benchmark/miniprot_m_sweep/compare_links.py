@@ -4,13 +4,13 @@
 
 Reads the pipeline's own slider_links.tsv format directly (same file
 bin/chain_blocks.mjs writes and plot_synteny_interactive.py reads --
-query_chrom, query_start, query_end, subject_chrom, subject_start,
-subject_end, score, orientation, mean_identity, anchor_density), so this
+target_chrom, target_start, target_end, reference_chrom, reference_start,
+reference_end, score, orientation, mean_identity, anchor_density), so this
 runs unmodified against real pipeline output, not a bespoke re-derivation.
 
 One file is the baseline (normally the M=default run). Every other file is
-scored against it: blocks are matched by (query_chrom, subject_chrom) plus a
-reciprocal query-span overlap fraction -- deliberately NOT requiring an exact
+scored against it: blocks are matched by (target_chrom, reference_chrom) plus a
+reciprocal target-span overlap fraction -- deliberately NOT requiring an exact
 coordinate match, since a different -M value chains a slightly different
 anchor set and will not reproduce byte-identical block boundaries even when
 it has found "the same" underlying synteny signal.
@@ -39,10 +39,10 @@ def read_links(path):
                 continue
             fields = line.split("\t")
             row = dict(zip(header, fields))
-            row["query_start"] = int(row["query_start"])
-            row["query_end"] = int(row["query_end"])
-            row["subject_start"] = int(row["subject_start"])
-            row["subject_end"] = int(row["subject_end"])
+            row["target_start"] = int(row["target_start"])
+            row["target_end"] = int(row["target_end"])
+            row["reference_start"] = int(row["reference_start"])
+            row["reference_end"] = int(row["reference_end"])
             row["score"] = int(row["score"])
             row["mean_identity"] = float(row["mean_identity"])
             row["anchor_density"] = float(row["anchor_density"])
@@ -62,10 +62,10 @@ def overlap_frac(a, b, start_key, end_key):
 
 
 def blocks_match(a, b, min_overlap):
-    if a["query_chrom"] != b["query_chrom"] or a["subject_chrom"] != b["subject_chrom"]:
+    if a["target_chrom"] != b["target_chrom"] or a["reference_chrom"] != b["reference_chrom"]:
         return False
-    q = overlap_frac(a, b, "query_start", "query_end")
-    s = overlap_frac(a, b, "subject_start", "subject_end")
+    q = overlap_frac(a, b, "target_start", "target_end")
+    s = overlap_frac(a, b, "reference_start", "reference_end")
     return q >= min_overlap and s >= min_overlap
 
 
@@ -74,21 +74,21 @@ def match_greedy(baseline, other, min_overlap):
     (matched_pairs, baseline_only, other_only)."""
     by_pair = defaultdict(list)
     for j, b in enumerate(other):
-        by_pair[(b["query_chrom"], b["subject_chrom"])].append(j)
+        by_pair[(b["target_chrom"], b["reference_chrom"])].append(j)
 
     used_other = set()
     matched = []
     baseline_only = []
     for a in sorted(baseline, key=lambda r: -r["score"]):
         best_j, best_ov = None, 0.0
-        for j in by_pair.get((a["query_chrom"], a["subject_chrom"]), []):
+        for j in by_pair.get((a["target_chrom"], a["reference_chrom"]), []):
             if j in used_other:
                 continue
             b = other[j]
             if not blocks_match(a, b, min_overlap):
                 continue
-            ov = min(overlap_frac(a, b, "query_start", "query_end"),
-                     overlap_frac(a, b, "subject_start", "subject_end"))
+            ov = min(overlap_frac(a, b, "target_start", "target_end"),
+                     overlap_frac(a, b, "reference_start", "reference_end"))
             if ov > best_ov:
                 best_j, best_ov = j, ov
         if best_j is not None:

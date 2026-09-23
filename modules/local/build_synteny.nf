@@ -120,19 +120,26 @@ process COMPUTE_ALIGNMENT_STATS {
     tuple val(target_name), path(target_gff)
     tuple val(comparison_name), path(comparison_gff)
     path proteome
-    val proteome_origin  // species name (auto-discovered) or filename (user-supplied); '' omits the line
+    // what the page names each input by: its filename if user-supplied, else
+    // the NCBI accession it was discovered from; plus its species when known
+    // ('' otherwise) -- see main.nf's input_sources
+    tuple val(query_source), val(query_species), val(subject_source), val(subject_species),
+          val(proteome_source), val(proteome_species)
 
     output:
     path "${target_name}.${comparison_name}.stats.json", emit: stats
 
     script:
-    def originFlag = proteome_origin ? "--proteome_origin '${proteome_origin}'" : ''
+    // single-quoted for the shell, so file names/species with spaces or quotes survive
+    def q = { v -> "'" + v.toString().replace("'", "'\\''") + "'" }
     """
     compute_alignment_stats.py \\
         --proteome ${proteome} \\
         --query_gff ${target_gff} --subject_gff ${comparison_gff} \\
         --query_name ${target_name} --subject_name ${comparison_name} \\
-        ${originFlag} \\
+        --query_source ${q(query_source)} --query_species ${q(query_species)} \\
+        --subject_source ${q(subject_source)} --subject_species ${q(subject_species)} \\
+        --proteome_source ${q(proteome_source)} --proteome_species ${q(proteome_species)} \\
         --out ${target_name}.${comparison_name}.stats.json
     """
 }
@@ -148,7 +155,8 @@ workflow BUILD_SYNTENY {
     min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
     max_gap                 // max gene-rank step between consecutive chain members
     min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
-    proteome_origin         // species name (auto-discovered) or filename (user-supplied), for the stats panel
+    input_sources           // tuple(query source, query species, subject source, subject species,
+                            //       proteome source, proteome species) -- for the stats panel
 
     main:
     // one EXTRACT_HITS call over both genomes (a DSL2 process can't be
@@ -161,7 +169,7 @@ workflow BUILD_SYNTENY {
     }
 
     chained = CHAIN_CROSS(hits_by_role.target, hits_by_role.comparison, min_identity, max_gap, min_block)
-    stats   = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, proteome_origin).stats
+    stats   = COMPUTE_ALIGNMENT_STATS(target_gff, comparison_gff, proteome, input_sources).stats
 
     // an empty input channel (find_homeologs == '') yields an empty output
     // channel, so 'target', 'comparison', 'both' and '' need no special cases

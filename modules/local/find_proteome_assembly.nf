@@ -42,6 +42,8 @@ process SELECT_PROTEOME_ASSEMBLY {
     path jsonl_files
     val max_rank
     val exclude_target  // true: drop every same-species candidate outright (see find_closest_assembly.py)
+    val prefer_taxid    // the comparison genome's species taxid ('' if user-supplied): its own
+                        // annotation wins over the quality ranking when it has one
 
     output:
     path 'proteome_selection.json', emit: selection
@@ -50,8 +52,9 @@ process SELECT_PROTEOME_ASSEMBLY {
 
     script:
     def excludeFlag = exclude_target ? '--exclude_target' : ''
+    def preferFlag = prefer_taxid ? "--prefer_taxid ${prefer_taxid}" : ''
     """
-    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix proteome ${excludeFlag}
+    find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --jsonl_dir . --outprefix proteome ${excludeFlag} ${preferFlag}
     """
 }
 
@@ -60,10 +63,11 @@ workflow FIND_PROTEOME_ASSEMBLY {
     lineage
     max_rank
     exclude_target
+    prefer_taxid     // species taxid whose own annotation to prefer ('' for none)
 
     main:
     ladder = QUERY_GENOME_LADDER_PROTEOME(lineage, max_rank)
-    sel    = SELECT_PROTEOME_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target)
+    sel    = SELECT_PROTEOME_ASSEMBLY(lineage, ladder.jsonl, max_rank, exclude_target, prefer_taxid)
 
     emit:
     selection = sel.selection

@@ -156,6 +156,17 @@ workflow {
     // physical input file "target"/"comparison" refer to -- is just its
     // filename, known immediately
     target_display_name = Channel.value(file(params.assembly).name)
+    // species names for the page's alignment summary -- known only for what
+    // NCBI told us about: the target's from --taxid's lineage, a discovered
+    // comparison genome's/proteome's from its selection. Empty otherwise.
+    target_species = Channel.value('')
+    comparison_species = Channel.value('')
+    proteome_species = Channel.value('')
+    // proteome discovery prefers the discovered reference species' own
+    // proteins when it has an annotated assembly (discovery otherwise ranks
+    // by assembly quality, not relatedness); a user-supplied comparison
+    // genome has no known species, so it keeps the plain ranking
+    proteome_prefer_taxid = Channel.value('')
 
     // ---- comparison + proteome accession discovery (or manual override) ----
     comparison_fasta = null
@@ -165,10 +176,9 @@ workflow {
     // "genome.fna", which tells a viewer nothing) the NCBI accession it was
     // discovered from
     comparison_display_name = null
-    // proteome's origin for the stats panel: its filename when given manually,
-    // or (species name is more useful than an accession here -- the proteome
-    // is background context, not one of the two genomes being compared) the
-    // species name it was discovered from
+    // proteome's display name for the stats panel: likewise its filename when
+    // given manually, or the accession it was discovered from (its species
+    // goes alongside, in proteome_species)
     proteome_display_name = null
 
     if (params.comparison) {
@@ -182,29 +192,37 @@ workflow {
 
     if (!skipDiscovery) {
         lineage_ch = RESOLVE_TAXONOMY(Channel.value(params.taxid))
+        target_species = lineage_ch.map { f ->
+            def row = f.readLines().collect { it.split('\t') }.find { it[0] == 'species' }
+            row && row.size() > 2 ? row[2] : ''
+        }
 
         if (!params.comparison) {
             comparison_selection = FIND_COMPARISON_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target).selection
             comparison_selection.map { f ->
                 def sel = readSelection(f)
                 def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
-                log.info "quick_synteny: comparison accession=${sel.accession} rank=${sel.rank} (${sel.name})${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
+                log.info "quick_synteny: comparison accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name})${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
                 sel
             }.view()
             comparison_fasta = DOWNLOAD_GENOME(comparison_selection.map { readSelection(it).accession })
             comparison_display_name = comparison_selection.map { readSelection(it).accession }
+            comparison_species = comparison_selection.map { readSelection(it).organism_name ?: '' }
+            proteome_prefer_taxid = comparison_selection.map { readSelection(it).organism_taxid ?: '' }
         }
 
         if (!params.proteome) {
-            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target).selection
+            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target,
+                                                    proteome_prefer_taxid).selection
             prot_selection.map { f ->
                 def sel = readSelection(f)
                 def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
-                log.info "quick_synteny: proteome accession=${sel.accession} rank=${sel.rank} (${sel.name}) annotated=${sel.annotated}${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
+                log.info "quick_synteny: proteome accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name}) annotated=${sel.annotated}${sel.preferred_species ? ' [REFERENCE SPECIES]' : ''}${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
                 sel
             }.view()
             proteome_fasta = DOWNLOAD_PROTEIN(prot_selection.map { readSelection(it).accession })
-            proteome_display_name = prot_selection.map { readSelection(it).name }
+            proteome_display_name = prot_selection.map { readSelection(it).accession }
+            proteome_species = prot_selection.map { readSelection(it).organism_name ?: '' }
         }
     }
 
@@ -310,9 +328,18 @@ workflow {
     // expects (falsy-but-interpolatable), so it's normalized to '' here once
     def min_identity = params.min_identity ?: ''
     def min_block = params.min_block ?: ''
+    // what the page's alignment summary names each input by -- (target
+    // source, target species, comparison source, comparison species,
+    // proteome source, proteome species); combine() flattens into one tuple
+    input_sources = target_display_name
+        .combine(target_species)
+        .combine(comparison_display_name)
+        .combine(comparison_species)
+        .combine(proteome_display_name)
+        .combine(proteome_species)
     synteny = BUILD_SYNTENY(target_gff, comparison_gff, target_chrom_sizes, comparison_chrom_sizes,
                              proteome_fasta, params.show_homeologs, min_identity, params.max_gap, min_block,
-                             proteome_display_name)
+                             input_sources)
 
     PYGENOMEVIZ_PLOT(
         synteny.hits,

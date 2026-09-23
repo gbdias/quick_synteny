@@ -64,7 +64,6 @@ modules/local/pygenomeviz_plot.nf for the full reasoning.
 import argparse
 import base64
 import gzip
-import html
 import json
 import math
 import os
@@ -77,7 +76,8 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, Range1d, Select, Spinner, Switch, TextInput, Toggle)
+                           Button, Div, Range1d, Select, Spinner, Switch, TextInput, Toggle, Tooltip)
+from bokeh.models.dom import HTML
 from bokeh.plotting import figure
 from bokeh.resources import CDN
 
@@ -388,55 +388,6 @@ def group_gaps_by_chrom(gaps):
     return by_chrom
 
 
-def trunc1(x):
-    """Truncates (not rounds) to 1 decimal place -- e.g. 99.96 -> 99.9, not
-    100.0, so the stats panel never implies a percentage reached a round
-    number it didn't actually reach. Mirrors SHARED_JS's own truncation in
-    SYN.buildStatsHtml (Math.floor(x*10)/10) -- kept in sync deliberately."""
-    return math.floor(x * 10) / 10
-
-
-def format_stats_html(target_label, reference_label, stats):
-    """The interactive HTML's replacement for the (removed) static plots'
-    stats inset -- see compute_alignment_stats.py. Mirrors SHARED_JS's
-    SYN.buildStatsHtml exactly (same markup), since that's what re-renders
-    this same panel client-side whenever a viewer edits the target/reference
-    labels -- kept in sync deliberately (see module docstring)."""
-    if not stats:
-        return ''
-    total = stats['proteome_total']
-    origin = stats.get('proteome_origin')
-
-    def row(label, aligned, identity):
-        pct = (aligned / total * 100) if total else 0.0
-        return (f"<tr><td style='padding-right:20px'>{html.escape(label)}</td>"
-                f"<td style='text-align:right;padding-right:20px'>{aligned:,} ({trunc1(pct):.1f}%)</td>"
-                f"<td style='text-align:right'>{trunc1(identity * 100):.1f}%</td></tr>")
-
-    origin_line = (f"<div style='color:#666;margin-top:2px'>Proteome: {html.escape(origin)}</div>"
-                   if origin else '')
-
-    # display:block + an explicit px width (matching stats_div's own
-    # width=STATS_PANEL_WIDTH, box-sizing:border-box so the border/padding
-    # don't push it wider) -- rather than the old shrink-to-fit
-    # display:inline-block -- makes this box span the zoom panel's drawn
-    # frame instead of only as wide as its own text/table content.
-    return (
-        "<div style='font-size:13px;color:#333;border:1px solid #ddd;border-radius:6px;"
-        f"padding:8px 12px;display:block;box-sizing:border-box;width:{STATS_PANEL_WIDTH}px;"
-        "margin:4px 0 8px 0'>"
-        f"<b>Alignment summary</b><br>{total:,} input proteins"
-        f"{origin_line}"
-        "<table style='border-collapse:collapse;margin-top:4px'>"
-        "<tr style='color:#666'><th style='text-align:left;padding-right:20px'></th>"
-        "<th style='text-align:right;padding-right:20px'>aligned</th>"
-        "<th style='text-align:right'>avg identity</th></tr>"
-        + row(target_label, stats['query_aligned'], stats['query_mean_identity'])
-        + row(reference_label, stats['subject_aligned'], stats['subject_mean_identity'])
-        + "</table></div>"
-    )
-
-
 def build_overview_sources():
     """The ring's four ColumnDataSources -- query/subject wedges, ribbons,
     and chromosome labels -- created with their real columns but no rows.
@@ -718,6 +669,15 @@ SYN.quadBezier = function(p0, p1, p2, n) {
     return pts;
 };
 
+// An inverted ('-') block runs the reference span the opposite way from the
+// target span, so its ribbon joins target start to reference END (and target
+// end to reference start): swapping the reference span's two ends makes the
+// ribbon's sides cross -- the twist that marks an inversion in the ring and
+// the zoom panel alike (the dotplot draws it as an anti-diagonal).
+SYN.orientEnds = function(s1, s2, link) {
+    return link.orientation === '-' ? [s2, s1] : [s1, s2];
+};
+
 SYN.ribbonPolygonJS = function(aq1, aq2, as1, as2, radius, n) {
     n = n || 24;
     // Arc across the query span -- curved along the ring's own radius, not
@@ -827,7 +787,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
         const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.subjectSizes, subjectOffsets);
-        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.s_chrom],
             alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore), label: SYN.formatLinkLabel(l),
@@ -841,7 +801,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.querySizes, queryOffsets);
         const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.querySizes, queryOffsets);
-        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.queryColorIndex[l.q_chrom],
             alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
@@ -856,7 +816,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.subjectSizes, subjectOffsets);
         const as1 = SYN.bpToAngleJS(l.s_chrom, l.s_start, SYN.data.subjectSizes, subjectOffsets);
         const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.subjectSizes, subjectOffsets);
-        const poly = SYN.ribbonPolygonJS(aq1, aq2, as1, as2, SYN.data.linkR);
+        const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom],
             alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
@@ -1469,7 +1429,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         const ox0 = otherOffsets[oName] + otherStart(l);
         const ox1 = otherOffsets[oName] + otherEnd(l);
         const px0 = pivotStart(l), px1 = pivotEnd(l);
-        ribXs.push([ox0, ox1, px1, px0]);
+        ribXs.push([ox0, ox1, ...SYN.orientEnds(px1, px0, l)]);
         ribYs.push([otherEdge, otherEdge, pivotEdge, pivotEdge]);
         const refColor = isPivotSubject ? pivotColor : SYN.paletteColor(SYN.data.subjectColorIndex[oName], k);
         ribFill.push(SYN.lighten(refColor));
@@ -1495,8 +1455,8 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
 // edge case): the whole point of making grid cells clickable, including
 // empty ones, is that "no synteny between this pair" is itself an answer
 // worth showing rather than something the UI silently refuses to select.
-// No orientation-based flip on ribbon x-coordinates, matching
-// buildDetailData's existing convention (see its ribXs/ribYs above).
+// Inverted ('-') blocks are drawn twisted, as in buildDetailData (see
+// SYN.orientEnds).
 SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const allLinks = SYN.data.linksByQuery[targetName] || [];
     const links = allLinks.filter((l) => l.s_chrom === subjectName && l.score >= minScore);
@@ -1548,7 +1508,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const ribXs = [], ribYs = [], ribFill = [], ribAlpha = [], ribLabel = [];
     const sorted = links.slice().sort((a, b) => a.score - b.score);
     for (const l of sorted) {
-        ribXs.push([l.q_start, l.q_end, l.s_end, l.s_start]);
+        ribXs.push([l.q_start, l.q_end, ...SYN.orientEnds(l.s_end, l.s_start, l)]);
         ribYs.push([botY + barH, botY + barH, topY, topY]);
         ribFill.push(SYN.lighten(subjectColor));
         ribAlpha.push(0.25 + 0.55 * (l.score / maxScore));
@@ -1843,8 +1803,9 @@ SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
 // as a normal page element rather than baked into any one exportable figure,
 // since export is per-panel now (ring, zoom, or dotplot), not "the whole
 // image" the way a static render was.
-// truncates (not rounds) to 1 decimal place -- mirrors trunc1() in this
-// file's Python exactly, kept in sync deliberately
+// truncates (not rounds) to 1 decimal place -- e.g. 99.96 -> 99.9, not
+// 100.0, so the panel never implies a percentage reached a round number it
+// didn't actually reach
 SYN.trunc1 = function(x) {
     return Math.floor(x * 10) / 10;
 };
@@ -1852,32 +1813,48 @@ SYN.trunc1 = function(x) {
 SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     const s = SYN.data.alignmentStats;
     if (!s) { return ''; }
+    const esc = SYN.escapeHtml;
     const pct = (n) => s.proteome_total ? SYN.trunc1(n / s.proteome_total * 100).toFixed(1) : '0.0';
-    const row = (label, aligned, identity) => `
-        <tr><td style="padding-right:20px">${SYN.escapeHtml(label)}</td>
-            <td style="text-align:right;padding-right:20px">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
-            <td style="text-align:right">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
-    const originLine = s.proteome_origin
-        ? `<div style="color:#666;margin-top:2px">Proteome: ${SYN.escapeHtml(s.proteome_origin)}</div>` : '';
-    // display:block + an explicit px width (SYN.data.statsPanelWidth, same
-    // value as stats_div's own width=STATS_PANEL_WIDTH on the Python side --
-    // see format_stats_html) rather than shrink-to-fit display:inline-block,
-    // so this box spans the zoom panel's drawn frame (not its full nominal
-    // width, which includes the toolbar strip -- see PLOT_TOOLBAR_WIDTH)
-    // instead of only its own text/table content -- kept in sync with
-    // format_stats_html deliberately.
+    // an input is named by its file name if the user supplied it, else the
+    // NCBI accession it was discovered from (compute_alignment_stats.py's
+    // *_source), with its species underneath in italics when known. The cell
+    // has a capped width (table-layout:fixed below) and scrolls horizontally
+    // instead of pushing the number columns out of the box; the full name is
+    // also the cell's tooltip. Stats files from before *_source existed fall
+    // back to the editable labels / proteome_origin.
+    const scroll = 'overflow-x:auto;white-space:nowrap';
+    const nameCell = (source, species) => {
+        const src = source ? `<div style="${scroll}" title="${esc(source)}">${esc(source)}</div>` : '';
+        const sp = species
+            ? `<div style="${scroll};color:#666;font-size:12px" title="${esc(species)}"><i>${esc(species)}</i></div>` : '';
+        return src + sp || '&mdash;';
+    };
+    const td = 'padding:2px 6px 2px 0;vertical-align:top';
+    const num = `${td};text-align:right;white-space:nowrap`;
+    const row = (role, source, species, aligned, identity) => `
+        <tr><td style="${td};color:#666">${role}</td>
+            <td style="${td}">${nameCell(source, species)}</td>
+            <td style="${num}">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
+            <td style="${num};padding-right:0">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
+    // display:block + an explicit px width (SYN.data.statsPanelWidth, the
+    // same value as stats_div's own width=STATS_PANEL_WIDTH), so the box
+    // spans the zoom panel's drawn frame (not its full nominal width, which
+    // includes the toolbar strip -- see PLOT_TOOLBAR_WIDTH)
     return `
         <div style="font-size:13px;color:#333;border:1px solid #ddd;border-radius:6px;
                     padding:8px 12px;display:block;box-sizing:border-box;
                     width:${SYN.data.statsPanelWidth}px;margin:4px 0 8px 0">
-            <b>Alignment summary</b><br>${s.proteome_total.toLocaleString()} input proteins
-            ${originLine}
-            <table style="border-collapse:collapse;margin-top:4px">
-                <tr style="color:#666"><th style="text-align:left;padding-right:20px"></th>
-                    <th style="text-align:right;padding-right:20px">aligned</th>
-                    <th style="text-align:right">avg identity</th></tr>
-                ${row(targetLabel, s.query_aligned, s.query_mean_identity)}
-                ${row(referenceLabel, s.subject_aligned, s.subject_mean_identity)}
+            <b>Alignment summary</b>
+            <table style="border-collapse:collapse;margin-top:4px;width:100%;table-layout:fixed">
+                <colgroup><col style="width:66px"><col><col style="width:100px"><col style="width:74px"></colgroup>
+                <tr><td style="${td};color:#666">Proteome</td>
+                    <td style="${td}">${nameCell(s.proteome_source || s.proteome_origin, s.proteome_species)}</td>
+                    <td colspan="2" style="${num};padding-right:0">${s.proteome_total.toLocaleString()} proteins</td></tr>
+                <tr style="color:#666"><td></td><td></td>
+                    <td style="${num}">aligned</td><td style="${num};padding-right:0">avg identity</td></tr>
+                ${row('Target', s.query_source || targetLabel, s.query_species, s.query_aligned, s.query_mean_identity)}
+                ${row('Reference', s.subject_source || referenceLabel, s.subject_species,
+                      s.subject_aligned, s.subject_mean_identity)}
             </table>
         </div>`;
 };
@@ -2146,16 +2123,19 @@ SYN.updateChainStatus = function() {
     ui.chainStatusDiv.text = `${visible} block(s) · ${(SYN.chain.lastMs || 0).toFixed(0)} ms`;
 };
 
-// "the cross blocks currently on screen (min block size filter applied)"
-// (the plan's own wording) -- SYN.data.crossLinksFlat is already sorted in
-// exactly the order bin/chain.js's OUTPUTS header specifies (it's
-// chain.js's own blocksToLinks output, untouched -- see SYN.applyChainResult),
-// and filtering a sorted list by a monotonic predicate preserves that order,
-// so this is byte-identical to a fresh `node bin/chain_blocks.mjs --min_block
-// <current value>` run with the same min-identity/max-gap/hit-rank.
+// The cross-genome blocks currently on screen: min block size AND min
+// sequence length filters applied (a block counts only if both its
+// chromosomes pass, the same test SYN.filterBySize uses for what's drawn).
+// SYN.data.crossLinksFlat is already sorted in the order bin/chain.js's
+// OUTPUTS header specifies (chain.js's own blocksToLinks output, untouched --
+// see SYN.applyChainResult), and filtering preserves that order, so with min
+// sequence length at 0 this is byte-identical to `node bin/chain_blocks.mjs
+// --min_block <current value>` with the same min-identity/max-gap/hit-rank.
 SYN.exportBlocksTsv = function() {
     const minScore = SYN.ui.minBlockSpinner.value;
-    const filtered = (SYN.data.crossLinksFlat || []).filter((l) => l.score >= minScore);
+    const minLen = SYN.state.minSeqSize;
+    const filtered = (SYN.data.crossLinksFlat || []).filter((l) => l.score >= minScore
+        && SYN.data.querySizes[l.q_chrom] >= minLen && SYN.data.subjectSizes[l.s_chrom] >= minLen);
     const tsv = SYNCHAIN.linksToTsv(filtered);
     SYN.downloadBlob(new Blob([tsv], {type: 'text/tab-separated-values'}), SYN.buildBlocksExportFilename());
 };
@@ -2165,7 +2145,8 @@ SYN.buildBlocksExportFilename = function() {
     const t = sanitize(SYN.state.targetLabel) || 'target';
     const r = sanitize(SYN.state.referenceLabel) || 'reference';
     const id = Math.round(SYN.ui.minIdentitySpinner.value);
-    return `${t}_vs_${r}_blocks_id${id}_gap${SYN.ui.maxGapSpinner.value}_min${SYN.ui.minBlockSpinner.value}.tsv`;
+    const minLen = SYN.state.minSeqSize ? `_minlen${+(SYN.state.minSeqSize / 1e6).toFixed(3)}Mb` : '';
+    return `${t}_vs_${r}_blocks_id${id}_gap${SYN.ui.maxGapSpinner.value}_min${SYN.ui.minBlockSpinner.value}${minLen}.tsv`;
 };
 
 // The page's one entry point, run once from build_page()'s
@@ -2184,6 +2165,7 @@ SYN.init = function(s) {
     SYN.ui = s;
     SYN.state.targetLabel = SYN.data.targetLabelDefault;
     SYN.state.referenceLabel = SYN.data.referenceLabelDefault;
+    if (s.statsDiv) { SYN.applyStats(SYN.state.targetLabel, SYN.state.referenceLabel, s.statsDiv); }
 
     const ringOrder = SYN.ringOrderFor(true);
     SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
@@ -2489,12 +2471,34 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # every other control on this page). The placeholder values below are
     # only ever visible for the instant between DOM construction and that
     # first SYN.init pass.
+    # the "?" icon Bokeh draws next to a titled input's label; opens below the
+    # icon, as a wrapped box (a plain-text tooltip renders as one unwrapped
+    # line that runs off the page)
+    def help_tip(text):
+        return Tooltip(content=HTML(f"<div style='width:260px;white-space:normal;line-height:1.35'>"
+                                    f"{text}</div>"), position='bottom')
+
     min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
-                                    value=round((min_identity or 0.5) * 100), width=TOP_CONTROL_WIDTH)
+                                    value=round((min_identity or 0.5) * 100), width=TOP_CONTROL_WIDTH,
+                                    description=help_tip(
+                                        "A protein's hit counts only if at least this share of its aligned "
+                                        "residues are identical or similar (miniprot's Positive score). Starts "
+                                        "at the weaker genome's average best-hit identity, kept within 30-90%. "
+                                        "Lower it for distant species; raise it to cut noise from paralogs."))
     max_gap_spinner = Spinner(title="Max gap (genes)", low=1, high=100, step=1,
-                               value=max_gap, width=TOP_CONTROL_WIDTH)
+                               value=max_gap, width=TOP_CONTROL_WIDTH,
+                               description=help_tip(
+                                   "The most genes a block may skip between two consecutive matched "
+                                   "genes, on either genome. Counted in genes, not base pairs, so it means "
+                                   "the same in a compact genome and a huge one. Larger values will join "
+                                   "fragmented blocks; smaller values will split blocks at small rearrangements."))
     HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
-    hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=TOP_CONTROL_WIDTH)
+    hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=TOP_CONTROL_WIDTH,
+                             description=help_tip(
+                                 "Which of each protein's alignments to use: only its best hit, or also "
+                                 "its 2nd/3rd best, and so on. 'best only' gives the cleanest one-to-one "
+                                 "synteny; keep lower-ranked hits to see duplicated copies, such as "
+                                 "paralogs or a polyploid's subgenomes."))
     # low=3: bin/chain.js's MIN_CHAIN_LENGTH is 2, but a 2-anchor
     # chain is barely evidence of anything -- 3 is this control's own floor,
     # independent of the (always looser) minBlock=3 every chain request
@@ -2503,7 +2507,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # largest block on every result, same "don't cap at an arbitrary round
     # number" reasoning min_seq_size_spinner's high uses below.
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
-                                 step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH)
+                                 step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH,
+                                 description=help_tip(
+                                     "The minimum number of genes for a syntenic block to be drawn."))
     # One-line status ("N block(s) · X ms"), refreshed by every
     # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
@@ -2521,7 +2527,17 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
                                     high=round(max_seq_size / 1e6, 2) or 1,
-                                    step=0.1, value=0, width=TOP_CONTROL_WIDTH)
+                                    step=0.1, value=0, width=TOP_CONTROL_WIDTH,
+                                    description=help_tip(
+                                        "Hides chromosomes and scaffolds shorter than this, in Mb, from "
+                                        "every panel and from the blocks TSV download. Sequences below the "
+                                        "pipeline's <span style='white-space:nowrap'>--min_seq_size</span> "
+                                        "(default 500 kb) were already left out of the page."),
+                                    # stepping by 0.1 accumulates float error (0.2 + 0.1 =
+                                    # 0.30000000000000004); show at most 3 decimals, no
+                                    # trailing zeros, so steps read 0.3 and typed values like
+                                    # 0.25 stay as typed
+                                    format='0[.][000]')
     reset_btn = Button(label="✕ clear zoom", button_type="default", width=140,
                         height=TOOLBAR_CONTROL_HEIGHT)
     # label is just "save" (not "save ring"/"save zoom"/"save dotplot") and
@@ -2736,7 +2752,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         bar_source=detail_bar_src, detail_ribbon_source=detail_rib_src,
         detail_label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
-        SYN.state.minSeqSize = cb_obj.value * 1e6;
+        SYN.state.minSeqSize = Math.round(cb_obj.value * 1e6);  // whole bp, drops the float drift
 
         const ringOrder = SYN.ringOrderFor(size_order_toggle.active);
         SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
@@ -3058,11 +3074,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # visible once a viewer *retypes* a label -- accepted tradeoff, since the
     # box itself is still right there labeled "Target label"/"Reference label".
 
-    # initial render matches target_label_input/reference_label_input's own
-    # default (query_subtitle/subject_subtitle, falling back to the role
-    # tag) -- reactive after that (see SYN.applyStats, wired below).
-    # Empty/invisible if no --stats was given. width=STATS_PANEL_WIDTH makes
-    # the box itself (format_stats_html/SYN.buildStatsHtml's markup, which is
+    # filled client-side by SYN.buildStatsHtml, from SYN.init (and again on
+    # every label edit, see label_callback) -- empty/invisible if no --stats
+    # was given. width=STATS_PANEL_WIDTH makes
+    # the box itself (SYN.buildStatsHtml's markup, which is
     # `display:block` precisely so it stretches to fill this rather than
     # shrink-wrapping its content) as wide as the zoom panel's drawn frame
     # above it -- detail_fig's own width minus its toolbar strip (see
@@ -3074,11 +3089,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # edge while pushing its right edge 5px past detail_fig's own -- exactly
     # the width but visibly not aligned with the panel it's meant to match.
     # The vertical breathing room that default margin used to provide is
-    # already there regardless, from format_stats_html's own inline
+    # already there regardless, from SYN.buildStatsHtml's own inline
     # `margin:4px 0 8px 0` on the box itself.
-    stats_div = Div(text=format_stats_html(query_subtitle or query_name, subject_subtitle or subject_name,
-                                            alignment_stats),
-                     width=STATS_PANEL_WIDTH, margin=(0, 0, 0, 0))
+    stats_div = Div(text='', width=STATS_PANEL_WIDTH, margin=(0, 0, 0, 0))
 
     # placed under the zoom panel specifically (not a full-width bar under
     # all three panels) -- fills the otherwise-empty space under the
@@ -3108,8 +3121,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     layout = column(
         header_title_div,
-        row(reference_label_input, target_label_input, palette_select, color_spinner,
-            min_identity_spinner, max_gap_spinner, hit_rank_select, min_block_spinner,
+        # two rows: labels/colors, then the chaining controls and their status
+        row(reference_label_input, target_label_input, palette_select, color_spinner),
+        row(min_identity_spinner, max_gap_spinner, hit_rank_select, min_block_spinner,
             min_seq_size_spinner, chain_status_div),
         # hint left out of the layout for now (not deleted -- still built
         # above, just not attached to anything file_html walks/serializes)
@@ -3148,9 +3162,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         hit_rank_select=hit_rank_select, self_links_toggle=self_links_toggle,
         hide_synteny_toggle=hide_synteny_toggle, chain_status_div=chain_status_div,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src, label_source=detail_label_src,
-        detail_fig=detail_fig, detail_gap_source=detail_gap_src,
+        detail_fig=detail_fig, detail_gap_source=detail_gap_src, stats_div=stats_div,
     ), code="""
         SYN.init({
+            statsDiv: stats_div,
             querySource: q_src, subjectSource: s_src, ribbonSource: r_src,
             labelSource: label_src, gapSource: gap_src,
             dpQuerySource: dp_q_src, dpSubjectSource: dp_s_src, dpGridSource: dp_grid_src,

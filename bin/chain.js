@@ -84,10 +84,12 @@
 //   anchorDensity (nAnchors per Mb of query span, span floored at 1 bp),
 //   members (anchor indices in chain order)}. blocksToLinks gives the link
 //   objects the page renders ({q_chrom, ..., score: nAnchors, orientation,
-//   mean_identity, anchor_density}); links.tsv (blocksToTsv, the node CLI)
-//   keeps the historical 10-column format, mean_identity to 4 dp,
-//   anchor_density to 2 dp, rows ordered by (query chrom index, query start,
-//   subject chrom index, subject start, orientation).
+//   mean_identity, anchor_density}); links.tsv (blocksToTsv, the node CLI and
+//   the page's "blocks TSV" download) has the columns target_chrom,
+//   target_start, target_end, reference_chrom, reference_start, reference_end,
+//   score, orientation, mean_identity (4 dp), anchor_density (2 dp), rows
+//   ordered by (target chrom index, target start, reference chrom index,
+//   reference start, orientation).
 //
 // EMBEDDED PAYLOAD (SYN.hitsPayload, written by plot_synteny_interactive.py,
 // read by decodePayload):
@@ -499,7 +501,7 @@
         }));
     }
 
-    const TSV_HEADER = 'query_chrom\tquery_start\tquery_end\tsubject_chrom\tsubject_start\tsubject_end\t'
+    const TSV_HEADER = 'target_chrom\ttarget_start\ttarget_end\treference_chrom\treference_start\treference_end\t'
         + 'score\torientation\tmean_identity\tanchor_density\n';
 
     function linksToTsv(links) {

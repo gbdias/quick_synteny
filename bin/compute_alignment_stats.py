@@ -69,10 +69,15 @@ def main():
     parser.add_argument('--subject_gff', required=True)
     parser.add_argument('--query_name', required=True)
     parser.add_argument('--subject_name', required=True)
-    parser.add_argument('--proteome_origin', default=None,
-                         help="where the proteome came from, for the stats panel: a species "
-                              "name if it was auto-discovered from NCBI, or the input filename "
-                              "if the user supplied it directly. Omitted (no line shown) if not given.")
+    # How the page's stats panel names each input: the file name if the user
+    # supplied it, else the NCBI accession it was auto-discovered from; plus
+    # its species when known (from --taxid's lineage, or the discovered
+    # assembly's own record). Empty means unknown -- nothing is shown for it.
+    for role in ('query', 'subject', 'proteome'):
+        parser.add_argument(f'--{role}_source', default='',
+                             help=f'{role}: input file name if user-supplied, else its NCBI accession')
+        parser.add_argument(f'--{role}_species', default='',
+                             help=f'{role}: species name when known, else empty')
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
 
@@ -82,11 +87,16 @@ def main():
 
     stats = {
         'proteome_total': proteome_total,
-        'proteome_origin': args.proteome_origin,
+        'proteome_source': args.proteome_source or None,
+        'proteome_species': args.proteome_species or None,
         'query_name': args.query_name,
+        'query_source': args.query_source or None,
+        'query_species': args.query_species or None,
         'query_aligned': query_aligned,
         'query_mean_identity': query_identity,
         'subject_name': args.subject_name,
+        'subject_source': args.subject_source or None,
+        'subject_species': args.subject_species or None,
         'subject_aligned': subject_aligned,
         'subject_mean_identity': subject_identity,
     }
