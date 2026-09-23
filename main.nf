@@ -81,16 +81,6 @@ def helpMessage() {
                                 overhead; multiplied by 1.5 per retry attempt
                                 on a 137/140 (OOM) exit. Default: 11.
 
-    Polyploid support:
-      --show_homeologs <mode>  Also self-compare one or both genomes' own proteome
-                                hits to find and draw homeologous chromosome pairs
-                                (e.g. for an allopolyploid genome). One of: target,
-                                reference, both. The synteny/homeolog detection
-                                itself needs no ploidy ratio -- it's built directly
-                                from miniprot's own multi-hit alignments, so it
-                                picks up whatever multiplicity is actually in the
-                                data. Default: both. Pass '' to turn it off entirely.
-
     Output:
       --outdir <path>          Output directory (default: results).
 
@@ -127,10 +117,6 @@ def validateParams() {
     }
     if (params.proteome && !file(params.proteome).exists()) {
         exit 1, "ERROR: --proteome file not found: ${params.proteome}"
-    }
-
-    if (params.show_homeologs && !['target', 'reference', 'both'].contains(params.show_homeologs)) {
-        exit 1, "ERROR: --show_homeologs must be one of target,reference,both, got '${params.show_homeologs}'"
     }
 }
 
@@ -337,7 +323,7 @@ workflow {
         .combine(proteome_display_name)
         .combine(proteome_species)
     synteny = BUILD_SYNTENY(target_gff, reference_gff, target_chrom_sizes, reference_chrom_sizes,
-                             proteome_fasta, params.show_homeologs, min_identity, params.max_gap, min_block,
+                             proteome_fasta, min_identity, params.max_gap, min_block,
                              input_sources)
 
     PYGENOMEVIZ_PLOT(

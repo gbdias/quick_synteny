@@ -151,7 +151,6 @@ workflow BUILD_SYNTENY {
     target_chrom_sizes      // tuple(name, path chrom.sizes) -- hits on sequences not listed are dropped
     reference_chrom_sizes
     proteome                // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
-    find_homeologs          // '', 'target', 'reference', or 'both' -- which genome(s) to self-compare
     min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
     max_gap                 // max gene-rank step between consecutive chain members
     min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
@@ -171,16 +170,9 @@ workflow BUILD_SYNTENY {
     chained = CHAIN_CROSS(hits_by_role.target, hits_by_role.reference, min_identity, max_gap, min_block)
     stats   = COMPUTE_ALIGNMENT_STATS(target_gff, reference_gff, proteome, input_sources).stats
 
-    // an empty input channel (find_homeologs == '') yields an empty output
-    // channel, so 'target', 'reference', 'both' and '' need no special cases
-    homeolog_inputs = Channel.empty()
-    if (find_homeologs == 'target' || find_homeologs == 'both') {
-        homeolog_inputs = homeolog_inputs.mix(hits_by_role.target)
-    }
-    if (find_homeologs == 'reference' || find_homeologs == 'both') {
-        homeolog_inputs = homeolog_inputs.mix(hits_by_role.reference)
-    }
-    homeolog_slider = CHAIN_SELF(homeolog_inputs, min_identity, max_gap).slider
+    // both genomes are always self-chained (homeologs); the page decides
+    // whether to show them (its Show self-links switch)
+    homeolog_slider = CHAIN_SELF(hits, min_identity, max_gap).slider
 
     emit:
     cross_slider    = chained.slider

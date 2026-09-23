@@ -811,7 +811,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.queryColorIndex[l.q_chrom],
-            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
+            alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Target', 'Target') + ' (homeolog)',
             score: l.score, is_homeolog: true,
         });
@@ -826,7 +826,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom],
-            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore),
+            alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Reference', 'Reference') + ' (homeolog)',
             score: l.score, is_homeolog: true,
         });
@@ -1937,13 +1937,12 @@ self.onmessage = function(e) {
         const p = Object.assign({}, msg.params, {minBlock: ${SYN.CHAIN_REQUEST_MIN_BLOCK}});
         const t0 = performance.now();
         const cross = chainers.cross.run(p);
-        const targetSelf = chainers.targetSelf.run(p);
-        const referenceSelf = chainers.referenceSelf.run(p);
         self.postMessage({
             seq: msg.seq,
+            withSelf: msg.withSelf,
             crossLinks: SYNCHAIN.blocksToLinks(cross),
-            targetSelfLinks: SYNCHAIN.blocksToLinks(targetSelf),
-            referenceSelfLinks: SYNCHAIN.blocksToLinks(referenceSelf),
+            targetSelfLinks: msg.withSelf ? SYNCHAIN.blocksToLinks(chainers.targetSelf.run(p)) : [],
+            referenceSelfLinks: msg.withSelf ? SYNCHAIN.blocksToLinks(chainers.referenceSelf.run(p)) : [],
             ms: performance.now() - t0,
         });
     }
@@ -1951,7 +1950,8 @@ self.onmessage = function(e) {
 `;
 
 // Three chainers sharing the decoded tables: cross (target vs reference)
-// plus each genome's own self-comparison (homeologs) -- createChainer's own
+// plus each genome's own self-comparison (homeologs), the latter two run
+// only while Show self-links is on (see SYN.dispatchChain) -- createChainer's own
 // per-stage caching (see createChainer in bin/chain.js)
 // means a min-identity/max-gap/hit-rank change that doesn't move the anchor
 // set at all (rare, but e.g. a repeated hit-rank click) costs next to
@@ -1966,17 +1966,16 @@ SYN.buildChainers = function(target, reference) {
     };
 };
 
-SYN.runChainers = function(chainers, params, seq) {
+SYN.runChainers = function(chainers, params, seq, withSelf) {
     const p = Object.assign({}, params, {minBlock: SYN.CHAIN_REQUEST_MIN_BLOCK});
     const t0 = SYN.now();
     const cross = chainers.cross.run(p);
-    const targetSelf = chainers.targetSelf.run(p);
-    const referenceSelf = chainers.referenceSelf.run(p);
     return {
         seq,
+        withSelf,
         crossLinks: SYNCHAIN.blocksToLinks(cross),
-        targetSelfLinks: SYNCHAIN.blocksToLinks(targetSelf),
-        referenceSelfLinks: SYNCHAIN.blocksToLinks(referenceSelf),
+        targetSelfLinks: withSelf ? SYNCHAIN.blocksToLinks(chainers.targetSelf.run(p)) : [],
+        referenceSelfLinks: withSelf ? SYNCHAIN.blocksToLinks(chainers.referenceSelf.run(p)) : [],
         ms: SYN.now() - t0,
     };
 };
@@ -1999,6 +1998,7 @@ SYN.startChainer = async function(payload) {
     SYN.chain = {
         tables, seq: -1, appliedSeq: -1, busy: false,
         pendingSeq: null, pendingParams: null, worker: null, useWorker: true, mainThreadChainers: null,
+        selfFresh: false,
     };
     try {
         const chainSrc = document.getElementById('synchain-src').textContent;
@@ -2037,12 +2037,22 @@ SYN.requestChain = function(params) {
         SYN.chain.pendingParams = params;
         return;
     }
+    SYN.dispatchChain(seq, params);
+};
+
+// Sends one request to whichever chainer this browser uses. Self-links
+// (homeologs) only feed the ring and are hidden unless Show self-links is
+// on, so the two self-chainers run only while it is: the switch is read
+// here, at send time, so a request queued while another was in flight
+// still picks up a switch flipped in between.
+SYN.dispatchChain = function(seq, params) {
+    const withSelf = SYN.ui.selfLinksToggle.active;
     SYN.chain.busy = true;
     SYN.showComputingStatus();
     if (SYN.chain.useWorker) {
-        SYN.chain.worker.postMessage({type: 'run', seq, params});
+        SYN.chain.worker.postMessage({type: 'run', seq, params, withSelf});
     } else {
-        SYN.onChainMessage(SYN.runChainers(SYN.chain.mainThreadChainers, params, seq));
+        SYN.onChainMessage(SYN.runChainers(SYN.chain.mainThreadChainers, params, seq, withSelf));
     }
 };
 
@@ -2056,13 +2066,7 @@ SYN.onChainMessage = function(msg) {
         const seq = SYN.chain.pendingSeq, params = SYN.chain.pendingParams;
         SYN.chain.pendingSeq = null;
         SYN.chain.pendingParams = null;
-        SYN.chain.busy = true;
-        SYN.showComputingStatus();
-        if (SYN.chain.useWorker) {
-            SYN.chain.worker.postMessage({type: 'run', seq, params});
-        } else {
-            SYN.onChainMessage(SYN.runChainers(SYN.chain.mainThreadChainers, params, seq));
-        }
+        SYN.dispatchChain(seq, params);
     }
 };
 
@@ -2092,11 +2096,17 @@ SYN.applyChainResult = function(msg) {
     SYN.data.linksByReference = SYN.groupLinksBy(msg.crossLinks, 's_chrom');
     SYN.data.targetHomeologLinks = msg.targetSelfLinks;
     SYN.data.referenceHomeologLinks = msg.referenceSelfLinks;
+    // whether the self-links above match the current params (see
+    // SYN.dispatchChain); Show self-links re-chains when they don't
+    SYN.chain.selfFresh = msg.withSelf;
+    // ribbon/segment opacity scales with the cross blocks only, so turning
+    // self-links on never restyles the synteny already on screen
     let maxScore = 1;
     for (const l of msg.crossLinks) { if (l.score > maxScore) { maxScore = l.score; } }
-    for (const l of msg.targetSelfLinks) { if (l.score > maxScore) { maxScore = l.score; } }
-    for (const l of msg.referenceSelfLinks) { if (l.score > maxScore) { maxScore = l.score; } }
     SYN.data.maxScore = maxScore;
+    let maxAnyScore = maxScore;
+    for (const l of msg.targetSelfLinks) { if (l.score > maxAnyScore) { maxAnyScore = l.score; } }
+    for (const l of msg.referenceSelfLinks) { if (l.score > maxAnyScore) { maxAnyScore = l.score; } }
 
     const ringOrder = SYN.ringOrderFor(SYN.state.orderBySize);
     SYN.data.ribbons = SYN.buildRibbonRecords(SYN.state.ringQueryOffsets, SYN.state.ringSubjectOffsets);
@@ -2120,7 +2130,7 @@ SYN.applyChainResult = function(msg) {
     if (SYN.state.mode === null && !SYN.state.pivotName) {
         ui.detailFig.title.text = SYN.emptyDetail().title;
     }
-    ui.minBlockSpinner.high = maxScore;
+    ui.minBlockSpinner.high = maxAnyScore;
 
     SYN.chain.lastMs = msg.ms;
     SYN.updateChainStatus();
@@ -2980,6 +2990,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         hide_synteny_toggle=hide_synteny_toggle,
     ), code="""
+        // self-links are only chained while this switch is on (see
+        // SYN.dispatchChain): if the ones on hand are stale, re-chain --
+        // SYN.applyChainResult redraws the ring when the reply lands. The
+        // cross chainer's own cache makes its share of that request free.
+        if (cb_obj.active && !SYN.chain.selfFresh) {
+            SYN.requestChain(SYN.currentChainParams());
+            return;
+        }
         SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, cb_obj.active,
                                   hide_synteny_toggle.active, overview_ribbon_source);
     """)

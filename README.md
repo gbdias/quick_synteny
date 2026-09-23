@@ -137,26 +137,18 @@ well-supported vs. marginal.
 
 ## Polyploid genomes
 
-`--show_homeologs` finds and draws which of a genome's own chromosomes are
-homeologous to each other (e.g. for an allopolyploid target or reference
-genome), and defaults to `both` -- every run already self-scans both genomes
-unless you turn it off:
-
-```bash
-nextflow run main.nf -profile standard \
-  --assembly thaliana.fa --reference suecica.fa --proteome thaliana_protein.faa \
-  --outdir results
-# --show_homeologs both is the default here; pass --show_homeologs target or
-# --show_homeologs reference to scan only one side, or --show_homeologs ''
-# to turn it off entirely
-```
+Every run also finds which of a genome's own chromosomes are homeologous to
+each other (e.g. for an allopolyploid target or reference genome), for both
+genomes, with no option to set. The page's **Show self-links** switch draws
+them on the ring; it is off by default, and the page only computes them
+while it is on.
 
 No ploidy ratio needs to be declared -- the same chaining logic just runs on
-the requested genome's hits against themselves (a protein hitting
+each genome's hits against themselves (a protein hitting
 reference-genome chr9 *and* chr10 in the same alignment already **is** the
 homeolog signal), so it naturally picks up whatever multiplicity is
 actually in the data. Both ends of a homeolog link land in that genome's own
-half of the ring -- no special-casing needed, and `both` runs the scan on
+half of the ring -- no special-casing needed, and the scan runs on
 each genome independently (a protein forming a homeolog pair in the target
 says nothing about pairing in the reference genome, and vice versa).
 
