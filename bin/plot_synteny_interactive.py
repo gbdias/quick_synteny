@@ -802,46 +802,12 @@ SYN.widenGapBp = function(start, end, refSpan) {
 // arbitrary (queryOrder, subjectOrder). The only place any of this geometry
 // is built -- SYN.init (see build_page()) calls this for the page's very
 // first render too, through the same path as every later reorder.
-SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
-    const groupGap = SYN.data.groupGap;
-    const subjectOffsets = SYN.computeCircularOffsets(
-        subjectOrder, SYN.data.subjectSizes, Math.PI - groupGap, groupGap);
-    const queryOffsets = SYN.computeCircularOffsets(
-        queryOrder, SYN.data.querySizes, Math.PI + groupGap, 2 * Math.PI - groupGap);
-
-    const q = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: []};
-    for (const name of queryOrder) {
-        const [a0, a1] = queryOffsets[name];
-        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
-        q.xs.push(poly.xs); q.ys.push(poly.ys);
-        q.fill_color.push(SYN.data.targetGrey); q.name.push(name);
-        q.size_label.push(`${(SYN.data.querySizes[name] / 1e6).toFixed(2)} Mb`);
-        q.group.push('target');
-    }
-
-    const s = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], palette_index: []};
-    for (const name of subjectOrder) {
-        const [a0, a1] = subjectOffsets[name];
-        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
-        const pIdx = SYN.data.subjectColorIndex[name];
-        s.xs.push(poly.xs); s.ys.push(poly.ys);
-        s.fill_color.push(SYN.paletteColor(pIdx, k));
-        s.name.push(name);
-        s.size_label.push(`${(SYN.data.subjectSizes[name] / 1e6).toFixed(2)} Mb`);
-        s.group.push('reference'); s.palette_index.push(pIdx);
-    }
-
-    const labelR = SYN.data.outerR + 0.14;
-    const label = {x: [], y: [], text: []};
-    for (const name of queryOrder) {
-        const [a0, a1] = queryOffsets[name]; const mid = (a0 + a1) / 2;
-        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
-    }
-    for (const name of subjectOrder) {
-        const [a0, a1] = subjectOffsets[name]; const mid = (a0 + a1) / 2;
-        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
-    }
-
+// Ribbon master list (SYN.data.ribbons) for the given ring offsets -- split out
+// of SYN.buildRingLayout so a re-chain (SYN.applyChainResult) can rebuild just
+// the ribbons: the wedges, labels and assembly-gap marks depend only on the
+// chromosome order, never on the chain result, and on a gappy draft
+// assembly the gap marks alone are the costliest part of a full layout.
+SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
     // Each of the three groups below is sorted by score ascending (stable)
     // before its ribbons are pushed, so within each group a higher-scoring
     // ribbon always ends up later in the array -- and therefore drawn on
@@ -898,6 +864,50 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
             score: l.score, is_homeolog: true,
         });
     }
+    return ribbons;
+};
+
+SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
+    const groupGap = SYN.data.groupGap;
+    const subjectOffsets = SYN.computeCircularOffsets(
+        subjectOrder, SYN.data.subjectSizes, Math.PI - groupGap, groupGap);
+    const queryOffsets = SYN.computeCircularOffsets(
+        queryOrder, SYN.data.querySizes, Math.PI + groupGap, 2 * Math.PI - groupGap);
+
+    const q = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: []};
+    for (const name of queryOrder) {
+        const [a0, a1] = queryOffsets[name];
+        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
+        q.xs.push(poly.xs); q.ys.push(poly.ys);
+        q.fill_color.push(SYN.data.targetGrey); q.name.push(name);
+        q.size_label.push(`${(SYN.data.querySizes[name] / 1e6).toFixed(2)} Mb`);
+        q.group.push('target');
+    }
+
+    const s = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], palette_index: []};
+    for (const name of subjectOrder) {
+        const [a0, a1] = subjectOffsets[name];
+        const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
+        const pIdx = SYN.data.subjectColorIndex[name];
+        s.xs.push(poly.xs); s.ys.push(poly.ys);
+        s.fill_color.push(SYN.paletteColor(pIdx, k));
+        s.name.push(name);
+        s.size_label.push(`${(SYN.data.subjectSizes[name] / 1e6).toFixed(2)} Mb`);
+        s.group.push('reference'); s.palette_index.push(pIdx);
+    }
+
+    const labelR = SYN.data.outerR + 0.14;
+    const label = {x: [], y: [], text: []};
+    for (const name of queryOrder) {
+        const [a0, a1] = queryOffsets[name]; const mid = (a0 + a1) / 2;
+        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+    }
+    for (const name of subjectOrder) {
+        const [a0, a1] = subjectOffsets[name]; const mid = (a0 + a1) / 2;
+        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+    }
+
+    const ribbons = SYN.buildRibbonRecords(queryOffsets, subjectOffsets);
 
     // Assembly-gap wedges for the current order -- always computed here
     // regardless of show_gaps_toggle's current state (mirrors ribbons above:
@@ -906,7 +916,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
     // SYN.buildOverviewRibbons/SYN.applyOverviewRibbons for self-links).
     const gaps = SYN.buildGapRecords(queryOffsets, subjectOffsets, SYN.GAP_ARC_SEGMENTS);
 
-    return {q, s, label, ribbons, gaps};
+    return {q, s, label, ribbons, gaps, queryOffsets, subjectOffsets};
 };
 
 // A gap wedge is at most a fraction of a degree wide (see MIN_GAP_ANGLE's
@@ -967,6 +977,8 @@ SYN.applyRingLayout = function(queryOrder, subjectOrder, sources) {
     sources.labelSource.data = layout.label;
     SYN.data.ribbons = layout.ribbons;
     SYN.data.gapRecords = layout.gaps;
+    SYN.state.ringQueryOffsets = layout.queryOffsets;
+    SYN.state.ringSubjectOffsets = layout.subjectOffsets;
     sources.querySource.selected.indices = [];
     sources.subjectSource.selected.indices = [];
     sources.querySource.change.emit();
@@ -2097,12 +2109,9 @@ SYN.applyChainResult = function(msg) {
     SYN.data.maxScore = maxScore;
 
     const ringOrder = SYN.ringOrderFor(SYN.state.orderBySize);
-    SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
-        querySource: ui.querySource, subjectSource: ui.subjectSource, labelSource: ui.labelSource,
-        ribbonSource: ui.ribbonSource, gapSource: ui.gapSource,
-        minScore: ui.minBlockSpinner.value, k: ui.colorSpinner.value,
-        showSelfLinks: ui.selfLinksToggle.active, hideSynteny: ui.hideSyntenyToggle.active,
-    });
+    SYN.data.ribbons = SYN.buildRibbonRecords(SYN.state.ringQueryOffsets, SYN.state.ringSubjectOffsets);
+    SYN.applyOverviewRibbons(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.selfLinksToggle.active,
+                              ui.hideSyntenyToggle.active, ui.ribbonSource);
     if (SYN.state.orderBySimilarity) {
         const dpOrder = SYN.dpOrderFor(true);
         SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, ui.colorSpinner.value, ui.minBlockSpinner.value, {
@@ -2123,8 +2132,18 @@ SYN.applyChainResult = function(msg) {
     }
     ui.minBlockSpinner.high = maxScore;
 
-    const visible = msg.crossLinks.filter((l) => l.score >= ui.minBlockSpinner.value).length;
-    ui.chainStatusDiv.text = `${visible} block(s) · ${msg.ms.toFixed(0)} ms`;
+    SYN.chain.lastMs = msg.ms;
+    SYN.updateChainStatus();
+};
+
+// "N block(s) · X ms": blocks currently passing the min-block filter, and how
+// long the last chain request took -- called after every chain result AND
+// every min-block change (a pure filter that never re-chains).
+SYN.updateChainStatus = function() {
+    const ui = SYN.ui;
+    if (!SYN.data.crossLinksFlat || !SYN.chain) { return; }
+    const visible = SYN.data.crossLinksFlat.filter((l) => l.score >= ui.minBlockSpinner.value).length;
+    ui.chainStatusDiv.text = `${visible} block(s) · ${(SYN.chain.lastMs || 0).toFixed(0)} ms`;
 };
 
 // "the cross blocks currently on screen (min block size filter applied)"
@@ -2872,6 +2891,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                   hide_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
         SYN.refreshDetail(k, minScore, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
+        SYN.updateChainStatus();
     """)
     min_block_spinner.js_on_change('value', min_block_callback)
 
