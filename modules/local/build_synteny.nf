@@ -5,11 +5,16 @@
 // bin/chain.js (via bin/chain_blocks.mjs) chains them -- the same chainer the
 // interactive page runs client-side. Contract: docs/specs/hit_table.md.
 
-// CHAIN_* run node 22 pinned by digest (a multi-arch manifest list,
-// node:22-bookworm as of 2026-09-23): chain.js is plain, dependency-free JS,
-// so any node >= 18 would do, but the digest keeps runs reproducible. Not the
-// -slim variant: Nextflow needs `ps` (procps) in every task container to
-// collect task metrics, and -slim doesn't ship it.
+// CHAIN_* run conda-forge's nodejs 26.8.2 from Seqera Containers, the same
+// way RENDER_SYNTENY_INTERACTIVE gets bokeh (see pygenomeviz_plot.nf for why
+// there are two references: Docker and Singularity get different image
+// formats). chain.js is plain, dependency-free JS, so any node >= 18 would
+// do; what matters for the image is that it ships bash and procps, both of
+// which Nextflow needs in every task container (node:*-slim lacks `ps`).
+// Both are linux/amd64 builds, matching docker.runOptions in the standard
+// profile; linux/arm64 builds of the same package also exist
+// (nodejs:26.8.2--6646c230528b0eae for Docker, --864372a79e757566 for
+// Singularity) if a native-arm64 profile is ever added.
 //
 // The *.slider_*links.tsv files are always chained with --min_block 5, the
 // interactive page's min-block-anchors spinner floor
@@ -39,7 +44,9 @@ process EXTRACT_HITS {
 process CHAIN_CROSS {
     tag "${target_name} vs ${comparison_name}"
     label 'process_low'
-    container 'node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844'
+    container { workflow.containerEngine == 'docker'
+        ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
+        : 'oras://community.wave.seqera.io/library/nodejs:26.8.2--79cbd548ac9675ad' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -69,7 +76,9 @@ process CHAIN_CROSS {
 process CHAIN_SELF {
     tag "${name} self"
     label 'process_low'
-    container 'node@sha256:dd5847a04b0deee391fa145f1f4c6d214196668b6bcc7988ebed67249f226844'
+    container { workflow.containerEngine == 'docker'
+        ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
+        : 'oras://community.wave.seqera.io/library/nodejs:26.8.2--79cbd548ac9675ad' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
