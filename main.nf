@@ -6,7 +6,7 @@ include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly
 include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
 include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
 include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
-include { MINIPROT_ALIGN; RENAME_GFF } from './modules/local/miniprot_align.nf'
+include { MINIPROT_ALIGN; RENAME_GFF; SPLIT_GENOME; MINIPROT_ALIGN_CHUNK; MERGE_MINIPROT_GFF } from './modules/local/miniprot_align.nf'
 include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
 include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
 
@@ -70,6 +70,17 @@ def helpMessage() {
                                 (a laptop, a small VM). Default: unset (miniprot's
                                 own default applies). See benchmark/miniprot_m_sweep/
                                 for the measured RAM-vs-concordance tradeoff.
+      --miniprot_chunk_gb <float>  Align the proteome against genome chunks of about
+                                this many Gb each, in parallel, instead of one
+                                whole-genome index -- caps miniprot's peak RAM
+                                (~10 GB per Gb of genome) without changing results
+                                (equivalent to a single whole-genome run; see
+                                modules/local/miniprot_align.nf). Default: unset
+                                (one whole-genome alignment, as above).
+      --miniprot_gb_per_gb <float>  RAM (GB) requested per Gb of CHUNK when
+                                --miniprot_chunk_gb is set, plus a fixed 4 GB
+                                overhead; multiplied by 1.5 per retry attempt
+                                on a 137/140 (OOM) exit. Default: 11.
 
     Polyploid support:
       --show_homeologs <mode>  Also self-compare one or both genomes' own proteome
@@ -233,11 +244,59 @@ workflow {
     // the raw synteny/homeolog anchor source -- see build_synteny.nf), then
     // rename each resulting GFF's seqid column using the lookup from the
     // matching RENAME_SEQUENCES call (join()'d by role name) ----
-    align_in = genomes_in.combine(proteome_fasta)
     // params.miniprot_m defaults to null (miniprot's own default); normalized
     // to '' here for the same reason as min_identity below -- see that comment
     def miniprot_m = params.miniprot_m ?: ''
-    raw_gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
+
+    if (params.miniprot_chunk_gb) {
+        // Chunked path: split each genome into ~miniprot_chunk_gb-sized
+        // pieces, align each in its own (smaller-index, lower-RAM) miniprot
+        // task, then merge back into a GFF equivalent to a whole-genome run
+        // -- see modules/local/miniprot_align.nf and
+        // docs/plans/D_chunked_miniprot.md.
+        def target_chunk_bp = Math.round(params.miniprot_chunk_gb * 1_000_000_000)
+
+        split_ch = SPLIT_GENOME(genomes_in, target_chunk_bp)
+
+        // one row per (name, chunk fasta), carrying that chunk's own length
+        // (dynamic memory directive) and the WHOLE genome's length (the -G
+        // formula, computed from the genome, not the chunk -- see
+        // MINIPROT_ALIGN_CHUNK)
+        chunk_rows = split_ch.chunks.flatMap { name, chunk_fastas, chunks_tsv, total_length_file ->
+            def total_length = total_length_file.text.trim() as long
+            def length_by_file = [:]
+            chunks_tsv.readLines().each { line ->
+                def (fname, len) = line.split('\t')
+                length_by_file[fname] = len as long
+            }
+            def fastas = chunk_fastas instanceof List ? chunk_fastas : [chunk_fastas]
+            fastas.collect { fa -> [name, fa, length_by_file[fa.name], total_length] }
+        }
+        n_chunks_by_name = split_ch.chunks.map { name, chunk_fastas, chunks_tsv, total_length_file ->
+            def fastas = chunk_fastas instanceof List ? chunk_fastas : [chunk_fastas]
+            [name, fastas.size()]
+        }
+
+        align_chunk_in = chunk_rows.combine(proteome_fasta)
+        raw_gff_chunks = MINIPROT_ALIGN_CHUNK(align_chunk_in, miniprot_m).gff
+
+        // groupTuple() with no `size:` waits for the (finite, known-size)
+        // upstream channel to close before emitting each group, so this
+        // already gathers every chunk regardless of target/comparison
+        // having different chunk counts; the join+check below is purely a
+        // fail-fast guard against a silently-missing chunk task.
+        grouped_gff = raw_gff_chunks.groupTuple().join(n_chunks_by_name).map { name, gffs, n_chunks ->
+            if (gffs.size() != n_chunks) {
+                error "quick_synteny: ${name} produced ${gffs.size()} chunk GFF(s), expected ${n_chunks} -- a MINIPROT_ALIGN_CHUNK task must be missing"
+            }
+            [name, gffs]
+        }
+        raw_gff = MERGE_MINIPROT_GFF(grouped_gff).gff
+    } else {
+        align_in = genomes_in.combine(proteome_fasta)
+        raw_gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
+    }
+
     gff = RENAME_GFF(raw_gff.join(renamed.lookup)).gff
     gff_by_role = gff.branch {
         target: it[0] == 'target'
