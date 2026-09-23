@@ -24,33 +24,37 @@ in every panel, regardless of which side triggered the zoom. A dropdown
 picks which of a few curated color palettes (see PALETTES) reference-genome
 chromosomes cycle through, and a numeric spinner recolors every panel by
 cycling through 1-MAX_COLORS discrete colors from whichever one is active
-instead of one color per chromosome; a second spinner filters every panel
-down to blocks with at least that many supporting anchors (floored at
-MBA_SLIDER_MIN, the threshold the embedded links were actually generated at
--- see build_synteny.nf's *_FOR_SLIDER processes) -- see SYN.data.ribbons
-(built once by SYN.buildRingLayout, see SYN.init) and SYN.buildOverviewRibbons
-for why this can be a pure client-side filter with no server and no second
-copy of the chaining algorithm in JS. Spinners rather than sliders since the
-filter is a plain score comparison that works for any integer, not just a
-handful of steps -- a free-form numeric input doesn't imply a false ceiling
-the way a slider's end-of-track does. Two text inputs let a viewer relabel
-"target"/"reference" to the actual genome/species names before exporting a
-panel (see SYN.applyLabels) -- every exportable title/bar-label reads from
-these rather than the pipeline's literal role tags. A stats panel (see
-SYN.applyStats) shows the alignment summary --stats optionally provides,
-since that no longer has anywhere to live inside an exported image the way
-it did on the static plots this replaced.
+instead of one color per chromosome; a min-block-size spinner filters every
+panel down to blocks with at least that many supporting anchors -- since
+extraction is independent of the minimum block size (docs/specs/hit_table.md
+section 4.6), the chainer is always run at minBlock=3 and this spinner is a
+pure client-side filter on the result (see SYN.data.ribbons, built by
+SYN.buildRingLayout from whatever SYN.applyChainResult most recently put in
+SYN.data.linksByQuery/linksByReference, and SYN.buildOverviewRibbons). Min
+identity, max gap, and hit rank each trigger a fresh client-side re-chain
+(SYN.requestChain) -- see SYN.startChainer/SYN.applyChainResult below. Spinners
+rather than sliders since the filters are plain numeric comparisons that work
+for any value, not just a handful of steps -- a free-form numeric input
+doesn't imply a false ceiling the way a slider's end-of-track does. Two text
+inputs let a viewer relabel "target"/"reference" to the actual genome/species
+names before exporting a panel (see SYN.applyLabels) -- every exportable
+title/bar-label reads from these rather than the pipeline's literal role
+tags. A stats panel (see SYN.applyStats) shows the alignment summary --stats
+optionally provides, since that no longer has anywhere to live inside an
+exported image the way it did on the static plots this replaced.
 
 Every wedge/ribbon/segment/gap polygon on the page -- ring, zoom panel, and
 dotplot alike -- is built once, client-side, as plain JS (SHARED_JS): SYN.init
 (see build_page()'s doc.js_on_event(DocumentReady, ...)) runs it for the
 initial render, through the exact same functions every later control change
 reuses, so the browser can rebuild an arbitrary (pivot side, pivot chromosome,
-color count, min block anchors, chromosome order) combination instead of only
-combinations precomputed ahead of time. Python never computes any geometry at
-all; it only ships the raw links (grouped by reference-genome chromosome and
-by target chromosome) plus chromosome sizes and palette indices, as embedded
-JSON.
+color count, min block size, chromosome order) combination instead of only
+combinations precomputed ahead of time. Python never computes any geometry,
+nor any synteny block, at all: it only ships each genome's raw hit table
+(docs/specs/hit_table.md section 6, SYN.hitsPayload) plus chromosome sizes
+and palette indices, as embedded JSON, and inlines bin/chain.js so the browser
+can chain (and re-chain, on every parameter change) client-side, in a Web
+Worker when one is available -- see SYN.startChainer/SYN.applyChainResult.
 
 This is not run through bin/'s usual container -- it needs Bokeh, which has
 no bioconda recipe, so this runs on a Seqera Containers (Wave) image built
@@ -58,10 +62,15 @@ directly from conda-forge's bokeh package instead. See
 modules/local/pygenomeviz_plot.nf for the full reasoning.
 """
 import argparse
+import base64
+import gzip
 import html
 import json
 import math
+import os
 import sys
+
+import numpy as np
 
 from bokeh.document import Document
 from bokeh.embed import file_html
@@ -167,9 +176,10 @@ STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH
 # so every one of them matches, no matter what's in its label.
 TOOLBAR_CONTROL_HEIGHT = 32
 
-# the header row's five titled controls (target/reference label, color
-# palette, colors, min block anchors) -- narrower than their old 220px,
-# which was much wider than any of their labels or values actually need
+# the header row's titled controls (target/reference label, color palette,
+# colors, min identity, max gap, hit rank, min block size) -- narrower than
+# their old 220px, which was much wider than any of their labels or values
+# actually need
 TOP_CONTROL_WIDTH = 150
 
 # dotplot gap lines only -- a lighter grey than the ring/zoom panel's own
@@ -186,21 +196,6 @@ DEFAULT_COLORS = MAX_COLORS
 # label"
 DP_RULER_FRAC = 0.035
 
-# The min-block-anchors spinner only works because --links is always
-# generated at MBA_SLIDER_MIN (see modules/local/build_synteny.nf's
-# *_FOR_SLIDER processes): find_blocks() in build_synteny_blocks.py discovers
-# blocks largest-first per chromosome pair and stops once the next chain is
-# smaller than its threshold, so a run at threshold T's output is exactly the
-# score >= T subset of a run at any lower threshold's output. That means
-# filtering the MBA_SLIDER_MIN links client-side by score reproduces exactly
-# what a fresh run at any higher threshold would have produced, with no need
-# to ship the actual chaining algorithm to the browser or precompute more
-# than one file. There's no MAX/STEP alongside this: the spinner (see
-# build_page()) accepts any integer up to this dataset's actual largest
-# block, not a fixed set of steps.
-MBA_SLIDER_MIN = 5
-
-
 def read_chrom_sizes(path):
     chroms = []
     with open(path) as f:
@@ -214,11 +209,9 @@ def read_chrom_sizes(path):
 
 
 def read_gaps(path):
-    """find_assembly_gaps.py output: chrom, start, end -- no header, 0-based
-    half-open, same convention as read_links' q_start/q_end (see
-    build_synteny_blocks.py's parse_gff). Returns [] for path=None (no
-    --target_gaps/--comparison_gaps given), same graceful-degradation
-    convention as the homeolog links args below."""
+    """bin/rename_sequences.py's --out_gaps output: chrom, start, end -- no
+    header, 0-based half-open. Returns [] for path=None (no --target_gaps/
+    --comparison_gaps given)."""
     if not path:
         return []
     gaps = []
@@ -232,32 +225,133 @@ def read_gaps(path):
     return gaps
 
 
-def read_links(path):
-    """Header-driven: mean_identity/anchor_density (see build_synteny_blocks.py)
-    come through automatically when present, and are None for older links.tsv
-    files that predate those two columns -- no schema-version flag needed."""
-    links = []
-    with open(path) as f:
-        header = f.readline().rstrip('\n').split('\t')
-        for line in f:
-            row = dict(zip(header, line.rstrip('\n').split('\t')))
-            links.append({
-                'q_chrom': row['query_chrom'], 'q_start': int(row['query_start']),
-                'q_end': int(row['query_end']), 's_chrom': row['subject_chrom'],
-                's_start': int(row['subject_start']), 's_end': int(row['subject_end']),
-                'score': int(row['score']), 'orientation': row['orientation'],
-                'mean_identity': float(row['mean_identity']) if 'mean_identity' in row else None,
-                'anchor_density': float(row['anchor_density']) if 'anchor_density' in row else None,
-            })
-    return links
+HITS_TSV_HEADER = ['chrom', 'start', 'end', 'strand', 'positive', 'identity', 'score', 'rank', 'protein', 'locus']
+
+
+def read_hits_tsv(raw_bytes):
+    """Parses one bin/extract_hits.py output (docs/specs/hit_table.md section
+    1) already read into memory as raw gzip bytes -- into per-column lists,
+    in TSV row order (already sorted by (chrom, start, end, protein, rank),
+    see that script). `identity`/`score` aren't part of the in-memory
+    HitTable (spec section 2) and are dropped here."""
+    text = gzip.decompress(raw_bytes).decode('utf-8')
+    lines = text.split('\n')
+    header = lines[0].split('\t')
+    if header != HITS_TSV_HEADER:
+        sys.exit(f"ERROR: unexpected hits TSV header {header}")
+    chrom, start, end, strand, positive, rank, protein, locus = [], [], [], [], [], [], [], []
+    for line in lines[1:]:
+        if not line:
+            continue
+        row = line.split('\t')
+        chrom.append(row[0]); start.append(int(row[1])); end.append(int(row[2]))
+        strand.append(row[3]); positive.append(float(row[4])); rank.append(int(row[7]))
+        protein.append(row[8]); locus.append(int(row[9]))
+    return {'chrom': chrom, 'start': start, 'end': end, 'strand': strand,
+            'positive': positive, 'rank': rank, 'protein': protein, 'locus': locus}
+
+
+def encode_hits_column(values, dtype):
+    """One GenomeColumns column (docs/specs/hit_table.md section 6): little-
+    endian typed array, gzip'd, base64'd. numpy is used only for the
+    explicit little-endian dtypes and fast bulk casting -- it ships in the
+    bokeh container (see modules/local/pygenomeviz_plot.nf)."""
+    np_dtype = {'u8': '<u1', 'u16': '<u2', 'u32': '<u4', 'f64': '<f8'}[dtype]
+    data = np.asarray(values, dtype=np_dtype).tobytes()
+    return {'dtype': dtype, 'data': base64.b64encode(gzip.compress(data, mtime=0)).decode('ascii')}
+
+
+def widened_dtype(values, narrow, wide, limit):
+    """spec section 6: startDelta/length are u32, f64 "if any value >= 2**32"
+    (a chromosome bigger than 4.29 Gb)."""
+    return wide if values and max(values) >= limit else narrow
+
+
+def build_genome_columns(hits, chrom_names, prot_index):
+    """One GenomeColumns dict (docs/specs/hit_table.md section 6) for a
+    single genome's parsed hit table (read_hits_tsv). chrom_names is that
+    genome's FULL chrom.sizes-order name list (Dataset's own *_chroms_natural,
+    not filtered by --min_seq_size or anything else) -- read_hits_tsv's rows
+    were already restricted to sequences in that same chrom.sizes by
+    bin/extract_hits.py, so every chrom here is guaranteed present."""
+    chrom_index = {name: i for i, name in enumerate(chrom_names)}
+    n = len(hits['chrom'])
+    chrom_idx = [chrom_index[c] for c in hits['chrom']]
+
+    # startDelta (spec section 6): start minus the previous row's start on
+    # the same chrom, first row per chrom relative to 0 -- rows are already
+    # grouped by chrom (TSV row order, see read_hits_tsv's docstring)
+    start_delta = [0] * n
+    prev_chrom, prev_start = None, 0
+    for i in range(n):
+        if hits['chrom'][i] != prev_chrom:
+            prev_chrom, prev_start = hits['chrom'][i], 0
+        start_delta[i] = hits['start'][i] - prev_start
+        prev_start = hits['start'][i]
+    length = [hits['end'][i] - hits['start'][i] for i in range(n)]
+    strand = [1 if s == '+' else 0 for s in hits['strand']]
+    positive = [round(p * 10000) for p in hits['positive']]
+    rank = [min(r, 255) for r in hits['rank']]
+    locus = hits['locus']
+    n_loci = (max(locus) + 1) if locus else 0
+
+    return {
+        'n': n, 'nLoci': n_loci,
+        'cols': {
+            'chrom': encode_hits_column(chrom_idx, 'u16'),
+            'startDelta': encode_hits_column(start_delta, widened_dtype(start_delta, 'u32', 'f64', 2 ** 32)),
+            'length': encode_hits_column(length, widened_dtype(length, 'u32', 'f64', 2 ** 32)),
+            'strand': encode_hits_column(strand, 'u8'),
+            'positive': encode_hits_column(positive, 'u16'),
+            'rank': encode_hits_column(rank, 'u8'),
+            'prot': encode_hits_column([prot_index[p] for p in hits['protein']], 'u32'),
+            'locus': encode_hits_column(locus, 'u32'),
+        },
+    }
+
+
+def build_hits_payload(target_hits_path, comparison_hits_path, target_chrom_names, comparison_chrom_names):
+    """SYN.hitsPayload (docs/specs/hit_table.md section 6) -- the one thing
+    Python ships instead of precomputed links/blocks. `reference:
+    'same_as_target'` (skipping a second, redundant copy of the same bytes)
+    only when both the raw hit tables AND the two genomes' chrom.sizes
+    orderings are byte-for-byte identical -- SYNCHAIN.decodePayload's
+    same_as_target path reuses the target table's chrom-index column
+    verbatim under the reference's own chromNames/chromSizes, which is only
+    correct if chromosome N means the same thing on both sides."""
+    with open(target_hits_path, 'rb') as f:
+        target_bytes = f.read()
+    same_genome = target_chrom_names == comparison_chrom_names
+    if same_genome:
+        with open(comparison_hits_path, 'rb') as f:
+            same_genome = f.read() == target_bytes
+
+    target_hits = read_hits_tsv(target_bytes)
+    comparison_hits = None if same_genome else read_hits_tsv(open(comparison_hits_path, 'rb').read())
+
+    # union of both genomes' accessions, sorted lexicographically (spec
+    # section 2) -- ASCII protein accessions sort identically under Python's
+    # code-point order and JS's default (UTF-16 code unit) Array.sort()
+    all_proteins = set(target_hits['protein']) | (set(comparison_hits['protein']) if comparison_hits else set())
+    proteins = sorted(all_proteins)
+    prot_index = {p: i for i, p in enumerate(proteins)}
+
+    target_cols = build_genome_columns(target_hits, target_chrom_names, prot_index)
+    reference_cols = ('same_as_target' if same_genome
+                       else build_genome_columns(comparison_hits, comparison_chrom_names, prot_index))
+
+    proteins_gz = gzip.compress('\n'.join(proteins).encode('utf-8'), mtime=0)
+    return {
+        'version': 1,
+        'proteins': base64.b64encode(proteins_gz).decode('ascii'),
+        'genomes': {'target': target_cols, 'reference': reference_cols},
+    }
 
 
 class Dataset:
-    def __init__(self, query_chrom_sizes, subject_chrom_sizes, links_path,
-                 target_homeolog_links_path=None, comparison_homeolog_links_path=None,
-                 query_gaps_path=None, subject_gaps_path=None):
-        # CHROM_SIZES emits natural (FASTA) order now, not size order (see
-        # that process's own comment) -- self.query_chroms/subject_chroms
+    def __init__(self, query_chrom_sizes, subject_chrom_sizes, query_gaps_path=None, subject_gaps_path=None):
+        # RENAME_SEQUENCES emits natural (FASTA) order now, not size order
+        # (see main.nf's own comment) -- self.query_chroms/subject_chroms
         # stay the name used everywhere below (dotplot layout, color
         # assignment) and represent whichever order is DEFAULT-active, which
         # is size order (size_order_toggle defaults to on in build_page() --
@@ -265,7 +359,9 @@ class Dataset:
         # default-state pair in this file). The natural-order lists are kept
         # alongside purely so build_page() can embed them for the
         # client-side reorder engines (SYN.buildRingLayout, SYN.dpNaturalOrder)
-        # to switch back to when that toggle goes off.
+        # to switch back to when that toggle goes off, AND so SYN.startChainer
+        # has the full (unfiltered) chromosome name/size lists the embedded
+        # hit tables' chrom indices refer to (see build_hits_payload).
         self.query_chroms_natural = read_chrom_sizes(query_chrom_sizes)
         self.subject_chroms_natural = read_chrom_sizes(subject_chrom_sizes)
         self.query_chroms = sorted(self.query_chroms_natural, key=lambda c: -c[1])
@@ -273,26 +369,11 @@ class Dataset:
         self.query_sizes = dict(self.query_chroms)
         self.subject_sizes = dict(self.subject_chroms)
 
-        self.links = [l for l in read_links(links_path)
-                      if l['q_chrom'] in self.query_sizes and l['s_chrom'] in self.subject_sizes]
-        self.target_homeolog_links = []
-        if target_homeolog_links_path:
-            self.target_homeolog_links = [l for l in read_links(target_homeolog_links_path)
-                                           if l['q_chrom'] in self.query_sizes and l['s_chrom'] in self.query_sizes]
-        self.comparison_homeolog_links = []
-        if comparison_homeolog_links_path:
-            self.comparison_homeolog_links = [l for l in read_links(comparison_homeolog_links_path)
-                                               if l['q_chrom'] in self.subject_sizes and l['s_chrom'] in self.subject_sizes]
-
-        # assembly gaps -- filtered to chroms that survived --min_seq_size the
-        # same way links are above, so a gap on a sequence dropped from the
-        # plot doesn't linger in the data
+        # assembly gaps -- filtered to chroms actually present, same
+        # reasoning links used to get filtered by before blocks moved
+        # client-side
         self.query_gaps = [g for g in read_gaps(query_gaps_path) if g['chrom'] in self.query_sizes]
         self.subject_gaps = [g for g in read_gaps(subject_gaps_path) if g['chrom'] in self.subject_sizes]
-
-    def max_score(self):
-        return max((l['score'] for l in self.links + self.target_homeolog_links
-                     + self.comparison_homeolog_links), default=1) or 1
 
 
 def group_gaps_by_chrom(gaps):
@@ -398,14 +479,14 @@ SHARED_JS = r"""
 window.SYN = window.SYN || {};
 // mode is 'pivot' (a ring wedge or dotplot ruler was clicked -- pivotSide/
 // pivotName apply) or 'pair' (a dotplot grid cell was clicked -- pairTarget/
-// pairSubject apply). The color/min-block-anchors spinners need to know
-// which of SYN.buildDetailData/SYN.buildPairDetailData to re-run.
+// pairSubject apply). The color/min-block-size spinners need to know which
+// of SYN.buildDetailData/SYN.buildPairDetailData to re-run.
 // dpQueryOffsets/dpSubjectOffsets are the dotplot's *current* per-chromosome
 // axis offsets (natural order at load, replaced wholesale by the "order by
 // similarity" toggle -- see SYN.applyDotplotOrder) -- every dotplot redraw
-// that isn't a reorder itself (recoloring, the min-block-anchors filter)
-// reads these rather than recomputing an order, so it always draws whatever
-// order is currently active without needing to know which one that is.
+// that isn't a reorder itself (recoloring, the min-block-size filter) reads
+// these rather than recomputing an order, so it always draws whatever order
+// is currently active without needing to know which one that is.
 // targetLabel/referenceLabel are the viewer-editable display names (see
 // SYN.applyLabels) -- every title/bar-label that would otherwise show the
 // pipeline's literal "target"/"reference" role tags reads from these
@@ -439,6 +520,12 @@ SYN.state = {
     // size_order_toggle's default (see build_page()) -- kept in sync
     // deliberately, same as every other default-state pair in this file.
     orderBySize: true,
+    // read by SYN.applyChainResult, to decide whether a fresh chain result
+    // needs a full dotplot reorder (similarity order depends on link
+    // weights, which just changed) or only a segment redraw in place.
+    // Matches order_toggle's default (see build_page()) -- kept in sync
+    // deliberately, same as every other default-state pair in this file.
+    orderBySimilarity: false,
     // read by SYN.applyDetail (gates whether a freshly built detail's gap
     // ticks actually reach detail_gap_source) and by show_gaps_toggle's own
     // callback (ring + dotplot gap visibility) -- matches show_gaps_toggle's
@@ -449,7 +536,7 @@ SYN.state = {
     // dropped from every panel (see min_seq_size_spinner in build_page()).
     // 0 by default: --min_seq_size already dropped anything smaller than the
     // pipeline's own threshold before this script ever saw the data (see
-    // prepare_synteny_inputs.nf's CHROM_SIZES process), so 0 here means "show
+    // RENAME_SEQUENCES's chrom_sizes output, main.nf), so 0 here means "show
     // everything actually embedded in this page", not "no filtering ever
     // happened upstream".
     minSeqSize: 0,
@@ -504,19 +591,21 @@ SYN.textColorFor = function(hex) {
     return luminance >= 0.6 ? '#000000' : '#ffffff';
 };
 
-// reference wedges are never filtered by the min-block-anchors slider (only
+// reference wedges are never filtered by the min-block-size spinner (only
 // ribbons are), so recoloring them only ever needs the current color count
 SYN.recolorSubjectWedges = function(k, subjectSource) {
     subjectSource.data['fill_color'] = subjectSource.data['palette_index'].map((idx) => SYN.paletteColor(idx, k));
     subjectSource.change.emit();
 };
 
-// SYN.data.ribbons holds EVERY ribbon (built by SYN.buildRingLayout -- the
-// embedded links are always generated at MBA_SLIDER_MIN, the least strict
-// slider setting), so filtering by min-block-anchors, recoloring by the
-// current color count, and showing/hiding self-links (is_homeolog records --
-// a protein hitting two loci within the SAME genome) all happen together
-// here, client-side, on every change of any of the three controls --
+// SYN.data.ribbons holds EVERY ribbon (built by SYN.buildRingLayout from
+// whatever SYN.applyChainResult most recently put in SYN.data.linksByQuery/
+// targetHomeologLinks/referenceHomeologLinks -- the chainer is always run at
+// minBlock=3, docs/specs/hit_table.md section 4.6's least strict floor), so
+// filtering by min block size, recoloring by the current color count, and
+// showing/hiding self-links (is_homeolog records -- a protein hitting two
+// loci within the SAME genome) all happen together here, client-side, on
+// every change of any of the three controls --
 // rebuilding from the same master list rather than mutating whatever
 // happens to be currently displayed keeps them from stepping on each other
 // (e.g. recoloring after a filter must recolor only the still-visible
@@ -1123,7 +1212,7 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
 
 // Applies a full reorder: rebuilds every order-dependent dotplot source (via
 // buildDotplotLayout) and updates SYN.state's offsets so every later
-// recolor/refilter (color spinner, palette dropdown, min-block-anchors) draws
+// recolor/refilter (color spinner, palette dropdown, min-block-size) draws
 // against the new order without needing to know a reorder happened.
 // sources.fig, if given, is the dotplot figure itself -- its x_range/y_range
 // are refreshed to the new totalX/totalY so a min-length filter (see
@@ -1476,7 +1565,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
-    let stats = `${l.score} protein alignment(s)  ·  orientation=${l.orientation}`;
+    let stats = `${l.score} genes (distinct loci)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
         && l.anchor_density !== null && l.anchor_density !== undefined) {
         stats += `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
@@ -1517,7 +1606,7 @@ SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, g
 };
 
 // Re-renders whatever is currently shown in the zoom panel (a pivot, a
-// pair, or nothing) at a new color count / min-block-anchors threshold --
+// pair, or nothing) at a new color count / min-block-size threshold --
 // shared by the color-count spinner, the palette dropdown, and the min-
 // block-anchors spinner (see build_page()), so which of buildDetailData/
 // buildPairDetailData applies doesn't need to be duplicated in each of
@@ -1785,16 +1874,295 @@ SYN.applyStats = function(targetLabel, referenceLabel, statsDiv) {
     statsDiv.text = SYN.buildStatsHtml(targetLabel, referenceLabel);
 };
 
+// ---- client-side chaining (docs/specs/hit_table.md): decode the embedded
+// hit tables, chain them (in a Web Worker when available) at load and on
+// every min-identity/max-gap/hit-rank change, and hand the result to the
+// same buildRingLayout/buildDotplotSegmentsForLayout/buildDetailData
+// functions above -- no separate render path for "the first chain" vs
+// "a re-chain after a control change". ----
+
+// the chainer is always run at this minBlock (docs/specs/hit_table.md
+// section 4.6: extraction doesn't depend on it, so this is the least
+// strict floor that still excludes single/double-anchor noise) -- the min
+// block size control is a pure client-side filter on top of the reply (see
+// SYN.data.ribbons' own comment above), never a reason to re-chain.
+SYN.CHAIN_REQUEST_MIN_BLOCK = 3;
+
+SYN.HIT_RANK_MAP = {'best only': 1, '≤ 2': 2, '≤ 3': 3, all: SYNCHAIN.DEFAULTS.maxHitRank};
+
+SYN.now = function() {
+    return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+};
+
+// Reads the three chain-affecting controls (min identity/max gap/hit rank)
+// off SYN.ui -- the min block size control is deliberately NOT here (see
+// SYN.CHAIN_REQUEST_MIN_BLOCK above): it never changes what gets requested,
+// only what SYN.applyChainResult's callers filter the reply down to.
+SYN.currentChainParams = function() {
+    return {
+        minPositive: SYN.ui.minIdentitySpinner.value / 100,
+        maxGap: SYN.ui.maxGapSpinner.value,
+        maxHitRank: SYN.HIT_RANK_MAP[SYN.ui.hitRankSelect.value],
+        minBlock: SYN.CHAIN_REQUEST_MIN_BLOCK,
+    };
+};
+
+// Runs inside the Worker, prepended with the inlined chain.js source (see
+// SYN.startChainer) and NOTHING else from this file -- a Worker gets its own
+// fresh global scope, with none of SHARED_JS's own SYN.* functions in it, so
+// this calls SYNCHAIN directly rather than through SYN.buildChainers/
+// SYN.runChainers below (the main-thread fallback's own equivalent, which
+// CAN use them since it runs in this same scope). The ${...} substitution
+// happens once, in SHARED_JS itself, when this string is built -- by the
+// time it reaches a Worker it's a plain literal, not a template needing
+// anything of SYN's still in scope. Kept as one string (rather than a named
+// function serialized via toString()) so it reads the same whichever path
+// runs it, and so a syntax error in it fails at page-build time (Python
+// would embed broken JS) rather than silently inside a Worker.
+SYN.WORKER_SHIM_SRC = `
+let chainers = null;
+self.onmessage = function(e) {
+    const msg = e.data;
+    if (msg.type === 'init') {
+        chainers = {
+            cross: SYNCHAIN.createChainer(msg.target, msg.reference, {}),
+            targetSelf: SYNCHAIN.createChainer(msg.target, msg.target, {selfMode: true}),
+            referenceSelf: SYNCHAIN.createChainer(msg.reference, msg.reference, {selfMode: true}),
+        };
+        return;
+    }
+    if (msg.type === 'run') {
+        const p = Object.assign({}, msg.params, {minBlock: ${SYN.CHAIN_REQUEST_MIN_BLOCK}});
+        const t0 = performance.now();
+        const cross = chainers.cross.run(p);
+        const targetSelf = chainers.targetSelf.run(p);
+        const referenceSelf = chainers.referenceSelf.run(p);
+        self.postMessage({
+            seq: msg.seq,
+            crossLinks: SYNCHAIN.blocksToLinks(cross),
+            targetSelfLinks: SYNCHAIN.blocksToLinks(targetSelf),
+            referenceSelfLinks: SYNCHAIN.blocksToLinks(referenceSelf),
+            ms: performance.now() - t0,
+        });
+    }
+};
+`;
+
+// Three chainers sharing the decoded tables: cross (target vs reference)
+// plus each genome's own self-comparison (homeologs) -- createChainer's own
+// per-stage caching (docs/specs/hit_table.md section 3's own note on this)
+// means a min-identity/max-gap/hit-rank change that doesn't move the anchor
+// set at all (rare, but e.g. a repeated hit-rank click) costs next to
+// nothing on a later .run() call. Used only by SYN.startChainer's
+// main-thread fallback -- the Worker path above inlines the equivalent
+// logic itself, since it has no SYN.* of its own to call into.
+SYN.buildChainers = function(target, reference) {
+    return {
+        cross: SYNCHAIN.createChainer(target, reference, {}),
+        targetSelf: SYNCHAIN.createChainer(target, target, {selfMode: true}),
+        referenceSelf: SYNCHAIN.createChainer(reference, reference, {selfMode: true}),
+    };
+};
+
+SYN.runChainers = function(chainers, params, seq) {
+    const p = Object.assign({}, params, {minBlock: SYN.CHAIN_REQUEST_MIN_BLOCK});
+    const t0 = SYN.now();
+    const cross = chainers.cross.run(p);
+    const targetSelf = chainers.targetSelf.run(p);
+    const referenceSelf = chainers.referenceSelf.run(p);
+    return {
+        seq,
+        crossLinks: SYNCHAIN.blocksToLinks(cross),
+        targetSelfLinks: SYNCHAIN.blocksToLinks(targetSelf),
+        referenceSelfLinks: SYNCHAIN.blocksToLinks(referenceSelf),
+        ms: SYN.now() - t0,
+    };
+};
+
+// Decodes the embedded payload and sets up however this browser will chain
+// it -- a Web Worker (built from the SAME inlined chain.js source text the
+// main thread already has, read back out of the inert <script
+// type="text/plain" id="synchain-src"> copy build_page() emits, plus
+// SYN.WORKER_SHIM_SRC) so a re-chain never blocks the UI thread, or, if
+// constructing the Worker throws (e.g. a `data:`/`file:` page in a browser
+// that restricts Worker creation there -- see the plan's own note), a
+// synchronous main-thread fallback with exactly one console.warn, never a
+// hard failure.
+SYN.startChainer = async function(payload) {
+    const chroms = {
+        target: {names: SYN.data.queryNamesNatural, sizes: SYN.data.queryNamesNatural.map((n) => SYN.data.querySizes[n])},
+        reference: {names: SYN.data.subjectNamesNatural, sizes: SYN.data.subjectNamesNatural.map((n) => SYN.data.subjectSizes[n])},
+    };
+    const tables = await SYNCHAIN.decodePayload(payload, chroms);
+    SYN.chain = {
+        tables, seq: -1, appliedSeq: -1, busy: false,
+        pendingSeq: null, pendingParams: null, worker: null, useWorker: true, mainThreadChainers: null,
+    };
+    try {
+        const chainSrc = document.getElementById('synchain-src').textContent;
+        const blob = new Blob([chainSrc, SYN.WORKER_SHIM_SRC], {type: 'text/javascript'});
+        SYN.chain.worker = new Worker(URL.createObjectURL(blob));
+        SYN.chain.worker.onmessage = function(e) { SYN.onChainMessage(e.data); };
+        SYN.chain.worker.postMessage({type: 'init', target: tables.target, reference: tables.reference});
+    } catch (e) {
+        console.warn('SYN.startChainer: Worker unavailable, chaining on the main thread instead.', e);
+        SYN.chain.useWorker = false;
+        SYN.chain.mainThreadChainers = SYN.buildChainers(tables.target, tables.reference);
+    }
+};
+
+// While a request is pending and nothing is zoomed, the zoom panel's own
+// title doubles as a busy indicator -- restored to its normal (possibly
+// still-empty) state by SYN.applyChainResult once the reply lands.
+SYN.showComputingStatus = function() {
+    if (SYN.state.mode === null && !SYN.state.pivotName) {
+        SYN.ui.detailFig.title.text = 'Computing synteny…';
+    }
+};
+
+// At most one chain request in flight at a time -- while busy, only the
+// latest params are remembered (not queued), and sent the moment the
+// current reply arrives (see SYN.onChainMessage). seq is used to ignore any
+// reply older than the latest one actually applied, which can otherwise
+// happen if the main-thread fallback and a slow Worker reply somehow race
+// (they can't in practice -- one browser uses exactly one path -- but the
+// check is free and matches the plan's own wording).
+SYN.requestChain = function(params) {
+    SYN.chain.seq++;
+    const seq = SYN.chain.seq;
+    if (SYN.chain.busy) {
+        SYN.chain.pendingSeq = seq;
+        SYN.chain.pendingParams = params;
+        return;
+    }
+    SYN.chain.busy = true;
+    SYN.showComputingStatus();
+    if (SYN.chain.useWorker) {
+        SYN.chain.worker.postMessage({type: 'run', seq, params});
+    } else {
+        SYN.onChainMessage(SYN.runChainers(SYN.chain.mainThreadChainers, params, seq));
+    }
+};
+
+SYN.onChainMessage = function(msg) {
+    SYN.chain.busy = false;
+    if (msg.seq > SYN.chain.appliedSeq) {
+        SYN.chain.appliedSeq = msg.seq;
+        SYN.applyChainResult(msg);
+    }
+    if (SYN.chain.pendingSeq !== null) {
+        const seq = SYN.chain.pendingSeq, params = SYN.chain.pendingParams;
+        SYN.chain.pendingSeq = null;
+        SYN.chain.pendingParams = null;
+        SYN.chain.busy = true;
+        SYN.showComputingStatus();
+        if (SYN.chain.useWorker) {
+            SYN.chain.worker.postMessage({type: 'run', seq, params});
+        } else {
+            SYN.onChainMessage(SYN.runChainers(SYN.chain.mainThreadChainers, params, seq));
+        }
+    }
+};
+
+SYN.groupLinksBy = function(links, key) {
+    const g = {};
+    for (const l of links) {
+        (g[l[key]] || (g[l[key]] = [])).push(l);
+    }
+    return g;
+};
+
+// Rebuilds SYN.data's link tables from a fresh chain result and re-renders
+// every panel through the exact same apply* functions every other control
+// change already uses (SYN.applyRingLayout, SYN.applyDotplotOrder/
+// SYN.applyDotplotSegmentsForCurrentLayout, SYN.refreshDetail) -- this is
+// the one place a chain result ever reaches SYN.data, whether it came from
+// the very first load or the Nth min-identity change.
+SYN.applyChainResult = function(msg) {
+    const ui = SYN.ui;
+    // kept flat (sorted, chain.js's own compareBlocks order -- see
+    // docs/specs/hit_table.md section 5) so SYN.exportBlocksTsv can filter
+    // and re-serialize it without needing to flatten linksByQuery back out
+    // in some arbitrary (and here, non-deterministic: Object.values order)
+    // order of its own.
+    SYN.data.crossLinksFlat = msg.crossLinks;
+    SYN.data.linksByQuery = SYN.groupLinksBy(msg.crossLinks, 'q_chrom');
+    SYN.data.linksByReference = SYN.groupLinksBy(msg.crossLinks, 's_chrom');
+    SYN.data.targetHomeologLinks = msg.targetSelfLinks;
+    SYN.data.referenceHomeologLinks = msg.referenceSelfLinks;
+    let maxScore = 1;
+    for (const l of msg.crossLinks) { if (l.score > maxScore) { maxScore = l.score; } }
+    for (const l of msg.targetSelfLinks) { if (l.score > maxScore) { maxScore = l.score; } }
+    for (const l of msg.referenceSelfLinks) { if (l.score > maxScore) { maxScore = l.score; } }
+    SYN.data.maxScore = maxScore;
+
+    const ringOrder = SYN.ringOrderFor(SYN.state.orderBySize);
+    SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
+        querySource: ui.querySource, subjectSource: ui.subjectSource, labelSource: ui.labelSource,
+        ribbonSource: ui.ribbonSource, gapSource: ui.gapSource,
+        minScore: ui.minBlockSpinner.value, k: ui.colorSpinner.value,
+        showSelfLinks: ui.selfLinksToggle.active, hideSynteny: ui.hideSyntenyToggle.active,
+    });
+    if (SYN.state.orderBySimilarity) {
+        const dpOrder = SYN.dpOrderFor(true);
+        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, ui.colorSpinner.value, ui.minBlockSpinner.value, {
+            query: ui.dpQuerySource, subject: ui.dpSubjectSource, grid: ui.dpGridSource,
+            queryLabel: ui.dpQueryLabelSource, subjectLabel: ui.dpSubjectLabelSource,
+            segment: ui.dpSegmentSource, gap: ui.dpGapSource, fig: ui.dotplotFig,
+        });
+    } else {
+        SYN.applyDotplotSegmentsForCurrentLayout(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.dpSegmentSource);
+    }
+    SYN.refreshDetail(ui.colorSpinner.value, ui.minBlockSpinner.value, ui.detailBarSource, ui.detailRibbonSource,
+                       ui.detailLabelSource, ui.detailFig, ui.detailGapSource);
+    // SYN.refreshDetail is a no-op with nothing zoomed -- restore the panel
+    // title SYN.showComputingStatus overwrote for the duration of this
+    // request, same condition that function itself gates on.
+    if (SYN.state.mode === null && !SYN.state.pivotName) {
+        ui.detailFig.title.text = SYN.emptyDetail().title;
+    }
+    ui.minBlockSpinner.high = maxScore;
+
+    const visible = msg.crossLinks.filter((l) => l.score >= ui.minBlockSpinner.value).length;
+    ui.chainStatusDiv.text = `${visible} block(s) · ${msg.ms.toFixed(0)} ms`;
+};
+
+// "the cross blocks currently on screen (min block size filter applied)"
+// (the plan's own wording) -- SYN.data.crossLinksFlat is already sorted in
+// exactly the order docs/specs/hit_table.md section 5 specifies (it's
+// chain.js's own blocksToLinks output, untouched -- see SYN.applyChainResult),
+// and filtering a sorted list by a monotonic predicate preserves that order,
+// so this is byte-identical to a fresh `node bin/chain_blocks.mjs --min_block
+// <current value>` run with the same min-identity/max-gap/hit-rank.
+SYN.exportBlocksTsv = function() {
+    const minScore = SYN.ui.minBlockSpinner.value;
+    const filtered = (SYN.data.crossLinksFlat || []).filter((l) => l.score >= minScore);
+    const tsv = SYNCHAIN.linksToTsv(filtered);
+    SYN.downloadBlob(new Blob([tsv], {type: 'text/tab-separated-values'}), SYN.buildBlocksExportFilename());
+};
+
+SYN.buildBlocksExportFilename = function() {
+    const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
+    const t = sanitize(SYN.state.targetLabel) || 'target';
+    const r = sanitize(SYN.state.referenceLabel) || 'reference';
+    const id = Math.round(SYN.ui.minIdentitySpinner.value);
+    return `${t}_vs_${r}_blocks_id${id}_gap${SYN.ui.maxGapSpinner.value}_min${SYN.ui.minBlockSpinner.value}.tsv`;
+};
+
 // The page's one entry point, run once from build_page()'s
 // doc.js_on_event(DocumentReady, ...) -- see that call for which
-// sources/figure/widget end up on `s`. Renders the initial on-screen state
-// through the exact same functions every later control change reuses
-// (SYN.applyRingLayout, SYN.applyDotplotOrder), at the same defaults those
-// controls start at (size order, MBA_SLIDER_MIN, DEFAULT_COLORS, self-links
-// and hide-synteny both off) -- so there is no separate "initial render"
-// code path to keep in sync with the interactive one, the way Python's
-// direct geometry construction used to be (see module docstring).
+// sources/figure/widget end up on `s`. Stashes `s` as SYN.ui (the registry
+// every later chain-related function above reads/writes through), does an
+// initial ring/dotplot render with zero links (through the exact same
+// functions every later control change reuses -- there is no separate
+// "initial render" code path, the way Python's direct geometry construction
+// used to be -- see module docstring), then kicks off the actual chaining:
+// decode the embedded hit tables, seed the min-identity/min-block controls
+// from --min_identity/--min_block if given or SYNCHAIN.autoParams otherwise
+// (again, before a viewer could possibly have touched either), and request
+// the first real chain.
 SYN.init = function(s) {
+    SYN.ui = s;
     SYN.state.targetLabel = SYN.data.targetLabelDefault;
     SYN.state.referenceLabel = SYN.data.referenceLabelDefault;
 
@@ -1802,15 +2170,32 @@ SYN.init = function(s) {
     SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
         querySource: s.querySource, subjectSource: s.subjectSource, labelSource: s.labelSource,
         ribbonSource: s.ribbonSource, gapSource: s.gapSource,
-        minScore: SYN.data.mbaMin, k: s.colorSpinner.value,
+        minScore: s.minBlockSpinner.value, k: s.colorSpinner.value,
         showSelfLinks: false, hideSynteny: false,
     });
 
     const dpOrder = SYN.dpOrderFor(false);
-    SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, s.colorSpinner.value, SYN.data.mbaMin, {
+    SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, s.colorSpinner.value, s.minBlockSpinner.value, {
         query: s.dpQuerySource, subject: s.dpSubjectSource, grid: s.dpGridSource,
         queryLabel: s.dpQueryLabelSource, subjectLabel: s.dpSubjectLabelSource,
         segment: s.dpSegmentSource, gap: s.dpGapSource, fig: s.dotplotFig,
+    });
+
+    SYN.startChainer(SYN.hitsPayload).then(function() {
+        const auto = SYNCHAIN.autoParams(SYN.chain.tables.target, SYN.chain.tables.reference);
+        const init = SYN.data.initialParams;
+        const minPositive = init.minPositive != null ? init.minPositive : auto.minPositive;
+        const minBlock = init.minBlock != null ? init.minBlock : auto.minBlock;
+        // setting these fires min_identity_spinner/min_block_spinner's own
+        // change callbacks (see build_page()) -- harmless here: SYN.data
+        // still holds the empty placeholders the ring/dotplot render above
+        // already rendered from, and the real SYN.requestChain call right
+        // after this makes both redundant re-renders moot within a frame.
+        s.minIdentitySpinner.value = Math.round(minPositive * 100);
+        s.minBlockSpinner.value = minBlock;
+        SYN.requestChain(SYN.currentChainParams());
+    }).catch(function(e) {
+        console.error('SYN.startChainer failed -- the page has no synteny to show:', e);
     });
 };
 
@@ -1818,7 +2203,8 @@ SYN.init = function(s) {
 
 
 def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtitle=None,
-               alignment_stats=None):
+               alignment_stats=None, hits_payload=None, chain_js_src='',
+               min_identity=None, max_gap=25, min_block=None):
     query_names = [n for n, _ in ds.query_chroms]
     subject_names = [n for n, _ in ds.subject_chroms]
     subject_index = {name: i for i, (name, _) in enumerate(ds.subject_chroms)}
@@ -2072,26 +2458,47 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                              options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
     color_spinner = Spinner(title="Colors", low=1, high=MAX_COLORS,
                              step=1, value=DEFAULT_COLORS, width=TOP_CONTROL_WIDTH)
-    # high is the actual largest block size in this dataset, not a fixed
-    # constant -- MBA_SLIDER_MIN is still a real floor (the embedded links
-    # were generated with --min_block_anchors that low, see
-    # build_synteny.nf's *_FOR_SLIDER processes, so nothing smaller was ever
-    # computed to reveal), but there's no reason to cap the top end at some
-    # arbitrary round number when a Spinner lets someone type any value
-    max_observed_score = max(ds.max_score(), MBA_SLIDER_MIN)
-    mba_spinner = Spinner(title="Min block anchors", low=MBA_SLIDER_MIN, high=max_observed_score,
-                           step=1, value=MBA_SLIDER_MIN, width=TOP_CONTROL_WIDTH)
+    # Chain parameters (docs/specs/hit_table.md section 3) -- min identity,
+    # max gap, and hit rank each trigger a fresh client-side re-chain
+    # (SYN.requestChain); min block size is a pure post-filter (see
+    # SYN.data.ribbons' own comment above) and never re-chains. min_identity/
+    # min_block's real initial values depend on the actual hit tables
+    # (SYNCHAIN.autoParams), which Python never sees -- SYN.init sets both
+    # from --min_identity/--min_block if given, else from autoParams, the
+    # moment the embedded hit tables are decoded (before a viewer could
+    # touch either control, same "no separate initial render" reasoning as
+    # every other control on this page). The placeholder values below are
+    # only ever visible for the instant between DOM construction and that
+    # first SYN.init pass.
+    min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
+                                    value=round((min_identity or 0.5) * 100), width=TOP_CONTROL_WIDTH)
+    max_gap_spinner = Spinner(title="Max gap (genes)", low=1, high=100, step=1,
+                               value=max_gap, width=TOP_CONTROL_WIDTH)
+    HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
+    hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=TOP_CONTROL_WIDTH)
+    # low=3: docs/specs/hit_table.md's MIN_CHAIN_LENGTH is 2, but a 2-anchor
+    # chain is barely evidence of anything -- 3 is this control's own floor,
+    # independent of the (always looser) minBlock=3 every chain request
+    # itself is run at (see SYN.data.ribbons' own comment above). high is a
+    # generous placeholder -- SYN.applyChainResult updates it to the actual
+    # largest block on every result, same "don't cap at an arbitrary round
+    # number" reasoning min_seq_size_spinner's high uses below.
+    min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
+                                 step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH)
+    # One-line status ("N block(s) · X ms"), refreshed by every
+    # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
+    # genome, a loose max-gap) apart from "nothing matched".
+    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, margin=(18, 0, 0, 0))
     # Post-hoc chromosome-length filter for the ring + dotplot, independent
     # of --min_seq_size: that pipeline flag already dropped anything shorter
     # than its own threshold before this script ever saw the data (see
-    # prepare_synteny_inputs.nf's CHROM_SIZES process), so this control can
+    # RENAME_SEQUENCES's chrom_sizes output, main.nf), so this control can
     # only ever filter what actually made it into the page, never recover
     # what didn't. Starts at 0 (Mb, like the ruler size labels elsewhere on
     # this page) -- 0 means "show every chromosome embedded in this page",
     # not "no filtering ever happened upstream". high is this dataset's own
-    # largest chromosome, same "don't cap at an arbitrary round number"
-    # reasoning as max_observed_score above -- `or 1` guards the degenerate
-    # empty-dataset case, where Spinner would otherwise get low == high == 0.
+    # largest chromosome -- `or 1` guards the degenerate empty-dataset case,
+    # where Spinner would otherwise get low == high == 0.
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
                                     high=round(max_seq_size / 1e6, 2) or 1,
@@ -2109,6 +2516,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                             height=TOOLBAR_CONTROL_HEIGHT)
     save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                                height=TOOLBAR_CONTROL_HEIGHT)
+    # Exports the cross blocks currently on screen (min block size filter
+    # applied) as a links.tsv (docs/specs/hit_table.md section 5) -- lives on
+    # the dotplot row since that's the panel showing every cross-genome block
+    # at once, unlike the ring (also self-links) or the zoom panel (one
+    # pivot/pair at a time). See SYN.exportBlocksTsv.
+    export_blocks_btn = Button(label="⬇ blocks TSV", button_type="default", width=110,
+                                height=TOOLBAR_CONTROL_HEIGHT)
     # format choice lives next to each save button rather than as a second
     # button per panel -- adds ~50px to a row instead of ~130px, which
     # matters on the dotplot row (already save button + order_toggle). JPEG
@@ -2131,9 +2545,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # ring's own row (next to show_gaps_toggle, itself global -- see its own
     # comment below) rather than the shared controls row above, since that's
     # where it was asked to sit.
-    # On by default: matches today's only behavior (CHROM_SIZES used to
-    # always sort by size; now the plot script does, by default, instead --
-    # see Dataset.__init__). When off, both panels fall back to each
+    # On by default: matches today's only behavior (this plot script sorts
+    # by size, by default -- see Dataset.__init__). When off, both panels
+    # fall back to each
     # genome's own FASTA/natural sequence order. Layered under
     # order_toggle, not alongside it: while "order by similarity" is on,
     # this switch has no visible effect on the dotplot (similarity order
@@ -2180,7 +2594,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # switches). off by default -- self-links can dominate/clutter the ring
     # (e.g. a heavily-homeologous polyploid genome), so a viewer opts in
     # rather than opting out. Lives with the ring's own save row (not the
-    # palette/colors/min-block-anchors row below) because self-links are
+    # palette/colors/min-block-size row below) because self-links are
     # drawn only on the ring -- SYN.buildDotplotSegmentsForLayout reads only
     # SYN.data.linksByQuery, which never contains homeolog records, so they
     # never appear on the zoom or dotplot panels either.
@@ -2196,8 +2610,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     hide_synteny_toggle = Switch(label="Hide synteny", active=False, width=RING_SWITCH_WIDTH,
                                   stylesheets=[RING_SWITCH_DIVIDER_CSS])
     # off by default -- an assembly gap marker is a diagnostic/QC detail
-    # (see bin/find_assembly_gaps.py), not something every viewer needs on
-    # screen by default, and a draft-quality assembly can have thousands of
+    # (see bin/rename_sequences.py's --out_gaps), not something every viewer
+    # needs on screen by default, and a draft-quality assembly can have
+    # thousands of
     # them at the default 100bp threshold. Lives in the ring's own row (the
     # user asked for it "below the ring plot") even though it also affects
     # the zoom panel and the dotplot (see SYN.applyGapVisibility/
@@ -2218,23 +2633,28 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     save_dotplot_btn.js_on_click(CustomJS(args=dict(fig=dotplot_fig, fmt=dotplot_format_sel), code="""
         SYN.exportFigure(fig, 'dotplot', fmt.value);
     """))
+    export_blocks_btn.js_on_click(CustomJS(code="SYN.exportBlocksTsv();"))
 
     # Rebuilds every order-dependent dotplot source for whichever order is
     # now active -- SYN.applyDotplotOrder also updates SYN.state's offsets,
-    # so the color/palette/min-block-anchors callbacks below (which redraw
+    # so the color/palette/min-block-size callbacks below (which redraw
     # the dotplot too, via SYN.applyDotplotSegmentsForCurrentLayout) pick up
     # the new order automatically without needing to know a reorder happened.
     order_toggle_callback = CustomJS(args=dict(
-        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
         dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
         dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
     ), code="""
+        // read by SYN.applyChainResult, so a fresh chain result knows
+        // whether the dotplot needs a full similarity reorder or just a
+        // segment redraw in place -- see that function's own comment
+        SYN.state.orderBySimilarity = cb_obj.active;
         // SYN.dpOrderFor also applies the current min-length filter (see
         // min_seq_size_spinner below) on top of similarity/natural order, so
         // toggling this never silently drops that filter
         const order = SYN.dpOrderFor(cb_obj.active);
-        SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, color_spinner.value, mba_spinner.value, {
+        SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, color_spinner.value, min_block_spinner.value, {
             query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
             queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
             segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
@@ -2249,7 +2669,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # own comment above for why this is layered rather than independent.
     size_order_toggle_callback = CustomJS(args=dict(
         query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
-        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
         self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         order_toggle=order_toggle, gap_source=gap_src,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
@@ -2265,12 +2685,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
-            minScore: mba_spinner.value, k: color_spinner.value,
+            minScore: min_block_spinner.value, k: color_spinner.value,
             showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
         });
         if (!order_toggle.active) {
             const dpOrder = SYN.dpOrderFor(false);
-            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, mba_spinner.value, {
+            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, min_block_spinner.value, {
                 query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
                 queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
                 segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
@@ -2288,7 +2708,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # was zoomed into may no longer be visible at all.
     min_seq_size_callback = CustomJS(args=dict(
         order_toggle=order_toggle, size_order_toggle=size_order_toggle,
-        color_spinner=color_spinner, mba_spinner=mba_spinner, dotplot_fig=dotplot_fig,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
         query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
         gap_source=gap_src, self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
@@ -2303,12 +2723,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
-            minScore: mba_spinner.value, k: color_spinner.value,
+            minScore: min_block_spinner.value, k: color_spinner.value,
             showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
         });
 
         const dpOrder = SYN.dpOrderFor(order_toggle.active);
-        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, mba_spinner.value, {
+        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, min_block_spinner.value, {
             query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
             queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
             segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
@@ -2350,7 +2770,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     def make_tap_callback(this_source, other_sources, side):
         return CustomJS(args=dict(
             this_source=this_source, other_sources=other_sources, side=side,
-            color_spinner=color_spinner, mba_spinner=mba_spinner, bar_source=detail_bar_src,
+            color_spinner=color_spinner, min_block_spinner=min_block_spinner, bar_source=detail_bar_src,
             ribbon_source=detail_rib_src, label_source=detail_label_src, detail_fig=detail_fig,
             detail_gap_source=detail_gap_src,
         ), code="""
@@ -2361,7 +2781,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             SYN.state.mode = 'pivot';
             SYN.state.pivotSide = side;
             SYN.state.pivotName = name;
-            const d = SYN.buildDetailData(side, name, color_spinner.value, mba_spinner.value);
+            const d = SYN.buildDetailData(side, name, color_spinner.value, min_block_spinner.value);
             SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
         """)
 
@@ -2407,7 +2827,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # a no-op there rather than double-handling the same click.
     dotplot_pair_tap_callback = CustomJS(args=dict(
         other_sources=[s_src, q_src, dp_s_src, dp_q_src, r_src],
-        color_spinner=color_spinner, mba_spinner=mba_spinner, bar_source=detail_bar_src,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner, bar_source=detail_bar_src,
         ribbon_source=detail_rib_src, label_source=detail_label_src, detail_fig=detail_fig,
         detail_gap_source=detail_gap_src,
     ), code="""
@@ -2417,14 +2837,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.state.mode = 'pair';
         SYN.state.pairTarget = hit.targetName;
         SYN.state.pairSubject = hit.subjectName;
-        const d = SYN.buildPairDetailData(hit.targetName, hit.subjectName, color_spinner.value, mba_spinner.value);
+        const d = SYN.buildPairDetailData(hit.targetName, hit.subjectName, color_spinner.value, min_block_spinner.value);
         SYN.applyDetail(d, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
     """)
     dotplot_fig.js_on_event(Tap, dotplot_pair_tap_callback)
 
     color_callback = CustomJS(args=dict(
         subject_source=s_src, dp_subject_source=dp_s_src,
-        overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, mba_spinner=mba_spinner,
+        overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
@@ -2432,15 +2852,15 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         const k = cb_obj.value;
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
-        SYN.applyOverviewRibbons(mba_spinner.value, k, self_links_toggle.active,
+        SYN.applyOverviewRibbons(min_block_spinner.value, k, self_links_toggle.active,
                                   hide_synteny_toggle.active, overview_ribbon_source);
-        SYN.applyDotplotSegmentsForCurrentLayout(mba_spinner.value, k, dotplot_segment_source);
-        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
+        SYN.applyDotplotSegmentsForCurrentLayout(min_block_spinner.value, k, dotplot_segment_source);
+        SYN.refreshDetail(k, min_block_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
                            detail_gap_source);
     """)
     color_spinner.js_on_change('value', color_callback)
 
-    mba_callback = CustomJS(args=dict(
+    min_block_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, color_spinner=color_spinner,
         self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
@@ -2453,25 +2873,36 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
         SYN.refreshDetail(k, minScore, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
     """)
-    mba_spinner.js_on_change('value', mba_callback)
+    min_block_spinner.js_on_change('value', min_block_callback)
+
+    # Min identity, max gap, and hit rank each need a fresh client-side
+    # re-chain (SYN.requestChain) rather than a re-filter/re-render of
+    # already-computed data -- unlike every control above. SYN.ui (set once
+    # by SYN.init, before any of these can fire) already holds every widget
+    # SYN.currentChainParams/SYN.applyChainResult need, so there's nothing
+    # to pass as CustomJS args here.
+    chain_params_callback = CustomJS(code="SYN.requestChain(SYN.currentChainParams());")
+    min_identity_spinner.js_on_change('value', chain_params_callback)
+    max_gap_spinner.js_on_change('value', chain_params_callback)
+    hit_rank_select.js_on_change('value', chain_params_callback)
 
     # Switch fires via js_on_change('active', ...), not js_on_click (which is
     # Button/Toggle-specific) -- cb_obj is still the Switch itself either way,
     # so cb_obj.active works the same as it did when this was a Toggle.
     self_links_toggle_callback = CustomJS(args=dict(
-        overview_ribbon_source=r_src, color_spinner=color_spinner, mba_spinner=mba_spinner,
+        overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         hide_synteny_toggle=hide_synteny_toggle,
     ), code="""
-        SYN.applyOverviewRibbons(mba_spinner.value, color_spinner.value, cb_obj.active,
+        SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, cb_obj.active,
                                   hide_synteny_toggle.active, overview_ribbon_source);
     """)
     self_links_toggle.js_on_change('active', self_links_toggle_callback)
 
     hide_synteny_toggle_callback = CustomJS(args=dict(
-        overview_ribbon_source=r_src, color_spinner=color_spinner, mba_spinner=mba_spinner,
+        overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle,
     ), code="""
-        SYN.applyOverviewRibbons(mba_spinner.value, color_spinner.value, self_links_toggle.active,
+        SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, self_links_toggle.active,
                                   cb_obj.active, overview_ribbon_source);
     """)
     hide_synteny_toggle.js_on_change('active', hide_synteny_toggle_callback)
@@ -2488,14 +2919,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # show or hide too.
     show_gaps_toggle_callback = CustomJS(args=dict(
         gap_source=gap_src, dp_gap_source=dp_gap_src,
-        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         SYN.state.showGaps = cb_obj.active;
         SYN.applyGapVisibility(gap_source);
         SYN.applyDotplotGapVisibility(dp_gap_source);
-        SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source,
+        SYN.refreshDetail(color_spinner.value, min_block_spinner.value, bar_source, ribbon_source,
                            label_source, detail_fig, detail_gap_source);
     """)
     show_gaps_toggle.js_on_change('active', show_gaps_toggle_callback)
@@ -2508,7 +2939,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     palette_callback = CustomJS(args=dict(
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src,
-        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
@@ -2517,10 +2948,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         const k = color_spinner.value;
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
-        SYN.applyOverviewRibbons(mba_spinner.value, k, self_links_toggle.active,
+        SYN.applyOverviewRibbons(min_block_spinner.value, k, self_links_toggle.active,
                                   hide_synteny_toggle.active, overview_ribbon_source);
-        SYN.applyDotplotSegmentsForCurrentLayout(mba_spinner.value, k, dotplot_segment_source);
-        SYN.refreshDetail(k, mba_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
+        SYN.applyDotplotSegmentsForCurrentLayout(min_block_spinner.value, k, dotplot_segment_source);
+        SYN.refreshDetail(k, min_block_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
                            detail_gap_source);
     """)
     palette_select.js_on_change('value', palette_callback)
@@ -2561,7 +2992,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "them, so an exported panel can show the actual species/genome name "
                      "instead of \"target\"/\"reference\". Color palette switches the set of "
                      "colors reference chromosomes cycle through; Colors changes how many "
-                     "discrete colors from it they cycle through. Min block anchors filters "
+                     "discrete colors from it they cycle through. Min block size filters "
                      "out synteny blocks with fewer than that many supporting protein alignments "
                      "-- raise it to cut noise, lower it to see more (shorter, less certain) "
                      "blocks. Show self-links, next to the ring's save button, switches whether "
@@ -2590,7 +3021,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     left_col = column(overview,
                        row(save_ring_btn, ring_format_sel, self_links_toggle, hide_synteny_toggle,
                            show_gaps_toggle, size_order_toggle))
-    right_col = column(dotplot_fig, row(save_dotplot_btn, dotplot_format_sel, order_toggle))
+    right_col = column(dotplot_fig,
+                        row(save_dotplot_btn, dotplot_format_sel, export_blocks_btn, order_toggle))
 
     # static -- the tool's own name/tagline, not this run's target/reference
     # (that's the target/reference label inputs' job) -- unlike those, never
@@ -2637,7 +3069,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         target_label_input=target_label_input, reference_label_input=reference_label_input,
         overview=overview, dotplot_fig=dotplot_fig, stats_div=stats_div,
         q_src=q_src, dp_q_src=dp_q_src, s_src=s_src, dp_s_src=dp_s_src,
-        color_spinner=color_spinner, mba_spinner=mba_spinner,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
@@ -2647,7 +3079,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             overview, dotplotFig: dotplot_fig,
             queryLikeSources: [q_src, dp_q_src], subjectLikeSources: [s_src, dp_s_src],
         });
-        SYN.refreshDetail(color_spinner.value, mba_spinner.value, bar_source, ribbon_source, label_source,
+        SYN.refreshDetail(color_spinner.value, min_block_spinner.value, bar_source, ribbon_source, label_source,
                            detail_fig, detail_gap_source);
         SYN.applyStats(targetLabel, referenceLabel, stats_div);
     """)
@@ -2656,8 +3088,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     layout = column(
         header_title_div,
-        row(reference_label_input, target_label_input, palette_select, color_spinner, mba_spinner,
-            min_seq_size_spinner),
+        row(reference_label_input, target_label_input, palette_select, color_spinner,
+            min_identity_spinner, max_gap_spinner, hit_rank_select, min_block_spinner,
+            min_seq_size_spinner, chain_status_div),
         # hint left out of the layout for now (not deleted -- still built
         # above, just not attached to anything file_html walks/serializes)
         # per explicit request to drop the usage instructions from the page
@@ -2679,12 +3112,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # the race to set up SYN.state and every source's first render.
     doc = Document()
     doc.add_root(layout)
+    # every widget/source SYN.init stashes into SYN.ui (see that function's
+    # own comment) -- new code (SYN.requestChain, SYN.applyChainResult,
+    # SYN.exportBlocksTsv) reads/writes through that registry instead of
+    # each getting its own CustomJS args=dict(...), unlike the pre-existing
+    # callbacks above, which are left as they were (see the plan's own
+    # instruction not to refactor beyond what's needed).
     doc.js_on_event(DocumentReady, CustomJS(args=dict(
         q_src=q_src, s_src=s_src, r_src=r_src, label_src=label_src, gap_src=gap_src,
         dp_q_src=dp_q_src, dp_s_src=dp_s_src, dp_grid_src=dp_grid_src,
         dp_q_label_src=dp_q_label_src, dp_s_label_src=dp_s_label_src,
         dp_seg_src=dp_seg_src, dp_gap_src=dp_gap_src, dotplot_fig=dotplot_fig,
-        color_spinner=color_spinner,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner,
+        min_identity_spinner=min_identity_spinner, max_gap_spinner=max_gap_spinner,
+        hit_rank_select=hit_rank_select, self_links_toggle=self_links_toggle,
+        hide_synteny_toggle=hide_synteny_toggle, chain_status_div=chain_status_div,
+        bar_source=detail_bar_src, ribbon_source=detail_rib_src, label_source=detail_label_src,
+        detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         SYN.init({
             querySource: q_src, subjectSource: s_src, ribbonSource: r_src,
@@ -2692,31 +3136,17 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             dpQuerySource: dp_q_src, dpSubjectSource: dp_s_src, dpGridSource: dp_grid_src,
             dpQueryLabelSource: dp_q_label_src, dpSubjectLabelSource: dp_s_label_src,
             dpSegmentSource: dp_seg_src, dpGapSource: dp_gap_src, dotplotFig: dotplot_fig,
-            colorSpinner: color_spinner,
+            colorSpinner: color_spinner, minBlockSpinner: min_block_spinner,
+            minIdentitySpinner: min_identity_spinner, maxGapSpinner: max_gap_spinner,
+            hitRankSelect: hit_rank_select, selfLinksToggle: self_links_toggle,
+            hideSyntenyToggle: hide_synteny_toggle, chainStatusDiv: chain_status_div,
+            detailBarSource: bar_source, detailRibbonSource: ribbon_source,
+            detailLabelSource: label_source, detailFig: detail_fig, detailGapSource: detail_gap_source,
         });
     """))
 
     page_html = file_html(doc, CDN, title=f"{query_name} vs {subject_name} -- interactive synteny")
 
-    def embed_link(l):
-        return {'q_chrom': l['q_chrom'], 'q_start': l['q_start'], 'q_end': l['q_end'],
-                's_chrom': l['s_chrom'], 's_start': l['s_start'], 's_end': l['s_end'],
-                'score': l['score'], 'orientation': l['orientation'],
-                'mean_identity': l.get('mean_identity'), 'anchor_density': l.get('anchor_density')}
-
-    links_by_reference, links_by_query = {}, {}
-    for name, _ in ds.subject_chroms:
-        links_by_reference[name] = [embed_link(l) for l in ds.links if l['s_chrom'] == name]
-    for name, _ in ds.query_chroms:
-        links_by_query[name] = [embed_link(l) for l in ds.links if l['q_chrom'] == name]
-    # Flat (not grouped-by-chromosome) -- SYN.buildRingLayout is the only
-    # consumer, and it iterates every homeolog link regardless of which
-    # chromosome it's on. There's no dotplot equivalent (homeolog links never
-    # appear there -- see SYN.buildDotplotSegmentsForLayout, which reads only
-    # linksByQuery), so unlike linksByQuery/linksByReference above, no
-    # grouped form is needed.
-    target_homeolog_links_flat = [embed_link(l) for l in ds.target_homeolog_links]
-    reference_homeolog_links_flat = [embed_link(l) for l in ds.comparison_homeolog_links]
     syn_data = {
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
         'palettes': PALETTES,
@@ -2747,17 +3177,16 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # ribbons can still be colored per-chromosome, same as
         # SYN.buildRingLayout's targetHomeologLinks loop
         'queryColorIndex': query_index,
-        'linksByReference': links_by_reference,
-        'linksByQuery': links_by_query,
-        'targetHomeologLinks': target_homeolog_links_flat,
-        'referenceHomeologLinks': reference_homeolog_links_flat,
-        'maxScore': ds.max_score(),
-        # the min-block-anchors floor the embedded links were generated at --
-        # see MBA_SLIDER_MIN's own comment. Read once, by SYN.init, as the
-        # score threshold for the page's very first render (the mba_spinner
-        # widget itself starts at this same value, but SYN.init renders
-        # before touching any widget -- see that function's own comment).
-        'mbaMin': MBA_SLIDER_MIN,
+        # Placeholders, replaced the moment the first client-side chain
+        # result comes back (SYN.applyChainResult, called from
+        # SYN.startChainer -- see SYN.init) -- Python computes no synteny at
+        # all any more (see module docstring). Left as real (empty, not
+        # missing) keys so SYN.init's own first ring/dotplot render, which
+        # runs before that first chain result exists, has something safe to
+        # read: zero ribbons/segments, not a crash.
+        'linksByReference': {}, 'linksByQuery': {},
+        'targetHomeologLinks': [], 'referenceHomeologLinks': [],
+        'maxScore': 1,
         # per-chromosome assembly-gap lookup, one genome's own gaps each --
         # separate dicts (not a single by-name lookup) since target and
         # reference chromosomes can share names, same reasoning as
@@ -2781,9 +3210,32 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # reader of this (SYN.buildStatsHtml) already treats that as "no
         # panel to show"
         'alignmentStats': alignment_stats,
+        # --min_identity/--min_block as given on the CLI, or None (-> JSON
+        # null) meaning "use SYNCHAIN.autoParams" -- read once, by SYN.init,
+        # the moment the embedded hit tables are decoded (see that
+        # function's own comment). --max_gap always has a concrete value
+        # (nextflow.config itself defaults it to 25), so max_gap_spinner's
+        # own Python-side value= is already correct and this is only here
+        # for SYN.currentChainParams' sake, not any JS-side "is it auto?"
+        # branch the other two need.
+        'initialParams': {'minPositive': min_identity, 'maxGap': max_gap, 'minBlock': min_block},
     }
-    injected = "<script>\n" + SHARED_JS + "\nSYN.data = " + json.dumps(syn_data) + ";\n</script>\n</body>"
-    return page_html.replace("</body>", injected, 1), links_by_reference, links_by_query
+    # bin/chain.js ahead of SHARED_JS (see module docstring): the one
+    # implementation of the chaining algorithm, run in a Web Worker (or, if
+    # that fails, synchronously on the main thread -- see SYN.startChainer).
+    # A second, inert copy goes in its own <script type="text/plain"> tag
+    # (BEFORE this one, so this stays the LAST <script> in the page --
+    # tests/js/page_geometry.mjs and tests/js/page_chain_parity.mjs both
+    # assume that) purely so SYN.startChainer can read the raw source text
+    # back out at runtime to build the Worker's own Blob -- a Worker can't
+    # share the main thread's already-parsed <script>, and this avoids a
+    # runtime fetch()/XHR of bin/chain.js, which wouldn't work at all from a
+    # file:// page (see the plan's own note on this).
+    synchain_src_tag = f'<script type="text/plain" id="synchain-src">{chain_js_src}</script>\n'
+    injected = (synchain_src_tag + "<script>\n" + chain_js_src + "\n" + SHARED_JS
+                + "\nSYN.data = " + json.dumps(syn_data) + ";\nSYN.hitsPayload = "
+                + json.dumps(hits_payload) + ";\n</script>\n</body>")
+    return page_html.replace("</body>", injected, 1)
 
 
 def main():
@@ -2792,16 +3244,21 @@ def main():
     parser.add_argument('--subject_name', required=True)
     parser.add_argument('--query_chrom_sizes', required=True)
     parser.add_argument('--subject_chrom_sizes', required=True)
-    parser.add_argument('--links', required=True)
-    parser.add_argument('--target_homeolog_links', default=None,
-                         help='optional target-vs-itself links TSV -- drawn as ribbons '
-                              'within the target half of the ring (not included in the '
-                              'zoom panel, which only shows target<->reference links for the '
-                              'clicked chromosome)')
-    parser.add_argument('--comparison_homeolog_links', default=None,
-                         help='optional reference-vs-itself links TSV -- drawn as ribbons '
-                              'within the reference half of the ring (ditto, not included in '
-                              'the zoom panel)')
+    parser.add_argument('--target_hits', required=True,
+                         help="bin/extract_hits.py output for the target genome "
+                              "(docs/specs/hit_table.md section 1) -- embedded as SYN.hitsPayload "
+                              "(section 6) and chained client-side; Python never chains anything")
+    parser.add_argument('--comparison_hits', required=True, help='ditto, for the reference genome')
+    parser.add_argument('--min_identity', type=float, default=None,
+                         help='initial Min identity (%%) control value, as a 0-1 fraction -- '
+                              'default (unset): SYNCHAIN.autoParams picks it client-side from the '
+                              'actual hit tables')
+    parser.add_argument('--max_gap', type=int, default=25,
+                         help='initial Max gap (genes) control value (docs/specs/hit_table.md '
+                              'section 3)')
+    parser.add_argument('--min_block', type=int, default=None,
+                         help='initial Min block size control value -- default (unset): '
+                              'SYNCHAIN.autoParams picks it client-side, same as --min_identity')
     parser.add_argument('--stats', default=None,
                          help='optional compute_alignment_stats.py JSON -- shown as a small '
                               'always-visible summary panel on the page (proteome size, each '
@@ -2814,17 +3271,15 @@ def main():
     parser.add_argument('--subject_subtitle', default=None,
                          help='ditto, under the subject/reference name')
     parser.add_argument('--target_gaps', default=None,
-                         help='optional find_assembly_gaps.py output (chrom, start, end TSV, '
-                              'no header) for the target genome -- drawn as gap markers on the '
-                              'ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
+                         help="optional bin/rename_sequences.py --out_gaps output (chrom, start, "
+                              "end TSV, no header) for the target genome -- drawn as gap markers "
+                              'on the ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
     parser.add_argument('--comparison_gaps', default=None,
                          help='ditto, for the reference genome')
     parser.add_argument('--out_prefix', required=True)
     args = parser.parse_args()
 
-    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.links,
-                 args.target_homeolog_links, args.comparison_homeolog_links,
-                 args.target_gaps, args.comparison_gaps)
+    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.comparison_gaps)
     if not ds.query_chroms or not ds.subject_chroms:
         sys.exit("ERROR: no chromosomes to plot -- check --min_seq_size isn't "
                   "filtering out everything")
@@ -2834,25 +3289,30 @@ def main():
         with open(args.stats) as f:
             alignment_stats = json.load(f)
 
-    page_html, links_by_reference, links_by_query = build_page(
+    hits_payload = build_hits_payload(args.target_hits, args.comparison_hits,
+                                       [n for n, _ in ds.query_chroms_natural],
+                                       [n for n, _ in ds.subject_chroms_natural])
+    chain_js_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chain.js')
+    with open(chain_js_path) as f:
+        chain_js_src = f.read()
+
+    page_html = build_page(
         ds, args.query_name, args.subject_name, args.query_subtitle, args.subject_subtitle,
-        alignment_stats)
+        alignment_stats, hits_payload, chain_js_src, args.min_identity, args.max_gap, args.min_block)
 
     out_path = f"{args.out_prefix}.interactive.html"
     with open(out_path, 'w') as f:
         f.write(page_html)
 
-    total_links = sum(len(v) for v in links_by_reference.values())
-    homeolog_bits = []
-    if args.target_homeolog_links:
-        homeolog_bits.append(f"{len(ds.target_homeolog_links)} target homeolog link(s)")
-    if args.comparison_homeolog_links:
-        homeolog_bits.append(f"{len(ds.comparison_homeolog_links)} reference homeolog link(s)")
+    same_reference = hits_payload['genomes']['reference'] == 'same_as_target'
+    target_n = hits_payload['genomes']['target']['n']
+    reference_n = target_n if same_reference else hits_payload['genomes']['reference']['n']
+    gap_bits = []
     if args.target_gaps or args.comparison_gaps:
-        homeolog_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} reference assembly gap(s)")
-    print(f"[plot_synteny_interactive] wrote {out_path} ({len(links_by_reference)} reference / "
-          f"{len(links_by_query)} target chromosome(s), {total_links} link(s) embedded"
-          + ((f"; {'; '.join(homeolog_bits)}") if homeolog_bits else '') + ")",
+        gap_bits.append(f"{len(ds.query_gaps)} target / {len(ds.subject_gaps)} reference assembly gap(s)")
+    print(f"[plot_synteny_interactive] wrote {out_path} ({target_n} target / {reference_n} reference "
+          f"hit(s) embedded, chained client-side"
+          + ((f"; {'; '.join(gap_bits)}") if gap_bits else '') + ")",
           file=sys.stderr)
 
 

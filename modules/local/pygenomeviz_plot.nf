@@ -1,7 +1,9 @@
-// build_synteny.nf already emits links.tsv directly in the format
-// plot_synteny_interactive.py needs (genomic coordinates from the start), so
-// there's no anchors-to-BED join step here anymore -- this just needs the
-// chrom sizes for track layout and whichever links files were produced.
+// plot_synteny_interactive.py embeds each genome's hit table (from
+// BUILD_SYNTENY's EXTRACT_HITS) directly -- docs/specs/hit_table.md section
+// 6 -- and chains them client-side (bin/chain.js, inlined into the page), so
+// this module ships raw hits, not precomputed links/blocks. build_synteny.nf
+// still emits links.tsv/slider_links.tsv for other consumers (e.g.
+// benchmark/miniprot_m_sweep/compare_links.py), just not this one.
 //
 // This pipeline's one plot output is the interactive HTML below: a Circos-
 // style ring, a linear zoom panel, and a whole-genome dotplot, all built
@@ -30,7 +32,10 @@
 // Bioconda/conda-forge/PyPI on demand, pullable like any other registry
 // image, no Nextflow wave plugin needed. Bokeh ships in the image already,
 // so there's no runtime pip install left to fail or to need network access
-// for. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
+// for. numpy (used to encode the embedded hit-table payload -- see
+// bin/plot_synteny_interactive.py's build_hits_payload) ships alongside
+// Bokeh in the same conda-forge image, so it needs no separate handling
+// here. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
 // their docs) and to linux/amd64, matching docker.runOptions =
 // '--platform=linux/amd64' in nextflow.config's standard profile -- every
 // container in this pipeline runs as amd64 there (Apple Silicon dev
@@ -58,31 +63,32 @@ process RENDER_SYNTENY_INTERACTIVE {
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
-    tuple val(target_name), val(comparison_name), path(links)
+    tuple val(target_name), path(target_hits)
+    tuple val(comparison_name), path(comparison_hits)
     path target_chrom_sizes
     path comparison_chrom_sizes
-    path target_homeolog_links     // optional: a real file, or NO_HOMEOLOGS placeholder
-    path comparison_homeolog_links // ditto
-    path stats              // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
-    val target_subtitle     // input file name/accession, shown under the target label
-    val comparison_subtitle // ditto, for the comparison label
-    path target_gaps        // RENAME_SEQUENCES gaps output -- always a real file (unconditional, unlike the homeolog links above)
-    path comparison_gaps    // ditto
+    val min_identity        // '' auto-tunes client-side (SYNCHAIN.autoParams); otherwise an explicit 0-1 floor
+    val max_gap
+    val min_block           // '' auto-tunes client-side; otherwise the initial Min block size control value
+    path stats               // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
+    val target_subtitle      // input file name/accession, shown under the target label
+    val comparison_subtitle  // ditto, for the comparison label
+    path target_gaps         // RENAME_SEQUENCES gaps output -- always a real file (unconditional)
+    path comparison_gaps     // ditto
 
     output:
     path "${target_name}.${comparison_name}.synteny.interactive.html"
 
     script:
-    def targetHomeologFlag = (target_homeolog_links.name != 'NO_HOMEOLOGS') ? "--target_homeolog_links ${target_homeolog_links}" : ''
-    def comparisonHomeologFlag = (comparison_homeolog_links.name != 'NO_HOMEOLOGS') ? "--comparison_homeolog_links ${comparison_homeolog_links}" : ''
+    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
     plot_synteny_interactive.py \\
         --query_name ${target_name} --subject_name ${comparison_name} \\
         --query_chrom_sizes ${target_chrom_sizes} \\
         --subject_chrom_sizes ${comparison_chrom_sizes} \\
-        --links ${links} \\
-        ${targetHomeologFlag} \\
-        ${comparisonHomeologFlag} \\
+        --target_hits ${target_hits} --comparison_hits ${comparison_hits} \\
+        ${idFlag} --max_gap ${max_gap} ${blockFlag} \\
         --stats ${stats} \\
         --query_subtitle "${target_subtitle}" --subject_subtitle "${comparison_subtitle}" \\
         --target_gaps ${target_gaps} --comparison_gaps ${comparison_gaps} \\
@@ -92,10 +98,12 @@ process RENDER_SYNTENY_INTERACTIVE {
 
 workflow PYGENOMEVIZ_PLOT {
     take:
-    links_slider           // tuple(target_name, comparison_name, path links.tsv) -- always computed at mba=5, feeds the interactive plot's slider
+    hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and comparison mixed together
     target_chrom_sizes     // tuple(name, path chrom.sizes)
     comparison_chrom_sizes
-    homeolog_links_slider  // tuple(name, path links.tsv), 0-2 items (one per requested side), always at mba=5
+    min_identity           // '' auto-tunes; otherwise an explicit 0-1 floor (the page's initial control value)
+    max_gap                // max gene-rank step between consecutive chain members (the page's initial control value)
+    min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
     comparison_subtitle    // val -- comparison genome's input file name/accession, ditto
@@ -103,27 +111,17 @@ workflow PYGENOMEVIZ_PLOT {
     comparison_gaps
 
     main:
-    // homeolog_links_slider can carry a 'target' tuple, a 'comparison' tuple,
-    // both, or neither (see BUILD_SYNTENY's find_homeologs) -- split back out
-    // by role rather than passing it straight through, since
-    // RENDER_SYNTENY_INTERACTIVE needs each side wired to its own CLI flag
-    // (a single process input can't carry a variable 0-2 item list in lockstep
-    // with the other per-run inputs).
-    homeolog_branches = homeolog_links_slider.branch {
+    hits_by_role = hits.branch {
         target: it[0] == 'target'
         comparison: it[0] == 'comparison'
     }
-    target_homeolog_file = homeolog_branches.target.map { it[1] }
-        .ifEmpty(file("${projectDir}/assets/NO_HOMEOLOGS"))
-    comparison_homeolog_file = homeolog_branches.comparison.map { it[1] }
-        .ifEmpty(file("${projectDir}/assets/NO_HOMEOLOGS"))
 
     RENDER_SYNTENY_INTERACTIVE(
-        links_slider,
+        hits_by_role.target,
+        hits_by_role.comparison,
         target_chrom_sizes.map { it[1] },
         comparison_chrom_sizes.map { it[1] },
-        target_homeolog_file,
-        comparison_homeolog_file,
+        min_identity, max_gap, min_block,
         stats,
         target_subtitle, comparison_subtitle,
         target_gaps.map { it[1] },
