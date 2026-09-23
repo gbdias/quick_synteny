@@ -76,7 +76,7 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, Range1d, Select, Spinner, Switch, TextInput, Toggle, Tooltip)
+                           Button, Div, HelpButton, Range1d, Select, Spinner, Switch, TextInput, Tooltip)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
 from bokeh.resources import CDN
@@ -162,10 +162,17 @@ DETAIL_FIG_WIDTH = 446
 # narrower on the right than the figure's nominal width.
 PLOT_TOOLBAR_WIDTH = 30
 
+# the gap between detail_fig's own left edge and its drawn frame (the gray
+# outline) -- set explicitly on the figure (min_border_left) rather than left
+# to Bokeh's default of the same value, so the stats box below can be offset
+# by exactly this much and line up with the frame
+DETAIL_FRAME_LEFT = 5
+
 # the stats box below detail_fig -- matched to the zoom panel's drawn frame,
-# not its full nominal width, so the box's own right edge lines up with the
-# frame's right edge instead of running on past it under the toolbar icons
-STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH
+# not its full nominal width: its left edge is offset by DETAIL_FRAME_LEFT
+# (see stats_div's margin) and its right edge stops where the frame does,
+# instead of running on past it under the toolbar icons
+STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH - DETAIL_FRAME_LEFT
 
 # every titleless toolbar control below a figure (save/clear buttons, the
 # SVG/PNG/JPEG format dropdowns, the "order by similarity" toggle) -- left
@@ -1062,45 +1069,51 @@ SYN.dpOrderFor = function(useSimilarity) {
 };
 
 // Reorders both axes to make shared synteny read as a diagonal: each
-// chromosome is placed near the average position of whatever it shares
-// anchors with on the other axis (weighted by score), alternating which
-// axis is being reordered against the other's current order a few times so
-// the two converge together rather than one being optimized against a
-// now-stale copy of the other. A chromosome with no cross-genome anchors at
-// all (score-weighted total of 0) sorts to the end rather than landing at
-// an arbitrary position -- there's no similarity signal to place it by.
+// chromosome is placed at the score-weighted average position, in bp along
+// the other axis's current layout, of the blocks it shares with it -- not
+// just the rank of the chromosome those blocks land on, so two chromosomes
+// matching different ends of the same partner (e.g. chr3L and chr3R both on
+// one chr3) are ordered along it instead of tying. The axes alternate a few
+// times, each reordered against the other's latest order, so the two
+// converge together rather than one being optimized against a now-stale
+// copy of the other. Only what's actually drawn counts: blocks below the
+// min block size and chromosomes below the min sequence length are left
+// out, so a chromosome whose blocks are all hidden sorts to the end rather
+// than being placed by blocks the dotplot doesn't show -- there's no
+// visible similarity signal to place it by.
 SYN.computeSimilarityOrder = function() {
     const natural = SYN.dpNaturalOrder();
-    let queryOrder = natural.queryOrder, subjectOrder = natural.subjectOrder;
+    let queryOrder = SYN.filterBySize(natural.queryOrder, SYN.data.querySizes);
+    let subjectOrder = SYN.filterBySize(natural.subjectOrder, SYN.data.subjectSizes);
+    const minScore = SYN.ui.minBlockSpinner.value;
 
-    const weight = (q, s) => {
-        let total = 0;
-        for (const l of (SYN.data.linksByQuery[q] || [])) { if (l.s_chrom === s) { total += l.score; } }
-        return total;
-    };
-
-    const reorder = (names, otherOrder, weightOf) => {
-        const rankOf = {};
-        otherOrder.forEach((name, i) => { rankOf[name] = i; });
+    // links: this axis's chromosome -> its blocks; other: {chrom, start, end}
+    // field names for the other axis's side of each block
+    const reorder = (names, otherOrder, otherSizes, links, other) => {
+        const offsets = SYN.computeOffsets(otherOrder, otherSizes);
         return names
             .map((name, i) => {
-                let totalW = 0, weightedRank = 0;
-                for (const other of otherOrder) {
-                    const w = weightOf(name, other);
-                    if (w > 0) { totalW += w; weightedRank += w * rankOf[other]; }
+                let totalW = 0, weightedPos = 0;
+                for (const l of (links[name] || [])) {
+                    const x0 = offsets[l[other.chrom]];
+                    if (l.score < minScore || x0 === undefined) { continue; }
+                    totalW += l.score;
+                    weightedPos += l.score * (x0 + (l[other.start] + l[other.end]) / 2);
                 }
-                return {name, i, avgRank: totalW > 0 ? weightedRank / totalW : Infinity};
+                return {name, i, avgPos: totalW > 0 ? weightedPos / totalW : Infinity};
             })
             // the index tiebreak keeps a stable, deterministic order among
             // chromosomes with no signal, instead of leaving their relative
             // order up to the sort algorithm's whim
-            .sort((a, b) => (a.avgRank - b.avgRank) || (a.i - b.i))
+            .sort((a, b) => (a.avgPos - b.avgPos) || (a.i - b.i))
             .map((r) => r.name);
     };
 
+    const sSide = {chrom: 's_chrom', start: 's_start', end: 's_end'};
+    const qSide = {chrom: 'q_chrom', start: 'q_start', end: 'q_end'};
     for (let iter = 0; iter < 3; iter++) {
-        queryOrder = reorder(queryOrder, subjectOrder, weight);
-        subjectOrder = reorder(subjectOrder, queryOrder, (s, q) => weight(q, s));
+        queryOrder = reorder(queryOrder, subjectOrder, SYN.data.subjectSizes, SYN.data.linksByQuery, sSide);
+        subjectOrder = reorder(subjectOrder, queryOrder, SYN.data.querySizes, SYN.data.linksByReference, qSide);
     }
     return {queryOrder, subjectOrder};
 };
@@ -2393,6 +2406,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_label_src = ColumnDataSource(dict(x=[], y=[], text=[], color=[]))
     detail_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
     detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
+                         min_border_left=DETAIL_FRAME_LEFT,
                          title="Click any chromosome wedge on the left to zoom in.",
                          tools="pan,wheel_zoom,reset",
                          output_backend="svg")
@@ -2474,9 +2488,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # the "?" icon Bokeh draws next to a titled input's label; opens below the
     # icon, as a wrapped box (a plain-text tooltip renders as one unwrapped
     # line that runs off the page)
-    def help_tip(text):
+    def help_tip(text, position='bottom'):
         return Tooltip(content=HTML(f"<div style='width:260px;white-space:normal;line-height:1.35'>"
-                                    f"{text}</div>"), position='bottom')
+                                    f"{text}</div>"), position=position)
 
     min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
                                     value=round((min_identity or 0.5) * 100), width=TOP_CONTROL_WIDTH,
@@ -2545,12 +2559,18 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # from its position directly under that panel, so the longer label was
     # only ever spending width, not clarity
     SAVE_BUTTON_WIDTH = 70
-    save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
-                            height=TOOLBAR_CONTROL_HEIGHT)
+    # the ring's and dotplot's save buttons follow that panel's switches, so
+    # they get the same divider the switches use between each other (a 1px
+    # line plus 6px padding on the leading edge), and are widened by that
+    # much so the button itself stays SAVE_BUTTON_WIDTH wide
+    SAVE_DIVIDER_PAD = 6
+    SAVE_DIVIDER_CSS = f':host{{border-left:1px solid var(--divider-color);padding-left:{SAVE_DIVIDER_PAD}px;}}'
+    save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
+                            height=TOOLBAR_CONTROL_HEIGHT, stylesheets=[SAVE_DIVIDER_CSS])
     save_zoom_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                             height=TOOLBAR_CONTROL_HEIGHT)
-    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
-                               height=TOOLBAR_CONTROL_HEIGHT)
+    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
+                               height=TOOLBAR_CONTROL_HEIGHT, stylesheets=[SAVE_DIVIDER_CSS])
     # Exports the cross blocks currently on screen (min block size filter
     # applied) as a links.tsv (bin/chain.js's OUTPUTS header) -- lives on
     # the dotplot row since that's the panel showing every cross-genome block
@@ -2560,22 +2580,17 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                 height=TOOLBAR_CONTROL_HEIGHT)
     # format choice lives next to each save button rather than as a second
     # button per panel -- adds ~50px to a row instead of ~130px, which
-    # matters on the dotplot row (already save button + order_toggle). JPEG
+    # matters on the dotplot row (save button + blocks TSV + order_toggle). JPEG
     # has no transparency channel -- SYN.exportFigureAsRaster fills white
     # first regardless of format, so this doesn't need special-casing there.
     EXPORT_FORMATS = ["SVG", "PNG", "JPEG"]
-    ring_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+    DEFAULT_EXPORT_FORMAT = "PNG"
+    ring_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
                               height=TOOLBAR_CONTROL_HEIGHT)
-    zoom_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+    zoom_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
                               height=TOOLBAR_CONTROL_HEIGHT)
-    dotplot_format_sel = Select(options=EXPORT_FORMATS, value="SVG", width=80,
+    dotplot_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
                                  height=TOOLBAR_CONTROL_HEIGHT)
-    # off by default: natural (file/karyotype) order is what most users
-    # recognize their chromosomes by, and reordering only pays off when the
-    # two genomes are close enough that a near-1:1 correspondence exists to
-    # reveal in the first place (see SYN.computeSimilarityOrder's docstring)
-    order_toggle = Toggle(label="Order by similarity", active=False,
-                           button_type="default", width=160, height=TOOLBAR_CONTROL_HEIGHT)
     # Global -- affects the ring AND the dotplot alike, but lives in the
     # ring's own row (next to show_gaps_toggle, itself global -- see its own
     # comment below) rather than the shared controls row above, since that's
@@ -2603,6 +2618,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # fixing in the first place -- width chosen for a comfortable margin
     # under 620px, not to chase single-line labels that don't fit regardless.
     RING_SWITCH_WIDTH = 95
+    # a bare "?" icon the size of the spinners' own description icons, not a
+    # full-height button
+    HELP_BUTTON_CSS = (':host{align-self:center;}'
+                       '.bk-btn{padding:0;border:none;background:none;box-shadow:none;}')
     # tighter gap between each switch and its own label (Bokeh's own default
     # is 6px) and centered vertically against it -- matters especially now
     # that a wrapped two-line label (see RING_SWITCH_WIDTH above) is taller
@@ -2610,7 +2629,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # of that extra height instead of centered against the full label block.
     # :host is the styling entry point for every Bokeh widget's own shadow
     # DOM -- see Switch.stylesheets' docstring.
-    RING_SWITCH_CSS = ':host{gap:2px;align-items:center;}'
+    # the switch track is fixed at 28px: left to Bokeh it stretches to fill
+    # whatever the label leaves, so a longer label ("Order by similarity")
+    # got a visibly shorter switch than its neighbours despite equal widths
+    SWITCH_TRACK_CSS = '.bk-body{flex:0 0 28px;width:28px;}'
+    RING_SWITCH_CSS = ':host{gap:2px;align-items:center;}' + SWITCH_TRACK_CSS
     # same, plus a thin divider on this switch's leading edge, in the small
     # gap Bokeh already leaves between adjacent row items -- marks where one
     # text+toggle section ends and the next begins. Not applied to
@@ -2620,13 +2643,30 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # (already used for the divider between this widget and its neighbors
     # in Bokeh's stock toolbars), not a hardcoded color of this file's own.
     RING_SWITCH_DIVIDER_CSS = (':host{gap:2px;align-items:center;'
-                                'border-left:1px solid var(--divider-color);padding-left:6px;}')
+                                'border-left:1px solid var(--divider-color);padding-left:6px;}'
+                                + SWITCH_TRACK_CSS)
     size_order_toggle = Switch(label="Order by size", active=True, width=RING_SWITCH_WIDTH,
                                 stylesheets=[RING_SWITCH_DIVIDER_CSS])
+    # the dotplot's counterpart, styled like the ring's switches. Off by
+    # default: natural (file/karyotype) order is what most users recognize
+    # their chromosomes by, and reordering only pays off when the two genomes
+    # are close enough that a near-1:1 correspondence exists to reveal in the
+    # first place (see SYN.computeSimilarityOrder's docstring)
+    order_toggle = Switch(label="Order by similarity", active=False, width=RING_SWITCH_WIDTH,
+                           stylesheets=[RING_SWITCH_CSS])  # first in its row: no leading divider
+    # Switch has no `description` slot like the spinners' "?" icons, so its
+    # help is a separate HelpButton placed right after it
+    order_help = HelpButton(tooltip=help_tip(
+        "Reorders both dotplot axes so chromosomes that share blocks sit next to each other, which "
+        "turns the synteny into a diagonal. Each chromosome is placed at the average position of its "
+        "blocks along the other axis, weighted by their gene counts, so two chromosomes matching "
+        "opposite ends of the same partner keep the diagonal too. Only what is drawn counts: "
+        "blocks below Min block size and sequences below Min sequence length are ignored, and chromosomes "
+        "with no visible blocks go to the end. When off, the dotplot follows Order by size.",
+        position='top'),  # the page's bottom row: 'bottom' would open off-screen
+        stylesheets=[HELP_BUTTON_CSS])
     # Switch, not Toggle -- a checkbox-style on/off switch rather than a
-    # pressable button, for these two specifically (order_toggle above stays
-    # a button; only these ring-display toggles were asked to become
-    # switches). off by default -- self-links can dominate/clutter the ring
+    # pressable button, like every on/off control on the page. off by default -- self-links can dominate/clutter the ring
     # (e.g. a heavily-homeologous polyploid genome), so a viewer opts in
     # rather than opting out. Lives with the ring's own save row (not the
     # palette/colors/min-block-size row below) because self-links are
@@ -2695,7 +2735,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
         });
     """)
-    order_toggle.js_on_click(order_toggle_callback)
+    order_toggle.js_on_change('active', order_toggle_callback)
 
     # size_order_toggle always reorders the ring (which has no similarity
     # concept to defer to); it only reorders the dotplot when order_toggle
@@ -2905,7 +2945,19 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         const k = color_spinner.value;
         SYN.applyOverviewRibbons(minScore, k, self_links_toggle.active,
                                   hide_synteny_toggle.active, overview_ribbon_source);
-        SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
+        if (SYN.state.orderBySimilarity) {
+            // the similarity order only counts blocks at or above the min
+            // block size (see SYN.computeSimilarityOrder), so it can change here
+            const ui = SYN.ui;
+            const dpOrder = SYN.dpOrderFor(true);
+            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, k, minScore, {
+                query: ui.dpQuerySource, subject: ui.dpSubjectSource, grid: ui.dpGridSource,
+                queryLabel: ui.dpQueryLabelSource, subjectLabel: ui.dpSubjectLabelSource,
+                segment: ui.dpSegmentSource, gap: ui.dpGapSource, fig: ui.dotplotFig,
+            });
+        } else {
+            SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
+        }
         SYN.refreshDetail(k, minScore, bar_source, ribbon_source, label_source, detail_fig, detail_gap_source);
         SYN.updateChainStatus();
     """)
@@ -3054,11 +3106,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "paste into a slide or document), whichever the dropdown next to that "
                      "button is set to.</p>")
 
+    # switches first, then the panel's save button and format menu
     left_col = column(overview,
-                       row(save_ring_btn, ring_format_sel, self_links_toggle, hide_synteny_toggle,
-                           show_gaps_toggle, size_order_toggle))
+                       row(self_links_toggle, hide_synteny_toggle, show_gaps_toggle, size_order_toggle,
+                           save_ring_btn, ring_format_sel))
     right_col = column(dotplot_fig,
-                        row(save_dotplot_btn, dotplot_format_sel, export_blocks_btn, order_toggle))
+                        row(order_toggle, order_help, save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
 
     # static -- the tool's own name/tagline, not this run's target/reference
     # (that's the target/reference label inputs' job) -- unlike those, never
@@ -3084,14 +3137,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # PLOT_TOOLBAR_WIDTH), not the full nominal figure width (which would run
     # this box's right edge out under the toolbar icons) and not the
     # narrower reset/save/format row under it either.
-    # margin=(0,0,0,0) overrides Bokeh's own default 5px margin on every side
-    # of a Div, which otherwise insets this box 5px from detail_fig's left
-    # edge while pushing its right edge 5px past detail_fig's own -- exactly
-    # the width but visibly not aligned with the panel it's meant to match.
-    # The vertical breathing room that default margin used to provide is
+    # margin: none except DETAIL_FRAME_LEFT on the left, so the box starts at
+    # the zoom panel's drawn frame rather than the figure's outer edge
+    # (Bokeh's own default 5px margin on every side would also push the right
+    # edge past the frame). The vertical breathing room that default margin used to provide is
     # already there regardless, from SYN.buildStatsHtml's own inline
     # `margin:4px 0 8px 0` on the box itself.
-    stats_div = Div(text='', width=STATS_PANEL_WIDTH, margin=(0, 0, 0, 0))
+    stats_div = Div(text='', width=STATS_PANEL_WIDTH, margin=(0, 0, 0, DETAIL_FRAME_LEFT))
 
     # placed under the zoom panel specifically (not a full-width bar under
     # all three panels) -- fills the otherwise-empty space under the
@@ -3129,11 +3181,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # above, just not attached to anything file_html walks/serializes)
         # per explicit request to drop the usage instructions from the page
         # -- reinstate by adding `hint,` back here
-        # spacing=20 -- row()'s default is 0, so without this the three
+        # spacing=5 -- row()'s default is 0, so without this the three
         # panels would sit flush against each other (or worse, apart by
         # whatever a child happens to overflow to, see left_col's own
         # comment above) rather than by a deliberate, equal gap
-        row(left_col, mid_col, right_col, spacing=20),
+        row(left_col, mid_col, right_col, spacing=5),
     )
 
     # The page is built as an explicit Document (rather than handing `layout`
