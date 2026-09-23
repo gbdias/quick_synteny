@@ -46,6 +46,99 @@ process MINIPROT_ALIGN {
     """
 }
 
+// ---------------------------------------------------------------------------
+// Chunked path (params.miniprot_chunk_gb, opt-in): SPLIT_GENOME ->
+// MINIPROT_ALIGN_CHUNK (one task per chunk) -> MERGE_MINIPROT_GFF, wired in
+// main.nf to emit the same tuple(name, gff) shape MINIPROT_ALIGN does, so
+// RENAME_GFF and everything after it is unchanged either way.
+//
+// The point is peak RAM: miniprot's index is ~10 GB per Gb of genome, so
+// aligning against N smaller chunks instead of one whole-genome index caps
+// peak RSS per task at roughly (chunk size / N) instead of the whole
+// genome -- see docs/plans/D_chunked_miniprot.md. Per-chunk outputs are a
+// superset of the whole-genome output (same --outs/-N filters, applied to
+// a smaller index), so MERGE_MINIPROT_GFF re-applies both filters globally
+// to recover a result equivalent to one whole-genome run -- see that
+// script's docstring for why this is exact, and its two gotchas (an
+// explicit -G computed from the WHOLE genome's length, since -I would
+// otherwise derive max intron size from a chunk's own, smaller length;
+// and per-chunk k-mer statistics that can shift sensitivity slightly,
+// which is what the plan's acceptance checks measure).
+// ---------------------------------------------------------------------------
+
+process SPLIT_GENOME {
+    tag "${name}"
+    label 'process_low'
+    container 'quay.io/biocontainers/python:3.13.7'
+
+    input:
+    tuple val(name), path(genome_fasta)
+    val target_chunk_bp
+
+    output:
+    tuple val(name), path("chunk_*.fa"), path("chunks.tsv"), path("total_length.txt"), emit: chunks
+
+    script:
+    """
+    split_genome.py --fasta ${genome_fasta} --chunk_bp ${target_chunk_bp} --outdir .
+    """
+}
+
+// cpus/memory/errorStrategy/maxRetries are set directly on the process
+// (not via a label) because the memory formula needs `chunk_bp`, a process
+// input -- a dynamic directive in nextflow.config can only see task.* and
+// params.*, not a process's own named inputs, so this can't be split across
+// a label (whose memory Nextflow config would otherwise win over anything
+// set here). cpus is lower than MINIPROT_ALIGN's process_high default
+// because chunking already spreads the alignment across N parallel tasks
+// instead of one -- the original single-job benchmark ran 32 threads at
+// only 392% CPU (APPLICATION_NOTE_PLAN.md Sec 2), so a handful of threads
+// per chunk is already proportionate.
+process MINIPROT_ALIGN_CHUNK {
+    tag "${name}:${chunk_fasta.baseName}"
+    container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
+    cpus 4
+    memory { "${Math.ceil((chunk_bp / 1e9 * params.miniprot_gb_per_gb + 4) * Math.pow(1.5, task.attempt - 1))} GB" }
+    errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
+    maxRetries 2
+
+    input:
+    tuple val(name), path(chunk_fasta), val(chunk_bp), val(total_length), path(proteome_faa)
+    val miniprot_m
+
+    output:
+    tuple val(name), path("${chunk_fasta.baseName}.raw.gff"), emit: gff
+
+    script:
+    def mFlag = miniprot_m ? "-M ${miniprot_m}" : ''
+    // -I derives max intron size from the length of the INPUT genome; a
+    // chunk is shorter than the whole genome, so -G is computed here from
+    // the whole genome's length instead, replicating miniprot's own
+    // formula (mp_mapopt_set_max_intron, confirmed empirically against -I's
+    // own logged value: it's a ceiling, not a round or floor).
+    def G = Math.min(Math.max(Math.ceil(3.6 * Math.sqrt(total_length as double)) as long, 10000L), 300000L)
+    """
+    miniprot -t ${task.cpus} ${mFlag} -G ${G} -N 5 --outs=0.7 --gff ${chunk_fasta} ${proteome_faa} > ${chunk_fasta.baseName}.raw.gff
+    """
+}
+
+process MERGE_MINIPROT_GFF {
+    tag "${name}"
+    label 'process_low'
+    container 'quay.io/biocontainers/python:3.13.7'
+
+    input:
+    tuple val(name), path(chunk_gffs)
+
+    output:
+    tuple val(name), path("${name}.raw.gff"), emit: gff
+
+    script:
+    """
+    merge_miniprot_gff.py --gff ${chunk_gffs} --out ${name}.raw.gff
+    """
+}
+
 // Renames the aligner's GFF seqid column (original genome IDs -> chr1/chr2/
 // ... etc) using the same lookup RENAME_SEQUENCES produced from the same
 // genome -- see rename_gff.py. Plain Python, not a bioinformatics tool, so
