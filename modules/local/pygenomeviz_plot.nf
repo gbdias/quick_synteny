@@ -48,9 +48,14 @@
 // genuinely different artifact per target engine -- the Singularity one is
 // a native SIF (single sylabs.sif.layer blob, no Docker-style layered
 // filesystem), which plain `docker pull` cannot consume at all, so the same
-// oras:// reference this pipeline's -profile slurm (Apptainer) needs would
-// break -profile standard (Docker) outright, not just run unoptimally
-// there. workflow.containerEngine (set by whichever profile is active --
+// SIF this pipeline's -profile slurm (Apptainer) needs would break -profile
+// standard (Docker) outright, not just run unoptimally there. Singularity
+// gets that SIF as a direct HTTPS download of its registry blob (the SIF
+// build of oras://community.wave.seqera.io/library/bokeh:3.10.0--
+// 3fdfec626f703f33), the convention nf-core modules use for Seqera images:
+// some Singularity/Apptainer versions' ORAS clients reject the manifest type
+// Seqera serves those under (seen on the cluster, 2026-09-23, for the
+// nodejs image built the same way). workflow.containerEngine (set by whichever profile is active --
 // see nextflow.config/conf/slurm.config) picks the right one per run,
 // restoring the same "one container line, works under either profile"
 // property every other process in this pipeline already has.
@@ -59,7 +64,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001'
-        : 'oras://community.wave.seqera.io/library/bokeh:3.10.0--3fdfec626f703f33' }
+        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/7d/7d1d2c3a4140cc15a434b599754b57408b4c840e56724c5f8ba5e8e2213a91dd/data' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:

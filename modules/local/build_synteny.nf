@@ -11,7 +11,13 @@
 // formats). chain.js is plain, dependency-free JS, so any node >= 18 would
 // do; what matters for the image is that it ships bash and procps, both of
 // which Nextflow needs in every task container (node:*-slim lacks `ps`).
-// Both are linux/amd64 builds, matching docker.runOptions in the standard
+// Singularity gets the SIF as a direct HTTPS download of its registry blob
+// (the SIF build of oras://community.wave.seqera.io/library/nodejs:26.8.2--
+// 79cbd548ac9675ad), the convention nf-core modules use for Seqera images,
+// rather than the oras:// reference itself -- the cluster's Singularity
+// refused that with "could not get image manifest, received mediaType:
+// application/vnd.docker.distribution.manifest.v2+json" (2026-09-23). Both
+// are linux/amd64 builds, matching docker.runOptions in the standard
 // profile; linux/arm64 builds of the same package also exist
 // (nodejs:26.8.2--6646c230528b0eae for Docker, --864372a79e757566 for
 // Singularity) if a native-arm64 profile is ever added.
@@ -47,7 +53,7 @@ process CHAIN_CROSS {
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
-        : 'oras://community.wave.seqera.io/library/nodejs:26.8.2--79cbd548ac9675ad' }
+        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -79,7 +85,7 @@ process CHAIN_SELF {
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
-        : 'oras://community.wave.seqera.io/library/nodejs:26.8.2--79cbd548ac9675ad' }
+        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
