@@ -1,7 +1,8 @@
-// build_synteny.nf already emits links.tsv directly in the format
-// plot_synteny_interactive.py needs (genomic coordinates from the start), so
-// there's no anchors-to-BED join step here anymore -- this just needs the
-// chrom sizes for track layout and whichever links files were produced.
+// plot_synteny_interactive.py embeds each genome's hit table (from
+// BUILD_SYNTENY's EXTRACT_HITS) directly -- see bin/chain.js's EMBEDDED
+// PAYLOAD header -- and chains them client-side (bin/chain.js, inlined into the page), so
+// this module ships raw hits, not precomputed links/blocks. build_synteny.nf
+// still emits links.tsv/slider_links.tsv for other consumers, just not this one.
 //
 // This pipeline's one plot output is the interactive HTML below: a Circos-
 // style ring, a linear zoom panel, and a whole-genome dotplot, all built
@@ -30,7 +31,10 @@
 // Bioconda/conda-forge/PyPI on demand, pullable like any other registry
 // image, no Nextflow wave plugin needed. Bokeh ships in the image already,
 // so there's no runtime pip install left to fail or to need network access
-// for. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
+// for. numpy (used to encode the embedded hit-table payload -- see
+// bin/plot_synteny_interactive.py's build_hits_payload) ships alongside
+// Bokeh in the same conda-forge image, so it needs no separate handling
+// here. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
 // their docs) and to linux/amd64, matching docker.runOptions =
 // '--platform=linux/amd64' in nextflow.config's standard profile -- every
 // container in this pipeline runs as amd64 there (Apple Silicon dev
@@ -43,90 +47,88 @@
 // genuinely different artifact per target engine -- the Singularity one is
 // a native SIF (single sylabs.sif.layer blob, no Docker-style layered
 // filesystem), which plain `docker pull` cannot consume at all, so the same
-// oras:// reference this pipeline's -profile slurm (Apptainer) needs would
-// break -profile standard (Docker) outright, not just run unoptimally
-// there. workflow.containerEngine (set by whichever profile is active --
+// SIF this pipeline's -profile slurm (Apptainer) needs would break -profile
+// standard (Docker) outright, not just run unoptimally there. Singularity
+// gets that SIF as a direct HTTPS download of its registry blob (the SIF
+// build of oras://community.wave.seqera.io/library/bokeh:3.10.0--
+// 3fdfec626f703f33), the convention nf-core modules use for Seqera images:
+// some Singularity/Apptainer versions' ORAS clients reject the manifest type
+// Seqera serves those under (seen on the cluster, 2026-09-23, for the
+// nodejs image built the same way). workflow.containerEngine (set by whichever profile is active --
 // see nextflow.config/conf/slurm.config) picks the right one per run,
 // restoring the same "one container line, works under either profile"
 // property every other process in this pipeline already has.
 process RENDER_SYNTENY_INTERACTIVE {
-    tag "${target_name} vs ${comparison_name}"
+    tag "${target_name} vs ${reference_name}"
     label 'process_low'
     container { workflow.containerEngine == 'docker'
         ? 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001'
-        : 'oras://community.wave.seqera.io/library/bokeh:3.10.0--3fdfec626f703f33' }
+        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/7d/7d1d2c3a4140cc15a434b599754b57408b4c840e56724c5f8ba5e8e2213a91dd/data' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
-    tuple val(target_name), val(comparison_name), path(links)
+    tuple val(target_name), path(target_hits)
+    tuple val(reference_name), path(reference_hits)
     path target_chrom_sizes
-    path comparison_chrom_sizes
-    path target_homeolog_links     // optional: a real file, or NO_HOMEOLOGS placeholder
-    path comparison_homeolog_links // ditto
-    path stats              // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
-    val target_subtitle     // input file name/accession, shown under the target label
-    val comparison_subtitle // ditto, for the comparison label
-    path target_gaps        // FIND_ASSEMBLY_GAPS output -- always a real file (unconditional, unlike the homeolog links above)
-    path comparison_gaps    // ditto
+    path reference_chrom_sizes
+    val min_identity        // '' auto-tunes client-side (SYNCHAIN.autoParams); otherwise an explicit 0-1 floor
+    val max_gap
+    val min_block           // '' auto-tunes client-side; otherwise the initial Min block size control value
+    path stats               // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
+    val target_subtitle      // input file name/accession, shown under the target label
+    val reference_subtitle  // ditto, for the reference label
+    path target_gaps         // RENAME_SEQUENCES gaps output -- always a real file (unconditional)
+    path reference_gaps     // ditto
 
     output:
-    path "${target_name}.${comparison_name}.synteny.interactive.html"
+    path "${target_name}.${reference_name}.synteny.interactive.html"
 
     script:
-    def targetHomeologFlag = (target_homeolog_links.name != 'NO_HOMEOLOGS') ? "--target_homeolog_links ${target_homeolog_links}" : ''
-    def comparisonHomeologFlag = (comparison_homeolog_links.name != 'NO_HOMEOLOGS') ? "--comparison_homeolog_links ${comparison_homeolog_links}" : ''
+    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
     plot_synteny_interactive.py \\
-        --query_name ${target_name} --subject_name ${comparison_name} \\
+        --query_name ${target_name} --subject_name ${reference_name} \\
         --query_chrom_sizes ${target_chrom_sizes} \\
-        --subject_chrom_sizes ${comparison_chrom_sizes} \\
-        --links ${links} \\
-        ${targetHomeologFlag} \\
-        ${comparisonHomeologFlag} \\
+        --subject_chrom_sizes ${reference_chrom_sizes} \\
+        --target_hits ${target_hits} --reference_hits ${reference_hits} \\
+        ${idFlag} --max_gap ${max_gap} ${blockFlag} \\
         --stats ${stats} \\
-        --query_subtitle "${target_subtitle}" --subject_subtitle "${comparison_subtitle}" \\
-        --target_gaps ${target_gaps} --comparison_gaps ${comparison_gaps} \\
-        --out_prefix ${target_name}.${comparison_name}.synteny
+        --query_subtitle "${target_subtitle}" --subject_subtitle "${reference_subtitle}" \\
+        --target_gaps ${target_gaps} --reference_gaps ${reference_gaps} \\
+        --out_prefix ${target_name}.${reference_name}.synteny
     """
 }
 
 workflow PYGENOMEVIZ_PLOT {
     take:
-    links_slider           // tuple(target_name, comparison_name, path links.tsv) -- always computed at mba=5, feeds the interactive plot's slider
+    hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and reference mixed together
     target_chrom_sizes     // tuple(name, path chrom.sizes)
-    comparison_chrom_sizes
-    homeolog_links_slider  // tuple(name, path links.tsv), 0-2 items (one per requested side), always at mba=5
+    reference_chrom_sizes
+    min_identity           // '' auto-tunes; otherwise an explicit 0-1 floor (the page's initial control value)
+    max_gap                // max gene-rank step between consecutive chain members (the page's initial control value)
+    min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
-    comparison_subtitle    // val -- comparison genome's input file name/accession, ditto
-    target_gaps            // tuple(name, path gaps.tsv) -- FIND_ASSEMBLY_GAPS output
-    comparison_gaps
+    reference_subtitle    // val -- reference genome's input file name/accession, ditto
+    target_gaps            // tuple(name, path gaps.tsv) -- RENAME_SEQUENCES gaps output
+    reference_gaps
 
     main:
-    // homeolog_links_slider can carry a 'target' tuple, a 'comparison' tuple,
-    // both, or neither (see BUILD_SYNTENY's find_homeologs) -- split back out
-    // by role rather than passing it straight through, since
-    // RENDER_SYNTENY_INTERACTIVE needs each side wired to its own CLI flag
-    // (a single process input can't carry a variable 0-2 item list in lockstep
-    // with the other per-run inputs).
-    homeolog_branches = homeolog_links_slider.branch {
+    hits_by_role = hits.branch {
         target: it[0] == 'target'
-        comparison: it[0] == 'comparison'
+        reference: it[0] == 'reference'
     }
-    target_homeolog_file = homeolog_branches.target.map { it[1] }
-        .ifEmpty(file("${projectDir}/assets/NO_HOMEOLOGS"))
-    comparison_homeolog_file = homeolog_branches.comparison.map { it[1] }
-        .ifEmpty(file("${projectDir}/assets/NO_HOMEOLOGS"))
 
     RENDER_SYNTENY_INTERACTIVE(
-        links_slider,
+        hits_by_role.target,
+        hits_by_role.reference,
         target_chrom_sizes.map { it[1] },
-        comparison_chrom_sizes.map { it[1] },
-        target_homeolog_file,
-        comparison_homeolog_file,
+        reference_chrom_sizes.map { it[1] },
+        min_identity, max_gap, min_block,
         stats,
-        target_subtitle, comparison_subtitle,
+        target_subtitle, reference_subtitle,
         target_gaps.map { it[1] },
-        comparison_gaps.map { it[1] },
+        reference_gaps.map { it[1] },
     )
 }

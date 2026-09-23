@@ -91,13 +91,20 @@ def main():
                               "below that quality bar is dropped either way, same-species or not.")
     parser.add_argument('--require_chromosome_level', action='store_true',
                          help="require EVERY candidate, same-species or not, to be chromosome- or "
-                              "complete-genome-level -- used for comparison-genome discovery, where "
+                              "complete-genome-level -- used for reference-genome discovery, where "
                               "a low-quality genome makes a poor synteny comparison regardless of "
                               "species. Off for proteome discovery, which only needs a candidate's "
                               "protein sequences and is deliberately more permissive (a scaffold-"
                               "level annotated assembly is fine there). When this flag is off, a "
                               "same-species candidate is still individually held to chromosome "
                               "level -- see --exclude_target -- but a DIFFERENT-species one is not.")
+    parser.add_argument('--prefer_taxid', default='',
+                         help="species taxid to prefer: if any kept candidate at any searched rank "
+                              "is of this species, the best of those wins over the usual ranking. "
+                              "Proteome discovery passes the chosen reference genome's species, so "
+                              "the proteome comes from the reference species whenever it has an "
+                              "annotated assembly -- the ranking below knows assembly quality, "
+                              "not relatedness.")
     args = parser.parse_args()
 
     lineage = read_lineage(args.lineage)
@@ -120,7 +127,7 @@ def main():
 
     def keep(r):
         # explicit and self-contained here, rather than relying solely on
-        # find_comparison_assembly.nf's own upstream --assembly-level
+        # find_reference_assembly.nf's own upstream --assembly-level
         # chromosome,complete query filter to make this true incidentally
         if args.require_chromosome_level and not is_chromosome_level(r):
             return False
@@ -138,6 +145,7 @@ def main():
     chosen_taxid = None
     chosen_name = None
     candidates = []
+    kept_by_rank = []
 
     for rank in ladder:
         if rank not in lineage:
@@ -146,9 +154,24 @@ def main():
         records = read_jsonl(os.path.join(args.jsonl_dir, f"{rank}.jsonl"))
         records = [r for r in records if keep(r)]
         search_log.append((rank, taxid, name, len(records)))
+        kept_by_rank.append((rank, taxid, name, records))
         if records and not candidates:
             chosen_rank, chosen_taxid, chosen_name = rank, taxid, name
             candidates = sorted(records, key=sort_key, reverse=True)
+
+    # a candidate of the preferred species, from the first (lowest) rank that
+    # has one, beats the ranking above -- listed first, then that rank's rest
+    preferred = False
+    if args.prefer_taxid:
+        for rank, taxid, name, records in kept_by_rank:
+            match = [r for r in records if str(r.get('organism', {}).get('tax_id', '')) == str(args.prefer_taxid)]
+            if match:
+                match = sorted(match, key=sort_key, reverse=True)
+                rest = [r for r in sorted(records, key=sort_key, reverse=True) if r not in match]
+                chosen_rank, chosen_taxid, chosen_name = rank, taxid, name
+                candidates = match + rest
+                preferred = True
+                break
 
     with open(f"{args.outprefix}_search_log.tsv", 'w') as f:
         f.write("rank\ttaxid\tname\thits\n")
@@ -186,6 +209,13 @@ def main():
         'rank': chosen_rank,
         'taxid': chosen_taxid,
         'name': chosen_name,
+        # the chosen assembly's OWN species -- `name` above is the taxon of
+        # the rank the ladder stopped at, which is a genus/family name
+        # whenever the pick came from above species rank
+        'organism_name': best.get('organism', {}).get('organism_name', ''),
+        'organism_taxid': str(best.get('organism', {}).get('tax_id', '')),
+        # true when --prefer_taxid decided the pick (see above)
+        'preferred_species': preferred,
         'candidate_count': len(candidates),
         'annotated': 'annotation_info' in best,
         # true when the chosen candidate is of the target's own species --
@@ -199,7 +229,7 @@ def main():
 
     same_species_note = ' [SAME SPECIES AS TARGET]' if same_species else ''
     print(f"[find_closest_assembly] chosen accession={best['accession']} "
-          f"rank={chosen_rank} ({chosen_name}){same_species_note} "
+          f"({selection['organism_name']}) rank={chosen_rank} ({chosen_name}){same_species_note} "
           f"from {len(candidates)} candidate(s)", file=sys.stderr)
 
 

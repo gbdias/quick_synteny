@@ -2,16 +2,13 @@
 """Summarize the proteome-vs-genome miniprot alignments for the interactive
 HTML's stats panel (see plot_synteny_interactive.py --stats).
 
-Reuses the same miniprot GFF Target=/Positive=/Rank= attributes
-build_synteny_blocks.py parses (including its choice of Positive= over the
-stricter Identity=, see that file's parse_gff() for why), but only needs
-per-protein counts and each protein's best-hit score here, not a full
-anchors structure -- kept as a separate small script rather than importing
-that module, since these are read-only summary numbers with no chaining
-involved. Using the same metric here as the chainer uses matters: this is
-what the auto-tuned --min_identity/--min_block_anchors values are computed
-from, so the stats panel would otherwise show a different "identity" number
-than the one actually driving the guardrails.
+Reads the same miniprot GFF Target=/Positive=/Rank= attributes
+extract_hits.py puts in the hit table, but only needs per-protein counts and
+each protein's best-hit score. Uses the same metric as the chainer on
+purpose: Positive= (identical or positively-scoring residues) is what the
+auto-tuned --min_identity/--min_block values in bin/chain.js are computed
+from, so the stats panel shows the same "identity" number that drives
+those defaults.
 """
 import argparse
 import json
@@ -33,8 +30,10 @@ def count_proteome(path):
 def gff_stats(path):
     """(n_aligned_proteins, mean identity of each aligned protein's best hit).
 
-    "identity" here is miniprot's Positive= score, not its stricter Identity=
-    -- see build_synteny_blocks.py's parse_gff() docstring."""
+    "identity" here is miniprot's Positive= score, not its stricter Identity=:
+    conservative substitutions accumulate long before radical ones as two
+    genomes diverge, so Positive stays informative for real orthologs well
+    after Identity alone would make them look like noise."""
     rank1_identity = {}
     max_identity = {}
     with open(path) as f:
@@ -70,10 +69,15 @@ def main():
     parser.add_argument('--subject_gff', required=True)
     parser.add_argument('--query_name', required=True)
     parser.add_argument('--subject_name', required=True)
-    parser.add_argument('--proteome_origin', default=None,
-                         help="where the proteome came from, for the stats panel: a species "
-                              "name if it was auto-discovered from NCBI, or the input filename "
-                              "if the user supplied it directly. Omitted (no line shown) if not given.")
+    # How the page's stats panel names each input: the file name if the user
+    # supplied it, else the NCBI accession it was auto-discovered from; plus
+    # its species when known (from --taxid's lineage, or the discovered
+    # assembly's own record). Empty means unknown -- nothing is shown for it.
+    for role in ('query', 'subject', 'proteome'):
+        parser.add_argument(f'--{role}_source', default='',
+                             help=f'{role}: input file name if user-supplied, else its NCBI accession')
+        parser.add_argument(f'--{role}_species', default='',
+                             help=f'{role}: species name when known, else empty')
     parser.add_argument('--out', required=True)
     args = parser.parse_args()
 
@@ -83,11 +87,16 @@ def main():
 
     stats = {
         'proteome_total': proteome_total,
-        'proteome_origin': args.proteome_origin,
+        'proteome_source': args.proteome_source or None,
+        'proteome_species': args.proteome_species or None,
         'query_name': args.query_name,
+        'query_source': args.query_source or None,
+        'query_species': args.query_species or None,
         'query_aligned': query_aligned,
         'query_mean_identity': query_identity,
         'subject_name': args.subject_name,
+        'subject_source': args.subject_source or None,
+        'subject_species': args.subject_species or None,
         'subject_aligned': subject_aligned,
         'subject_mean_identity': subject_identity,
     }

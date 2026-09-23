@@ -11,3 +11,7 @@ __pycache__/
 /scratch/
 /prototypes/
 /quick_synteny_nextflow_plan.md
+
+# local real-data fixtures for chainer development (large, not versioned)
+/test_data/
+/slurm/results_*/
