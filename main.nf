@@ -6,8 +6,7 @@ include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly
 include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
 include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
 include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
-include { MINIPROT_ALIGN }          from './modules/local/miniprot_align.nf'
-include { CHROM_SIZES; FIND_ASSEMBLY_GAPS } from './modules/local/prepare_synteny_inputs.nf'
+include { MINIPROT_ALIGN; RENAME_GFF } from './modules/local/miniprot_align.nf'
 include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
 include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
 
@@ -190,57 +189,54 @@ workflow {
         }
     }
 
-    // Each per-genome step below (rename, align, chrom sizes) is a single
-    // process definition invoked ONCE on a channel carrying both the target
-    // and the comparison genome tagged by role name ('target'/'comparison') --
-    // Nextflow DSL2 does not allow calling the same process twice in one
-    // workflow scope, so target+comparison are mixed into one channel and
-    // split back apart with .branch{} wherever a downstream step needs them
-    // as two separate arguments.
+    // Each per-genome step below (rename+sizes+gaps, align, rename the
+    // alignment output) is a single process definition invoked ONCE on a
+    // channel carrying both the target and the comparison genome tagged by
+    // role name ('target'/'comparison') -- Nextflow DSL2 does not allow
+    // calling the same process twice in one workflow scope, so
+    // target+comparison are mixed into one channel and split back apart
+    // with .branch{} wherever a downstream step needs them as two separate
+    // arguments.
 
-    // ---- rename sequences (both genomes) ----
+    // ---- rename sequences (both genomes) -- the only full read of each
+    // genome; chrom sizes and assembly gaps come out of the same pass
+    // instead of two more full reads (faSize, then a separate gap scan) --
+    // see rename_sequences.nf/.py ----
     genomes_in = Channel.value('target').combine(Channel.value(file(params.assembly)))
         .mix(Channel.value('comparison').combine(comparison_fasta))
 
-    renamed = RENAME_SEQUENCES(genomes_in).fasta
-    renamed_by_role = renamed.branch {
-        target: it[0] == 'target'
-        comparison: it[0] == 'comparison'
-    }
-    target_renamed     = renamed_by_role.target
-    comparison_renamed = renamed_by_role.comparison
+    renamed = RENAME_SEQUENCES(genomes_in, params.min_seq_size, params.min_asm_gap)
 
-    // ---- align proteome against both genomes (also doubles as the raw
-    // synteny/homeolog anchor source -- see build_synteny.nf) ----
-    align_in = renamed.combine(proteome_fasta)
-    // params.miniprot_m defaults to null (miniprot's own default); normalized
-    // to '' here for the same reason as min_identity below -- see that comment
-    def miniprot_m = params.miniprot_m ?: ''
-    gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
-    gff_by_role = gff.branch {
-        target: it[0] == 'target'
-        comparison: it[0] == 'comparison'
-    }
-    target_gff     = gff_by_role.target
-    comparison_gff = gff_by_role.comparison
-
-    // ---- chrom sizes (post --min_seq_size filter) ----
-    chrom_sizes = CHROM_SIZES(renamed, params.min_seq_size).chrom_sizes
-    chrom_sizes_by_role = chrom_sizes.branch {
+    chrom_sizes_by_role = renamed.chrom_sizes.branch {
         target: it[0] == 'target'
         comparison: it[0] == 'comparison'
     }
     target_chrom_sizes     = chrom_sizes_by_role.target
     comparison_chrom_sizes = chrom_sizes_by_role.comparison
 
-    // ---- assembly gaps (both genomes, always computed) ----
-    gaps = FIND_ASSEMBLY_GAPS(renamed, params.min_asm_gap).gaps
-    gaps_by_role = gaps.branch {
+    gaps_by_role = renamed.gaps.branch {
         target: it[0] == 'target'
         comparison: it[0] == 'comparison'
     }
     target_gaps     = gaps_by_role.target
     comparison_gaps = gaps_by_role.comparison
+
+    // ---- align proteome against both ORIGINAL genomes (also doubles as
+    // the raw synteny/homeolog anchor source -- see build_synteny.nf), then
+    // rename each resulting GFF's seqid column using the lookup from the
+    // matching RENAME_SEQUENCES call (join()'d by role name) ----
+    align_in = genomes_in.combine(proteome_fasta)
+    // params.miniprot_m defaults to null (miniprot's own default); normalized
+    // to '' here for the same reason as min_identity below -- see that comment
+    def miniprot_m = params.miniprot_m ?: ''
+    raw_gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
+    gff = RENAME_GFF(raw_gff.join(renamed.lookup)).gff
+    gff_by_role = gff.branch {
+        target: it[0] == 'target'
+        comparison: it[0] == 'comparison'
+    }
+    target_gff     = gff_by_role.target
+    comparison_gff = gff_by_role.comparison
 
     // ---- synteny blocks + final plot ----
     // params.min_identity defaults to null (auto-tune); Groovy's null is not
