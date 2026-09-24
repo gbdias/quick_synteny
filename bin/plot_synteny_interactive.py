@@ -78,7 +78,7 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, HelpButton, Label, Range1d, Select, Spinner, Switch, TextInput,
+                           Button, Div, Label, Range1d, Select, Spinner, Switch, TextInput,
                            Tooltip)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
@@ -194,7 +194,7 @@ DETAIL_BOT_Y = 0.0
 STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH - DETAIL_FRAME_LEFT
 
 # every titleless toolbar control below a figure (save/clear buttons, the
-# SVG/PNG/JPEG format dropdowns, the "order by similarity" toggle) -- left
+# SVG/PNG/JPEG format dropdowns, the blocks TSV button) -- left
 # unset, each one auto-sizes to its own label/font metrics instead (a plain
 # Button came out a couple px shorter than one with an emoji glyph in its
 # label, and Select's own browser-native control renders shorter still than
@@ -207,6 +207,12 @@ TOOLBAR_CONTROL_HEIGHT = 32
 # their old 220px, which was much wider than any of their labels or values
 # actually need
 TOP_CONTROL_WIDTH = 150
+
+# the "Chromosome order" menu's options -> (order by size, order by
+# similarity), embedded as SYN.data.orderModes for its callback. Similarity
+# starts from size order (see SYN.computeSimilarityOrder), so its tiebreak
+# among chromosomes with no visible blocks is by size.
+ORDER_MODES = {'Size': (True, False), 'File order': (False, False), 'Similarity': (True, True)}
 
 # dotplot gap lines only -- a lighter grey than the ring/zoom panel's own
 # solid-black gap markers (a `multi_line` renderer style, set once here in
@@ -429,7 +435,7 @@ class Dataset:
         # (see main.nf's own comment) -- self.query_chroms/subject_chroms
         # stay the name used everywhere below (dotplot layout, color
         # assignment) and represent whichever order is DEFAULT-active, which
-        # is size order (size_order_toggle defaults to on in build_page() --
+        # is size order (order_select defaults to "Size" in build_page() --
         # kept in sync deliberately, same as every other Python/JS
         # default-state pair in this file). The natural-order lists are kept
         # alongside purely so build_page() can embed them for the
@@ -539,18 +545,16 @@ SYN.state = {
     // pre-highlight (score-based) alphas on deselect rather than guessing --
     // null whenever no ribbon is currently highlighted
     ribbonBaseAlpha: null,
-    // read by SYN.dpNaturalOrder (both the dotplot's own toggle and the
-    // ring's reorder read through that one function) -- true = size order
-    // (SYN.data.queryNames/subjectNames), false = FASTA/natural order
-    // (SYN.data.queryNamesNatural/subjectNamesNatural). Matches
-    // size_order_toggle's default (see build_page()) -- kept in sync
+    // the "Chromosome order" menu (order_select in build_page()), as two
+    // flags -- see ORDER_MODES. orderBySize is read by SYN.dpNaturalOrder:
+    // true = size order (SYN.data.queryNames/subjectNames), false = FASTA/
+    // natural order (SYN.data.queryNamesNatural/subjectNamesNatural).
+    // orderBySimilarity replaces that order with SYN.computeSimilarityOrder's,
+    // on the ring and the dotplot alike, and makes every re-chain and min-
+    // block-size change re-order both (similarity depends on which blocks
+    // are drawn). Both match order_select's default ("Size") -- kept in sync
     // deliberately, same as every other default-state pair in this file.
     orderBySize: true,
-    // read by SYN.applyChainResult, to decide whether a fresh chain result
-    // needs a full dotplot reorder (similarity order depends on link
-    // weights, which just changed) or only a segment redraw in place.
-    // Matches order_toggle's default (see build_page()) -- kept in sync
-    // deliberately, same as every other default-state pair in this file.
     orderBySimilarity: false,
     // read by SYN.applyDetail (gates whether a freshly built detail's gap
     // ticks actually reach detail_gap_source) and by show_gaps_toggle's own
@@ -1041,17 +1045,13 @@ SYN.applyGapVisibility = function(gapSource) {
     gapSource.change.emit();
 };
 
-// The dotplot's chromosome order is not fixed the way the ring's is -- the
-// "order by similarity" toggle (see build_page()) can replace it wholesale,
-// so every dotplot source that depends on chromosome order (rulers, grid,
+// Every dotplot source that depends on chromosome order (rulers, grid,
 // labels, cells, and the block segments themselves) is rebuilt from raw
-// per-link data on every redraw rather than only once at page load, unlike
-// SYN.buildOverviewRibbons above (the ring's order never changes, so its
-// precomputed SYN.data.ribbons records stay valid for the page's whole
-// lifetime and only need filtering/recoloring, never rebuilding from
-// scratch). SYN.state.dpQueryOffsets/dpSubjectOffsets hold whichever order
-// is currently active; this and buildDotplotLayout below are the only two
-// places that read them.
+// per-link data on every redraw, since the order can change at any time
+// after page load (the order menu, the min-length filter, and under
+// similarity order every re-chain). SYN.state.dpQueryOffsets/
+// dpSubjectOffsets hold whichever order is currently active; this and
+// buildDotplotLayout below are the only two places that read them.
 SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minScore, k) {
     const xs = [], ys = [], lineColor = [], alpha = [], label = [], paletteIndex = [];
     const maxScore = SYN.data.maxScore;
@@ -1095,7 +1095,7 @@ SYN.computeOffsets = function(order, sizes) {
 
 // The non-similarity order: target reads left-to-right, reference
 // bottom-to-top, both in whichever of {size, natural (FASTA)} order
-// SYN.state.orderBySize currently selects (see size_order_toggle) -- no
+// SYN.state.orderBySize currently selects (see order_select) -- no
 // reversal (an earlier version reversed the reference list, putting the
 // first name at the top -- flipped per explicit request): SYN.computeOffsets
 // gives the first name in its list the lowest -- bottommost -- position,
@@ -1116,7 +1116,7 @@ SYN.dpNaturalOrder = function() {
 // whichever ordering is currently active rather than being its own separate
 // order, since min_seq_size_spinner's own callback (and every other control
 // that can change the active order) always re-derives its order through
-// SYN.ringOrderFor/SYN.dpOrderFor below, never the raw name lists directly.
+// SYN.activeOrder below, never the raw name lists directly.
 SYN.filterBySize = function(order, sizes) {
     return order.filter((name) => sizes[name] >= SYN.state.minSeqSize);
 };
@@ -1128,44 +1128,61 @@ SYN.filterBySize = function(order, sizes) {
 // that EXISTS, not just what's currently visible: a zoom panel can draw a
 // partner chromosome that's below the min-length filter (SYN.buildDetailData
 // doesn't apply that filter to a pivot's OTHER side, only minScore -- see its
-// own code), and that name still needs a real color, so size_order_toggle's
+// own code), and that name still needs a real color, so order_select's
 // own callback below passes the full (unfiltered) size/natural list, never
-// SYN.ringOrderFor's already-filtered one. SYN.paletteColor wraps with `% k`,
+// SYN.activeOrder's already-filtered one. SYN.paletteColor wraps with `% k`,
 // so two chromosomes sharing a color are always exactly k apart IN THIS
 // ORDER -- never adjacent, for any k >= 2. That guarantee only holds for
-// whichever order the index was actually built from, so size_order_toggle's
-// callback rebuilds it every time it can change what that order is, rather
-// than freezing it to size order once at page load the way an earlier
-// version did: with Order by size OFF, a fixed size-order index no longer
-// matches what's on screen, and two adjacent wedges can end up sharing a
-// color. Order by similarity deliberately does NOT trigger a rebuild --
-// it's a dotplot-only, transient reordering (re-run on every re-chain), and
-// a chromosome's color should stay the same everywhere (ring wedge,
-// ribbons, dotplot ruler) while it does, not reshuffle on every min-identity
-// tweak.
+// whichever order the index was actually built from, so order_select's
+// callback rebuilds it whenever the size/natural choice changes: with file
+// order showing, a size-order index no longer matches what's on screen,
+// and two adjacent wedges can end up sharing a color. Similarity order
+// deliberately does NOT trigger a rebuild -- it's re-run on every re-chain,
+// and a chromosome's color should stay the same everywhere (ring wedge,
+// ribbons, dotplot ruler) while it does, not reshuffle on every
+// min-identity tweak. The price: under similarity order, two chromosomes
+// sharing a color can end up side by side.
 SYN.buildColorIndex = function(order) {
     const index = {};
     order.forEach((name, i) => { index[name] = i; });
     return index;
 };
 
-// The ring's currently-active order (size vs. natural -- it has no
-// similarity concept, see SYN.buildRingLayout's own comment), length-filtered.
-SYN.ringOrderFor = function(bySize) {
-    return {
-        queryOrder: SYN.filterBySize(bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural, SYN.data.querySizes),
-        subjectOrder: SYN.filterBySize(bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural, SYN.data.subjectSizes),
-    };
-};
-
-// The dotplot's currently-active order (similarity vs. SYN.dpNaturalOrder's
-// size/natural pair, mirroring order_toggle's own ternary), length-filtered.
+// similarity order or SYN.dpNaturalOrder's size/natural pair, length-filtered
 SYN.dpOrderFor = function(useSimilarity) {
     const order = useSimilarity ? SYN.computeSimilarityOrder() : SYN.dpNaturalOrder();
     return {
         queryOrder: SYN.filterBySize(order.queryOrder, SYN.data.querySizes),
         subjectOrder: SYN.filterBySize(order.subjectOrder, SYN.data.subjectSizes),
     };
+};
+
+// The one order both panels show: the ring's halves run left to right
+// (reference over the top, target under the bottom -- see
+// SYN.buildRingLayout), like the dotplot's axes, so the same similarity
+// order that makes the dotplot a diagonal also untangles the ring's ribbons.
+SYN.activeOrder = function() {
+    return SYN.dpOrderFor(SYN.state.orderBySimilarity);
+};
+
+// Lays out the ring and the dotplot again for SYN.activeOrder -- after the
+// order menu, the min-length filter, or (under similarity order) a re-chain
+// or min-block-size change. The ring's wedges, labels and gap wedges are
+// rebuilt too, not just its ribbons: the order is what moved.
+SYN.applyOrder = function() {
+    const ui = SYN.ui;
+    const order = SYN.activeOrder();
+    SYN.applyRingLayout(order.queryOrder, order.subjectOrder, {
+        querySource: ui.querySource, subjectSource: ui.subjectSource, labelSource: ui.labelSource,
+        ribbonSource: ui.ribbonSource, gapSource: ui.gapSource,
+        minScore: ui.minBlockSpinner.value, k: ui.colorSpinner.value,
+        showSelfLinks: ui.selfLinksToggle.active, showSynteny: ui.showSyntenyToggle.active,
+    });
+    SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, ui.colorSpinner.value, ui.minBlockSpinner.value, {
+        query: ui.dpQuerySource, subject: ui.dpSubjectSource, grid: ui.dpGridSource,
+        queryLabel: ui.dpQueryLabelSource, subjectLabel: ui.dpSubjectLabelSource,
+        segment: ui.dpSegmentSource, gap: ui.dpGapSource, fig: ui.dotplotFig,
+    });
 };
 
 // Reorders both axes to make shared synteny read as a diagonal: each
@@ -2243,18 +2260,14 @@ SYN.applyChainResult = function(msg) {
     for (const l of msg.targetSelfLinks) { if (l.score > maxAnyScore) { maxAnyScore = l.score; } }
     for (const l of msg.referenceSelfLinks) { if (l.score > maxAnyScore) { maxAnyScore = l.score; } }
 
-    const ringOrder = SYN.ringOrderFor(SYN.state.orderBySize);
-    SYN.data.ribbons = SYN.buildRibbonRecords(SYN.state.ringQueryOffsets, SYN.state.ringSubjectOffsets);
-    SYN.applyOverviewRibbons(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.selfLinksToggle.active,
-                              ui.showSyntenyToggle.active, ui.ribbonSource);
     if (SYN.state.orderBySimilarity) {
-        const dpOrder = SYN.dpOrderFor(true);
-        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, ui.colorSpinner.value, ui.minBlockSpinner.value, {
-            query: ui.dpQuerySource, subject: ui.dpSubjectSource, grid: ui.dpGridSource,
-            queryLabel: ui.dpQueryLabelSource, subjectLabel: ui.dpSubjectLabelSource,
-            segment: ui.dpSegmentSource, gap: ui.dpGapSource, fig: ui.dotplotFig,
-        });
+        // similarity order depends on the blocks, which just changed
+        SYN.applyOrder();
     } else {
+        // same order as before: only the ribbons and segments move
+        SYN.data.ribbons = SYN.buildRibbonRecords(SYN.state.ringQueryOffsets, SYN.state.ringSubjectOffsets);
+        SYN.applyOverviewRibbons(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.selfLinksToggle.active,
+                                  ui.showSyntenyToggle.active, ui.ribbonSource);
         SYN.applyDotplotSegmentsForCurrentLayout(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.dpSegmentSource);
     }
     SYN.refreshDetail(ui.colorSpinner.value, ui.minBlockSpinner.value, ui.detailBarSource, ui.detailRibbonSource,
@@ -2327,20 +2340,7 @@ SYN.init = function(s) {
     SYN.applyDetail(SYN.emptyDetail(), s.detailBarSource, s.detailRibbonSource, s.detailLabelSource,
                      s.detailFig, s.detailGapSource);
 
-    const ringOrder = SYN.ringOrderFor(true);
-    SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
-        querySource: s.querySource, subjectSource: s.subjectSource, labelSource: s.labelSource,
-        ribbonSource: s.ribbonSource, gapSource: s.gapSource,
-        minScore: s.minBlockSpinner.value, k: s.colorSpinner.value,
-        showSelfLinks: false, showSynteny: true,
-    });
-
-    const dpOrder = SYN.dpOrderFor(false);
-    SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, s.colorSpinner.value, s.minBlockSpinner.value, {
-        query: s.dpQuerySource, subject: s.dpSubjectSource, grid: s.dpGridSource,
-        queryLabel: s.dpQueryLabelSource, subjectLabel: s.dpSubjectLabelSource,
-        segment: s.dpSegmentSource, gap: s.dpGapSource, fig: s.dotplotFig,
-    });
+    SYN.applyOrder();
 
     SYN.startChainer(SYN.hitsPayload).then(function() {
         const auto = SYNCHAIN.autoParams(SYN.chain.tables.target, SYN.chain.tables.reference);
@@ -2752,7 +2752,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # One-line status ("N block(s) · X ms"), refreshed by every
     # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
-    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, margin=(18, 0, 0, 0))
+    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5))
     # Post-hoc chromosome-length filter for the ring + dotplot, independent
     # of --min_seq_size: that pipeline flag already dropped anything shorter
     # than its own threshold before this script ever saw the data (see
@@ -2784,18 +2784,18 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # from its position directly under that panel, so the longer label was
     # only ever spending width, not clarity
     SAVE_BUTTON_WIDTH = 70
-    # the ring's and dotplot's save buttons follow that panel's switches, so
-    # they get the same divider the switches use between each other (a 1px
-    # line plus 6px padding on the leading edge), and are widened by that
-    # much so the button itself stays SAVE_BUTTON_WIDTH wide
+    # the ring's save button follows that panel's switches, so it gets the
+    # same divider the switches use between each other (a 1px line plus 6px
+    # padding on the leading edge), and is widened by that much so the
+    # button itself stays SAVE_BUTTON_WIDTH wide
     SAVE_DIVIDER_PAD = 6
     SAVE_DIVIDER_CSS = f':host{{border-left:1px solid var(--divider-color);padding-left:{SAVE_DIVIDER_PAD}px;}}'
     save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
                             height=TOOLBAR_CONTROL_HEIGHT, stylesheets=[SAVE_DIVIDER_CSS])
     save_zoom_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                             height=TOOLBAR_CONTROL_HEIGHT)
-    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
-                               height=TOOLBAR_CONTROL_HEIGHT, stylesheets=[SAVE_DIVIDER_CSS])
+    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
+                               height=TOOLBAR_CONTROL_HEIGHT)
     # Exports the cross blocks currently on screen (min block size filter
     # applied) as a links.tsv (bin/chain.js's OUTPUTS header) -- lives on
     # the dotplot row since that's the panel showing every cross-genome block
@@ -2805,7 +2805,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                 height=TOOLBAR_CONTROL_HEIGHT)
     # format choice lives next to each save button rather than as a second
     # button per panel -- adds ~50px to a row instead of ~130px, which
-    # matters on the dotplot row (save button + blocks TSV + order_toggle). JPEG
+    # matters on the dotplot row (save button + blocks TSV). JPEG
     # has no transparency channel -- SYN.exportFigureAsRaster fills white
     # first regardless of format, so this doesn't need special-casing there.
     EXPORT_FORMATS = ["SVG", "PNG", "JPEG"]
@@ -2816,80 +2816,37 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                               height=TOOLBAR_CONTROL_HEIGHT)
     dotplot_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
                                  height=TOOLBAR_CONTROL_HEIGHT)
-    # Global -- affects the ring AND the dotplot alike, but lives in the
-    # ring's own row (next to show_gaps_toggle, itself global -- see its own
-    # comment below) rather than the shared controls row above, since that's
-    # where it was asked to sit.
-    # On by default: matches today's only behavior (this plot script sorts
-    # by size, by default -- see Dataset.__init__). When off, both panels
-    # fall back to each
-    # genome's own FASTA/natural sequence order. Layered under
-    # order_toggle, not alongside it: while "order by similarity" is on,
-    # this switch has no visible effect on the dotplot (similarity order
-    # replaces natural order wholesale either way) -- it only governs what
-    # "natural" itself means, for whichever panel is currently showing it.
-    # See SYN.dpNaturalOrder (dotplot + the shared order concept) and
-    # SYN.applyRingLayout (the ring, which has no similarity concept at all).
-    # explicit width -- all four ring-row switches below now share one row
-    # with the save button and format dropdown (see left_col), and none of
-    # their unconstrained natural widths fit together under the ring's own
-    # 620px. There's no width here that keeps every label on one line AND
-    # the row under 620px -- Bokeh's Switch reserves real estate for the
-    # toggle control itself before any label text, so even the shortest
-    # label ("Show gaps") needs more room than this to stay on one line.
-    # Trading that off deliberately: a label wrapping to two lines only
-    # makes this one row a few px taller, not wider, so it doesn't reopen
-    # the ring/zoom gap the row split (see left_col's git history) was
-    # fixing in the first place -- width chosen for a comfortable margin
-    # under 620px, not to chase single-line labels that don't fit regardless.
-    RING_SWITCH_WIDTH = 95
-    # a bare "?" icon the size of the spinners' own description icons, not a
-    # full-height button
-    HELP_BUTTON_CSS = (':host{align-self:center;}'
-                       '.bk-btn{padding:0;border:none;background:none;box-shadow:none;}')
-    # tighter gap between each switch and its own label (Bokeh's own default
-    # is 6px) and centered vertically against it -- matters especially now
-    # that a wrapped two-line label (see RING_SWITCH_WIDTH above) is taller
-    # than the toggle control itself, which otherwise sits pinned to the top
-    # of that extra height instead of centered against the full label block.
-    # :host is the styling entry point for every Bokeh widget's own shadow
-    # DOM -- see Switch.stylesheets' docstring.
-    # the switch track is fixed at 28px: left to Bokeh it stretches to fill
-    # whatever the label leaves, so a longer label ("Order by similarity")
-    # got a visibly shorter switch than its neighbours despite equal widths
-    SWITCH_TRACK_CSS = '.bk-body{flex:0 0 28px;width:28px;}'
-    RING_SWITCH_CSS = ':host{gap:2px;align-items:center;}' + SWITCH_TRACK_CSS
-    # same, plus a thin divider on this switch's leading edge, in the small
-    # gap Bokeh already leaves between adjacent row items -- marks where one
-    # text+toggle section ends and the next begins. Not applied to
-    # self_links_toggle (the first of these four in the row -- see
-    # left_col below): nothing of its own kind precedes it to divide from.
-    # var(--divider-color) is Bokeh's own theme token for exactly this
-    # (already used for the divider between this widget and its neighbors
-    # in Bokeh's stock toolbars), not a hardcoded color of this file's own.
-    RING_SWITCH_DIVIDER_CSS = (':host{gap:2px;align-items:center;'
-                                'border-left:1px solid var(--divider-color);padding-left:6px;}'
-                                + SWITCH_TRACK_CSS)
-    size_order_toggle = Switch(label="Order by size", active=True, width=RING_SWITCH_WIDTH,
-                                stylesheets=[RING_SWITCH_DIVIDER_CSS])
-    # the dotplot's counterpart, styled like the ring's switches. Off by
-    # default: natural (file/karyotype) order is what most users recognize
-    # their chromosomes by, and reordering only pays off when the two genomes
-    # are close enough that a near-1:1 correspondence exists to reveal in the
-    # first place (see SYN.computeSimilarityOrder's docstring)
-    order_toggle = Switch(label="Order by similarity", active=False, width=RING_SWITCH_WIDTH,
-                           stylesheets=[RING_SWITCH_CSS])  # first in its row: no leading divider
-    # Switch has no `description` slot like the spinners' "?" icons, so its
-    # help is a separate HelpButton placed right after it
-    order_help = HelpButton(tooltip=help_tip(
-        "Reorders both dotplot axes so chromosomes that share blocks sit next to each other, which "
-        "turns the synteny into a diagonal. Each chromosome is placed at the average position of its "
-        "blocks along the other axis, weighted by their anchor counts, so two chromosomes matching "
-        "opposite ends of the same partner keep the diagonal too. Only what is drawn counts: "
-        "blocks below Min block size and sequences below Min sequence length are ignored, and chromosomes "
-        "with no visible blocks go to the end. When off, the dotplot follows Order by size.",
-        position='top'),  # the page's bottom row: 'bottom' would open off-screen
-        stylesheets=[HELP_BUTTON_CSS])
+    # One menu for the chromosome order of both the ring and the dotplot
+    # (see ORDER_MODES/SYN.activeOrder). Size is the default, matching
+    # this script's own default order (see Dataset.__init__); File order is
+    # each genome's FASTA order; Similarity (see SYN.computeSimilarityOrder)
+    # places chromosomes that share blocks next to each other -- most useful
+    # when the two genomes are close enough for a near-1:1 correspondence.
+    order_select = Select(title="Chromosome order", value="Size", options=list(ORDER_MODES),
+                          width=TOP_CONTROL_WIDTH,
+                          description=help_tip(
+                              "Size: largest first. File order: as in each FASTA file. Similarity: "
+                              "chromosomes that share blocks sit next to each other, which turns the "
+                              "dotplot's synteny into a diagonal and untangles the ring. Each chromosome "
+                              "is placed at the average position of its blocks along the other genome, "
+                              "weighted by their anchor counts. Only what is drawn counts: blocks below "
+                              "Min block size and sequences below Min sequence length are ignored, and "
+                              "chromosomes with no visible blocks go to the end."))
+    # every on/off switch on the page: a fixed 28px track (left to Bokeh it
+    # stretches to fill whatever the label leaves, so switches with longer
+    # labels got visibly shorter tracks), a tighter gap between track and
+    # label than Bokeh's own 6px, both centered vertically. :host is the
+    # styling entry point for every Bokeh widget's own shadow DOM -- see
+    # Switch.stylesheets' docstring. SWITCH_WIDTH fits the longest label
+    # ("Show self-links") on one line.
+    SWITCH_WIDTH = 125
+    SWITCH_CSS = ':host{gap:4px;align-items:center;}.bk-body{flex:0 0 28px;width:28px;}'
+    # same, plus a thin divider on the leading edge, in the small gap Bokeh
+    # already leaves between adjacent row items -- for a switch that follows
+    # another control in the same row. var(--divider-color) is Bokeh's own
+    # theme token for exactly this (already used between widgets in Bokeh's
+    # stock toolbars), not a hardcoded color of this file's own.
+    SWITCH_DIVIDER_CSS = SWITCH_CSS + ':host{border-left:1px solid var(--divider-color);padding-left:6px;}'
     # Switch, not Toggle -- a checkbox-style on/off switch rather than a
     # pressable button, like every on/off control on the page. off by default -- self-links can dominate/clutter the ring
     # (e.g. a heavily-homeologous polyploid genome), so a viewer opts in
@@ -2898,8 +2855,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # drawn only on the ring -- SYN.buildDotplotSegmentsForLayout reads only
     # SYN.data.linksByQuery, which never contains homeolog records, so they
     # never appear on the zoom or dotplot panels either.
-    self_links_toggle = Switch(label="Show self-links", active=False, width=RING_SWITCH_WIDTH,
-                                stylesheets=[RING_SWITCH_CSS])
+    self_links_toggle = Switch(label="Show self-links", active=False, width=SWITCH_WIDTH,
+                                stylesheets=[SWITCH_DIVIDER_CSS])
     # on by default -- switching it off hides cross-genome synteny ribbons,
     # leaving only self-links on screen if self_links_toggle is on (see the combined
     # predicate in SYN.buildOverviewRibbons: is_homeolog records are governed
@@ -2907,22 +2864,20 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # are governed by this switch regardless of self_links_toggle -- the two
     # compose independently, including the "both off" case, which is a valid
     # (if visually empty) combination, not specially prevented).
-    show_synteny_toggle = Switch(label="Show synteny", active=True, width=RING_SWITCH_WIDTH,
-                                  stylesheets=[RING_SWITCH_DIVIDER_CSS])
+    show_synteny_toggle = Switch(label="Show synteny", active=True, width=SWITCH_WIDTH,
+                                  stylesheets=[SWITCH_CSS])
     # off by default -- an assembly gap marker is a diagnostic/QC detail
     # (see bin/rename_sequences.py's --out_gaps), not something every viewer
     # needs on screen by default, and a draft-quality assembly can have
-    # thousands of
-    # them at the default 100bp threshold. Lives in the ring's own row (the
-    # user asked for it "below the ring plot") even though it also affects
-    # the zoom panel and the dotplot (see SYN.applyGapVisibility/
-    # SYN.applyDotplotGapVisibility/SYN.refreshDetail's gap handling) --
-    # unlike self_links_toggle/show_synteny_toggle, which are genuinely
-    # ring-only, this one switch is intentionally the single on/off control
-    # for every panel's gap markers, since "show gaps" is one concept
-    # regardless of which panel is currently displaying them.
-    show_gaps_toggle = Switch(label="Show gaps", active=False, width=RING_SWITCH_WIDTH,
-                               stylesheets=[RING_SWITCH_DIVIDER_CSS])
+    # thousands of them at the default 100bp threshold. The single on/off
+    # control for every panel's gap markers (see SYN.applyGapVisibility/
+    # SYN.applyDotplotGapVisibility/SYN.refreshDetail's gap handling), so it
+    # lives with the other all-panel display controls, unlike
+    # self_links_toggle/show_synteny_toggle, which only affect the ring and
+    # sit under it. align='end' plus a taller bottom margin centres it on the
+    # titled inputs' boxes rather than their bottom edge.
+    show_gaps_toggle = Switch(label="Show gaps", active=False, width=SWITCH_WIDTH,
+                               stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
 
     save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview, fmt=ring_format_sel), code="""
         SYN.exportFigure(fig, 'ring', fmt.value);
@@ -2935,110 +2890,36 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """))
     export_blocks_btn.js_on_click(CustomJS(code="SYN.exportBlocksTsv();"))
 
-    # Rebuilds every order-dependent dotplot source for whichever order is
-    # now active -- SYN.applyDotplotOrder also updates SYN.state's offsets,
-    # so the color/palette/min-block-size callbacks below (which redraw
-    # the dotplot too, via SYN.applyDotplotSegmentsForCurrentLayout) pick up
-    # the new order automatically without needing to know a reorder happened.
-    order_toggle_callback = CustomJS(args=dict(
-        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
-        dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
-        dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
-        dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
-    ), code="""
-        // read by SYN.applyChainResult, so a fresh chain result knows
-        // whether the dotplot needs a full similarity reorder or just a
-        // segment redraw in place -- see that function's own comment
-        SYN.state.orderBySimilarity = cb_obj.active;
-        // SYN.dpOrderFor also applies the current min-length filter (see
-        // min_seq_size_spinner below) on top of similarity/natural order, so
-        // toggling this never silently drops that filter
-        const order = SYN.dpOrderFor(cb_obj.active);
-        SYN.applyDotplotOrder(order.queryOrder, order.subjectOrder, color_spinner.value, min_block_spinner.value, {
-            query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
-            queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-            segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
-        });
-    """)
-    order_toggle.js_on_change('active', order_toggle_callback)
-
-    # size_order_toggle always reorders the ring (which has no similarity
-    # concept to defer to); it only reorders the dotplot when order_toggle
-    # is OFF, since while similarity order is active, "natural" isn't
-    # currently visible on the dotplot at all -- see size_order_toggle's
-    # own comment above for why this is layered rather than independent.
-    size_order_toggle_callback = CustomJS(args=dict(
-        query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
-        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
-        self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
-        order_toggle=order_toggle, gap_source=gap_src,
-        dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
-        dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
-        dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
-    ), code="""
-        SYN.state.orderBySize = cb_obj.active;
-        // SYN.ringOrderFor/SYN.dpOrderFor apply the current min-length
-        // filter (see min_seq_size_spinner below) on top of whichever
-        // size/natural order this switch selects, so toggling it never
-        // silently drops that filter.
-        const ringOrder = SYN.ringOrderFor(cb_obj.active);
-        // rebuild the color identity from the FULL size/natural list (not
-        // ringOrder's already length-filtered one -- see SYN.buildColorIndex's
-        // own comment for why): a fixed, size-order-only index breaks once
-        // the ring is actually showing natural order instead
-        SYN.data.subjectColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
-        SYN.data.queryColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.queryNames : SYN.data.queryNamesNatural);
-        SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
-            querySource: query_source, subjectSource: subject_source,
-            labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
-            minScore: min_block_spinner.value, k: color_spinner.value,
-            showSelfLinks: self_links_toggle.active, showSynteny: show_synteny_toggle.active,
-        });
-        if (!order_toggle.active) {
-            const dpOrder = SYN.dpOrderFor(false);
-            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, min_block_spinner.value, {
-                query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
-                queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-                segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
-            });
+    # One re-layout of both panels for the new order (SYN.applyOrder). The
+    # color index follows the size/natural choice only (see
+    # SYN.buildColorIndex for why) and is rebuilt before the layout reads it.
+    order_callback = CustomJS(code="""
+        const [bySize, bySimilarity] = SYN.data.orderModes[cb_obj.value];
+        if (bySize !== SYN.state.orderBySize) {
+            // the FULL size/natural list, not the length-filtered order --
+            // see SYN.buildColorIndex's own comment
+            SYN.data.subjectColorIndex = SYN.buildColorIndex(bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
+            SYN.data.queryColorIndex = SYN.buildColorIndex(bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural);
         }
+        SYN.state.orderBySize = bySize;
+        SYN.state.orderBySimilarity = bySimilarity;
+        SYN.applyOrder();
     """)
-    size_order_toggle.js_on_change('active', size_order_toggle_callback)
+    order_select.js_on_change('value', order_callback)
 
-    # Global, like show_gaps_toggle above it -- filters both the ring and the
-    # dotplot down to chromosomes at or above this length, composing with
-    # whichever order/similarity toggle is currently active (via
-    # SYN.ringOrderFor/SYN.dpOrderFor, the same helpers order_toggle/
-    # size_order_toggle's own callbacks now go through). Any active pivot/
+    # Global, like show_gaps_toggle -- filters both the ring and the dotplot
+    # down to chromosomes at or above this length, composing with whichever
+    # order is active (SYN.activeOrder applies the filter). Any active pivot/
     # pair zoom is cleared on change, same as reset_btn -- the chromosome it
     # was zoomed into may no longer be visible at all.
     min_seq_size_callback = CustomJS(args=dict(
-        order_toggle=order_toggle, size_order_toggle=size_order_toggle,
-        color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
-        query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
-        gap_source=gap_src, self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
-        dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
-        dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
-        dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
+        query_source=q_src, subject_source=s_src, ribbon_source=r_src,
+        dp_query_source=dp_q_src, dp_subject_source=dp_s_src,
         bar_source=detail_bar_src, detail_ribbon_source=detail_rib_src,
         detail_label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         SYN.state.minSeqSize = Math.round(cb_obj.value * 1e6);  // whole bp, drops the float drift
-
-        const ringOrder = SYN.ringOrderFor(size_order_toggle.active);
-        SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
-            querySource: query_source, subjectSource: subject_source,
-            labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
-            minScore: min_block_spinner.value, k: color_spinner.value,
-            showSelfLinks: self_links_toggle.active, showSynteny: show_synteny_toggle.active,
-        });
-
-        const dpOrder = SYN.dpOrderFor(order_toggle.active);
-        SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, color_spinner.value, min_block_spinner.value, {
-            query: dp_query_source, subject: dp_subject_source, grid: dp_grid_source,
-            queryLabel: dp_q_label_source, subjectLabel: dp_s_label_source,
-            segment: dp_segment_source, gap: dp_gap_source, fig: dotplot_fig,
-        });
+        SYN.applyOrder();
 
         // same as reset_btn's own callback -- a filtered-out chromosome may
         // be the current pivot/pair, and there's no cheap way to tell from
@@ -3178,14 +3059,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                   show_synteny_toggle.active, overview_ribbon_source);
         if (SYN.state.orderBySimilarity) {
             // the similarity order only counts blocks at or above the min
-            // block size (see SYN.computeSimilarityOrder), so it can change here
-            const ui = SYN.ui;
-            const dpOrder = SYN.dpOrderFor(true);
-            SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, k, minScore, {
-                query: ui.dpQuerySource, subject: ui.dpSubjectSource, grid: ui.dpGridSource,
-                queryLabel: ui.dpQueryLabelSource, subjectLabel: ui.dpSubjectLabelSource,
-                segment: ui.dpSegmentSource, gap: ui.dpGapSource, fig: ui.dotplotFig,
-            });
+            // block size (see SYN.computeSimilarityOrder), so it can change
+            // here -- re-lay out both panels (which also redraws the ribbons
+            // SYN.applyOverviewRibbons just filtered)
+            SYN.applyOrder();
         } else {
             SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
         }
@@ -3303,54 +3180,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     reset_btn.js_on_click(reset_callback)
 
-    # not currently shown on the page -- left out of `layout` below, for now,
-    # per explicit request to drop the usage instructions -- kept defined
-    # here rather than deleted so it's a one-line change to bring back
-    hint = Div(text="<p style='color:#666;font-size:13px'>Click any chromosome wedge on the "
-                     "ring, or any chromosome band on the dotplot's axes, to zoom into its "
-                     "links against the other genome -- both trigger the same zoom, and a "
-                     "click on any of them clears the others' selection. You can also click a "
-                     "single square in the dotplot grid to zoom straight into that one "
-                     "chromosome pair, including squares with no alignments at all. Click a "
-                     "ribbon on the ring instead to highlight just that one and dim the rest -- "
-                     "click empty ring space, double-click the ring, or click a wedge/dotplot "
-                     "cell to clear the highlight. Target "
-                     "label/Reference label relabel the genomes everywhere a title or bar shows "
-                     "them, so an exported panel can show the actual species/genome name "
-                     "instead of \"target\"/\"reference\". Color palette switches the set of "
-                     "colors reference chromosomes cycle through; Colors changes how many "
-                     "discrete colors from it they cycle through. Min block size filters "
-                     "out synteny blocks with fewer than that many supporting protein alignments "
-                     "-- raise it to cut noise, lower it to see more (shorter, less certain) "
-                     "blocks. Show self-links, next to the ring's save button, switches whether "
-                     "a genome's own self-comparison links (e.g. homeologous chromosome pairs in "
-                     "a polyploid genome) are drawn on the ring alongside the cross-genome "
-                     "synteny -- off by default. Show synteny, next to it, switched off hides the "
-                     "cross-genome links instead, leaving only self-links on screen if Show "
-                     "self-links is on -- on by default. The two switches are independent and compose. Show "
-                     "gaps, next to those, marks assembly gaps (runs of N's in the input FASTA, "
-                     "--min_asm_gap bp or longer) on the ring, the zoom panel, and (as thin dotted "
-                     "lines) the dotplot alike -- off by default. Order "
-                     "by size, next to those, sorts every chromosome, on the ring and both "
-                     "dotplot axes, largest to smallest -- on by default; switch it off to see "
-                     "them in their original FASTA order instead. Order chromosomes by similarity "
-                     "reorders both dotplot axes (only -- the ring keeps whichever order the size "
-                     "switch is set to) so shared synteny lines up into a diagonal instead -- most "
-                     "useful when the two genomes are closely related with a roughly 1:1 "
-                     "chromosome correspondence; off by default. Hover any "
-                     "wedge, band, ribbon, or gap marker for details, and use each panel's save "
-                     "button to "
-                     "export it as SVG (a vector original -- open it in Inkscape, Illustrator, "
-                     "or similar to edit it or convert it to PDF), PNG, or JPEG (both ready to "
-                     "paste into a slide or document), whichever the dropdown next to that "
-                     "button is set to.</p>")
-
-    # switches first, then the panel's save button and format menu
+    # under each panel, only what acts on that panel alone: the ring's two
+    # ribbon switches, then each panel's save button and format menu
     left_col = column(overview,
-                       row(self_links_toggle, show_synteny_toggle, show_gaps_toggle, size_order_toggle,
-                           save_ring_btn, ring_format_sel))
+                       row(show_synteny_toggle, self_links_toggle, save_ring_btn, ring_format_sel))
     right_col = column(dotplot_fig,
-                        row(order_toggle, order_help, save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
+                        row(save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
 
     # static -- the tool's own name/tagline, not this run's target/reference
     # (that's the target/reference label inputs' job) -- unlike those, never
@@ -3410,16 +3245,26 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     target_label_input.js_on_change('value', label_callback)
     reference_label_input.js_on_change('value', label_callback)
 
+    # The page-wide controls, grouped by what they do: which genomes (labels),
+    # how synteny is detected (these re-chain), which blocks/sequences are
+    # drawn (pure filters), and how everything looks. A small section title
+    # over each group; a divider on each group's leading edge except the
+    # first in its row.
+    def control_group(title, *children, divider=True):
+        css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:4px;}'
+               if divider else '')
+        header = Div(text=f"<span style='font-size:11px;font-weight:600;letter-spacing:.06em;"
+                          f"text-transform:uppercase;color:#777'>{title}</span>",
+                     margin=(4, 5, 0, 5))
+        return column(header, row(*children), stylesheets=[css] if css else [])
+
     layout = column(
         header_title_div,
-        # two rows: labels/colors, then the chaining controls and their status
-        row(reference_label_input, target_label_input, palette_select, color_spinner),
-        row(min_identity_spinner, max_gap_spinner, hit_rank_select, min_block_spinner,
-            min_seq_size_spinner, chain_status_div),
-        # hint left out of the layout for now (not deleted -- still built
-        # above, just not attached to anything file_html walks/serializes)
-        # per explicit request to drop the usage instructions from the page
-        # -- reinstate by adding `hint,` back here
+        row(control_group("Genomes", reference_label_input, target_label_input, divider=False),
+            control_group("Synteny detection (recomputes)", min_identity_spinner, max_gap_spinner,
+                          hit_rank_select, chain_status_div)),
+        row(control_group("Filters", min_block_spinner, min_seq_size_spinner, divider=False),
+            control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle)),
         # spacing=5 -- row()'s default is 0, so without this the three
         # panels would sit flush against each other (or worse, apart by
         # whatever a child happens to overflow to, see left_col's own
@@ -3499,7 +3344,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'queryNames': query_names,
         'subjectNames': subject_names,
         # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
-        # fall back to when the "Order by size" switch is off. queryNames/
+        # use under the "File order" choice of the order menu. queryNames/
         # subjectNames above are already size order (see Dataset.__init__).
         'queryNamesNatural': [n for n, _ in ds.query_chroms_natural],
         'subjectNamesNatural': [n for n, _ in ds.subject_chroms_natural],
@@ -3538,6 +3383,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'outerR': OUTER_R, 'innerR': INNER_R, 'linkR': LINK_R,
         'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
         'ringLabelMinAngle': RING_LABEL_MIN_ANGLE,
+        'orderModes': ORDER_MODES,
         'detailFigWidth': DETAIL_FIG_WIDTH,
         'detailRows': {'barH': DETAIL_BAR_H, 'topY': DETAIL_TOP_Y, 'botY': DETAIL_BOT_Y},
         'statsPanelWidth': STATS_PANEL_WIDTH,

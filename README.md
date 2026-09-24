@@ -101,18 +101,24 @@ with three panels side by side:
   alignments at all. "Clear selection" empties it again.
 - **Dotplot** -- the whole genome as a target-by-reference grid, each
   syntenic block drawn as a diagonal (or anti-diagonal, for an inversion)
-  line segment. An "order chromosomes by similarity" toggle reorders both
-  axes so shared synteny lines up into a clean diagonal -- most useful for a
-  closely-related pair with a roughly 1:1 chromosome correspondence.
+  line segment.
 
-An "Order by size" switch (on by default) sorts every chromosome -- on the
-ring and both dotplot axes alike -- largest to smallest; switch it off to
-see each genome's chromosomes in their original FASTA order instead. The
-reference genome's dotplot axis always reads bottom-to-top with the
-largest (or, with the switch off, the first-in-file) chromosome at the
-bottom, under either setting.
+The page-wide controls sit above the panels in four groups: **Genomes**
+(the two labels), **Synteny detection** (min identity, max gap, hit rank --
+changing these re-chains), **Filters** (min block size, min sequence length)
+and **Display** (palette, colors, chromosome order, gaps). Controls that
+act on one panel alone sit under it.
 
-A "Show gaps" switch (off by default, below the ring) marks assembly gaps --
+A "Chromosome order" menu sets the order of the ring and both dotplot axes
+alike: **Size** (the default, largest first), **File order** (each genome's
+FASTA order) or **Similarity**, which places chromosomes that share blocks
+next to each other -- the dotplot's synteny lines up into a clean diagonal
+and the ring's ribbons untangle, most useful for a closely-related pair
+with a roughly 1:1 chromosome correspondence. Both ring halves read left to
+right, and the reference genome's dotplot axis reads bottom-to-top, with
+the first chromosome of the chosen order at the bottom.
+
+A "Show gaps" switch (off by default, under Display) marks assembly gaps --
 runs of N's in each input FASTA, `--min_asm_gap` bp or longer (default:
 100) -- on the ring and the detail panel, and as thin dotted lines on the
 dotplot. Gaps are found once per genome, from the same renamed sequences
