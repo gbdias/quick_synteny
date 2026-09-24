@@ -1049,6 +1049,34 @@ SYN.filterBySize = function(order, sizes) {
     return order.filter((name) => sizes[name] >= SYN.state.minSeqSize);
 };
 
+// Maps each name in `order` to its 0-based position in it -- the mapping
+// SYN.data.subjectColorIndex/queryColorIndex hold, that SYN.paletteColor(index,
+// k) turns into an actual color for a chromosome's own wedge/ruler cell and
+// for every ribbon that touches it. `order` must cover every chromosome
+// that EXISTS, not just what's currently visible: a zoom panel can draw a
+// partner chromosome that's below the min-length filter (SYN.buildDetailData
+// doesn't apply that filter to a pivot's OTHER side, only minScore -- see its
+// own code), and that name still needs a real color, so size_order_toggle's
+// own callback below passes the full (unfiltered) size/natural list, never
+// SYN.ringOrderFor's already-filtered one. SYN.paletteColor wraps with `% k`,
+// so two chromosomes sharing a color are always exactly k apart IN THIS
+// ORDER -- never adjacent, for any k >= 2. That guarantee only holds for
+// whichever order the index was actually built from, so size_order_toggle's
+// callback rebuilds it every time it can change what that order is, rather
+// than freezing it to size order once at page load the way an earlier
+// version did: with Order by size OFF, a fixed size-order index no longer
+// matches what's on screen, and two adjacent wedges can end up sharing a
+// color. Order by similarity deliberately does NOT trigger a rebuild --
+// it's a dotplot-only, transient reordering (re-run on every re-chain), and
+// a chromosome's color should stay the same everywhere (ring wedge,
+// ribbons, dotplot ruler) while it does, not reshuffle on every min-identity
+// tweak.
+SYN.buildColorIndex = function(order) {
+    const index = {};
+    order.forEach((name, i) => { index[name] = i; });
+    return index;
+};
+
 // The ring's currently-active order (size vs. natural -- it has no
 // similarity concept, see SYN.buildRingLayout's own comment), length-filtered.
 SYN.ringOrderFor = function(bySize) {
@@ -2778,6 +2806,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         // size/natural order this switch selects, so toggling it never
         // silently drops that filter.
         const ringOrder = SYN.ringOrderFor(cb_obj.active);
+        // rebuild the color identity from the FULL size/natural list (not
+        // ringOrder's already length-filtered one -- see SYN.buildColorIndex's
+        // own comment for why): a fixed, size-order-only index breaks once
+        // the ring is actually showing natural order instead
+        SYN.data.subjectColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
+        SYN.data.queryColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.queryNames : SYN.data.queryNamesNatural);
         SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
