@@ -98,10 +98,24 @@ with three panels side by side:
   genome in this panel; whichever side you didn't click gets packed side by
   side. Click a single square in the dotplot's grid instead to show one
   specific (target, reference) chromosome pair, including pairs with no
-  alignments at all. "Clear selection" empties it again.
+  alignments at all.
 - **Dotplot** -- the whole genome as a target-by-reference grid, each
   syntenic block drawn as a diagonal (or anti-diagonal, for an inversion)
   line segment.
+
+**One selection, shown in every panel.** Click a chromosome (a ring wedge
+or a dotplot axis band), a chromosome pair (a dotplot grid square) or a
+single block (a ring ribbon, a dotplot segment, or a ribbon in the detail
+panel), and all three panels show it: what belongs to it stays bright --
+the chromosome's ribbons and partner chromosomes, its dotplot row or
+column, the pair's grid square, the block itself -- while everything else
+dims, and the detail panel shows the chromosome or pair. A selection
+survives re-chaining, filtering and reordering for as long as it still
+exists (a block that disappears falls back to its chromosome pair).
+Clicking a self-link selects it on the ring only. Clear it with "Clear
+selection", a click on empty ring space, or a double-click on the ring; a
+click on empty detail-panel space steps a selected block back out to its
+pair.
 
 The page-wide controls sit above the panels in four groups: **Genomes**
 (the two labels), **Synteny detection** (min identity, max gap, hit rank --
