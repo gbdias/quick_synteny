@@ -5,7 +5,7 @@ taxid, automatically discovers a suitable reference genome and proteome
 from NCBI (climbing the taxonomy ladder from species outward until it finds
 adequate assemblies), aligns the proteome against both genomes with
 `miniprot`, and renders a two-genome synteny plot as a single self-contained
-interactive HTML page -- a Circos-style ring, a zoom panel, and a whole-
+interactive HTML page -- a Circos-style ring, a detail panel, and a whole-
 genome dotplot, all explorable and individually exportable as SVG, PNG, or JPEG.
 
 This is a Nextflow DSL2 port of the original `legacy/quick_synteny.sh`
@@ -86,18 +86,19 @@ pipeline, which is the deliberate design goal here.
 ## Plot styling
 
 Every run produces one output, `*.synteny.interactive.html` -- a single
-self-contained page (Bokeh, no server required -- open it in any browser)
+self-contained page (Bokeh, embedded in the page -- no server or internet
+connection required, open it in any browser)
 with three panels side by side:
 
 - **Ring** -- both genomes wrapped around a Circos-style circle, the
   reference genome on the top half and target on the bottom, with syntenic
   blocks drawn as ribbons crossing the middle.
-- **Zoom** -- click any chromosome (either genome, on the ring or on the
-  dotplot's axes) to zoom this panel into just that chromosome's links
-  against the other genome; whichever side you didn't click gets packed
-  side by side. Click a single square in the dotplot's grid instead to zoom
-  straight into one specific (target, reference) chromosome pair, including
-  pairs with no alignments at all.
+- **Detail** -- click any chromosome (either genome, on the ring or on the
+  dotplot's axes) to show just that chromosome's links against the other
+  genome in this panel; whichever side you didn't click gets packed side by
+  side. Click a single square in the dotplot's grid instead to show one
+  specific (target, reference) chromosome pair, including pairs with no
+  alignments at all. "Clear selection" empties it again.
 - **Dotplot** -- the whole genome as a target-by-reference grid, each
   syntenic block drawn as a diagonal (or anti-diagonal, for an inversion)
   line segment. An "order chromosomes by similarity" toggle reorders both
@@ -113,7 +114,7 @@ bottom, under either setting.
 
 A "Show gaps" switch (off by default, below the ring) marks assembly gaps --
 runs of N's in each input FASTA, `--min_asm_gap` bp or longer (default:
-100) -- on the ring and the zoom panel, and as thin dotted lines on the
+100) -- on the ring and the detail panel, and as thin dotted lines on the
 dotplot. Gaps are found once per genome, from the same renamed sequences
 `chrom.sizes` and the links use, so their coordinates always match; each
 run's gap TSVs are published to `pipeline_info/*.gaps.tsv`.
@@ -129,7 +130,7 @@ shows them, and each panel has its own save button plus a format dropdown to
 export exactly that panel as SVG (a vector original -- open it in Inkscape,
 Illustrator, or similar to edit it or convert it to PDF), PNG, or JPEG (both
 ready to paste into a slide or document) -- named from whatever labels are
-currently set. A small always-visible stats panel (under the zoom panel) shows the
+currently set. A small always-visible stats panel (under the detail panel) shows the
 alignment summary -- proteome size, each genome's aligned-protein
 count/mean identity, and the proteome's own origin (the species it was
 auto-discovered from, or the input filename if supplied manually).

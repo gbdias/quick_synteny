@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Render a two-genome synteny plot as a self-contained interactive HTML page
-(Bokeh, no server -- all interactivity is CustomJS). This is the pipeline's
+(Bokeh, no server -- all interactivity is CustomJS, and BokehJS itself is
+inlined, so the page opens offline). This is the pipeline's
 only plot output -- there is deliberately no static-image equivalent, so
 that "explore, then export exactly the panel you want" (see each panel's
 save button + format selector, SYN.exportFigure -- SVG for a vector original
@@ -67,6 +68,7 @@ import gzip
 import json
 import math
 import os
+import re
 import sys
 
 import numpy as np
@@ -79,7 +81,7 @@ from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, Custom
                            Button, Div, HelpButton, Range1d, Select, Spinner, Switch, TextInput, Tooltip)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
-from bokeh.resources import CDN
+from bokeh.resources import INLINE
 
 PALETTE = [
     '#4C72B0', '#DD8452', '#55A868', '#C44E52', '#8172B2',
@@ -136,6 +138,13 @@ INNER_R = OUTER_R - RING_WIDTH
 LINK_R = INNER_R
 GROUP_GAP = math.radians(4)
 CHROM_GAP = math.radians(0.5)
+# a ring wedge narrower than this gets no name label (its hover tooltip and
+# click still work): at the label radius (OUTER_R + 0.14, ~275 px on the
+# 620 px figure) 2.5 degrees is ~12 px of arc, about one line of the 10 px
+# label text, so labels of neighbouring wedges can't pile on top of each
+# other the way a run of small scaffolds' did. In data space, so zooming the
+# ring in doesn't bring hidden labels back.
+RING_LABEL_MIN_ANGLE = math.radians(2.5)
 
 # an assembly gap is typically a few hundred bp against a multi-Mb
 # chromosome -- drawn at its true angular width, most gaps would render
@@ -202,6 +211,55 @@ DEFAULT_COLORS = MAX_COLORS
 # standing in for x/y axis ticks, since Bokeh has no native "clickable tick
 # label"
 DP_RULER_FRAC = 0.035
+
+ACCESSION_RE = re.compile(r'GC[AF]_\d+\.\d+')
+FASTA_SUFFIX_RE = re.compile(r'(_genomic)?\.(fa|fna|fasta|fas)(\.b?gz)?$', re.IGNORECASE)
+
+
+def short_species(species):
+    """'Drosophila melanogaster' -> 'D. melanogaster': abbreviates the genus
+    of a binomial (or longer) name, leaving anything that doesn't look like
+    one (a single word, a lowercase first word) as it is."""
+    words = species.split()
+    if len(words) >= 2 and words[0][:1].isupper():
+        return ' '.join([words[0][0] + '.'] + words[1:])
+    return species
+
+
+def source_label(source):
+    """The shortest recognizable name for an input genome's source: its NCBI
+    accession if it has one, else its file name minus the FASTA/compression
+    extensions."""
+    if not source:
+        return None
+    m = ACCESSION_RE.search(source)
+    if m:
+        return m.group(0)
+    return FASTA_SUFFIX_RE.sub('', os.path.basename(source)) or source
+
+
+def default_labels(stats, target_subtitle, reference_subtitle, target_fallback, reference_fallback):
+    """The Target/Reference label inputs' starting values -- short species
+    names when compute_alignment_stats.py knows them ('D. melanogaster'),
+    since those read at a glance where an assembly file name doesn't, and
+    they end up in every title and export filename. A pair of the same
+    species gets each genome's accession added so the two stay distinct. A
+    genome of unknown species is named by its accession/file name, then by
+    its role word."""
+    stats = stats or {}
+    sides = [(stats.get('query_species'), target_subtitle or stats.get('query_source'), target_fallback),
+             (stats.get('subject_species'), reference_subtitle or stats.get('subject_source'), reference_fallback)]
+    same_species = bool(sides[0][0]) and sides[0][0] == sides[1][0]
+    labels = []
+    for species, source, fallback in sides:
+        src = source_label(source)
+        if species:
+            label = short_species(species)
+            labels.append(f"{label} {src}" if same_species and src else label)
+        else:
+            labels.append(src or fallback)
+    return labels[0], labels[1]
+
 
 def read_chrom_sizes(path):
     chroms = []
@@ -568,12 +626,12 @@ SYN.recolorSubjectWedges = function(k, subjectSource) {
 // happens to be currently displayed keeps them from stepping on each other
 // (e.g. recoloring after a filter must recolor only the still-visible
 // subset, not silently undo the filter or un-hide self-links).
-SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny) {
+SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
     // self-link (is_homeolog) records are governed by showSelfLinks alone;
-    // cross-genome records are governed by hideSynteny alone -- the two
+    // cross-genome records are governed by showSynteny alone -- the two
     // switches compose independently rather than one overriding the other
     const records = SYN.data.ribbons.filter((r) =>
-        r.score >= minScore && (r.is_homeolog ? showSelfLinks : !hideSynteny));
+        r.score >= minScore && (r.is_homeolog ? showSelfLinks : showSynteny));
     return {
         xs: records.map((r) => r.xs),
         ys: records.map((r) => r.ys),
@@ -584,8 +642,8 @@ SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny) {
     };
 };
 
-SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny, ribbonSource) {
-    ribbonSource.data = SYN.buildOverviewRibbons(minScore, k, showSelfLinks, hideSynteny);
+SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny, ribbonSource) {
+    ribbonSource.data = SYN.buildOverviewRibbons(minScore, k, showSelfLinks, showSynteny);
     // clear any stale ribbon-click highlight -- the rebuilt data's array
     // positions no longer correspond to whatever was selected before (a
     // filter/recolor/self-links change can add, drop, or reorder records),
@@ -603,7 +661,7 @@ SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, hideSynteny, rib
 // Clicking a ribbon highlights it (full opacity) and dims every other one,
 // so one syntenic block can be traced by eye against the surrounding
 // clutter; clicking empty ring space (or anything that clears the
-// selection -- a wedge, a dotplot cell, "clear zoom") deselects and
+// selection -- a wedge, a dotplot cell, "Clear selection") deselects and
 // restores everyone's normal alpha. Rebuilds (mba/color/palette/self-links)
 // also invalidate the highlight -- see SYN.applyOverviewRibbons above.
 SYN.applyRibbonHighlight = function(ribbonSource) {
@@ -863,16 +921,20 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         s.group.push('reference'); s.palette_index.push(pIdx);
     }
 
+    // wedges narrower than ringLabelMinAngle go unlabelled (see
+    // RING_LABEL_MIN_ANGLE's Python comment)
     const labelR = SYN.data.outerR + 0.14;
     const label = {x: [], y: [], text: []};
-    for (const name of queryOrder) {
-        const [a0, a1] = queryOffsets[name]; const mid = (a0 + a1) / 2;
-        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
-    }
-    for (const name of subjectOrder) {
-        const [a0, a1] = subjectOffsets[name]; const mid = (a0 + a1) / 2;
-        label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
-    }
+    const addLabels = (order, offsets) => {
+        for (const name of order) {
+            const [a0, a1] = offsets[name];
+            if (Math.abs(a1 - a0) < SYN.data.ringLabelMinAngle) { continue; }
+            const mid = (a0 + a1) / 2;
+            label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+        }
+    };
+    addLabels(queryOrder, queryOffsets);
+    addLabels(subjectOrder, subjectOffsets);
 
     const ribbons = SYN.buildRibbonRecords(queryOffsets, subjectOffsets);
 
@@ -931,7 +993,7 @@ SYN.buildGapRecords = function(queryOffsets, subjectOffsets, nSegments) {
 
 // Applies a full ring reorder: rebuilds wedge/label sources directly (never
 // filtered by anything), replaces the SYN.data.ribbons MASTER list with
-// fresh geometry (so mba/color/self-links/hide-synteny keep working
+// fresh geometry (so mba/color/self-links/show-synteny keep working
 // correctly against the new order afterward), then re-runs the current
 // filter state on top of it via SYN.applyOverviewRibbons. Clears wedge/
 // ribbon selections -- stale indices from before the rebuild would point at
@@ -952,7 +1014,7 @@ SYN.applyRingLayout = function(queryOrder, subjectOrder, sources) {
     sources.subjectSource.change.emit();
     sources.labelSource.change.emit();
     SYN.applyOverviewRibbons(sources.minScore, sources.k, sources.showSelfLinks,
-                              sources.hideSynteny, sources.ribbonSource);
+                              sources.showSynteny, sources.ribbonSource);
     SYN.applyGapVisibility(sources.gapSource);
 };
 
@@ -2139,7 +2201,7 @@ SYN.applyChainResult = function(msg) {
     const ringOrder = SYN.ringOrderFor(SYN.state.orderBySize);
     SYN.data.ribbons = SYN.buildRibbonRecords(SYN.state.ringQueryOffsets, SYN.state.ringSubjectOffsets);
     SYN.applyOverviewRibbons(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.selfLinksToggle.active,
-                              ui.hideSyntenyToggle.active, ui.ribbonSource);
+                              ui.showSyntenyToggle.active, ui.ribbonSource);
     if (SYN.state.orderBySimilarity) {
         const dpOrder = SYN.dpOrderFor(true);
         SYN.applyDotplotOrder(dpOrder.queryOrder, dpOrder.subjectOrder, ui.colorSpinner.value, ui.minBlockSpinner.value, {
@@ -2223,7 +2285,7 @@ SYN.init = function(s) {
         querySource: s.querySource, subjectSource: s.subjectSource, labelSource: s.labelSource,
         ribbonSource: s.ribbonSource, gapSource: s.gapSource,
         minScore: s.minBlockSpinner.value, k: s.colorSpinner.value,
-        showSelfLinks: false, hideSynteny: false,
+        showSelfLinks: false, showSynteny: true,
     });
 
     const dpOrder = SYN.dpOrderFor(false);
@@ -2257,6 +2319,14 @@ SYN.init = function(s) {
 def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtitle=None,
                alignment_stats=None, hits_payload=None, chain_js_src='',
                min_identity=None, max_gap=25, min_block=None):
+    # short species names where known, else accession/file name, else the
+    # role tag (see default_labels) -- the label inputs' starting values, and
+    # what every title starts out showing before a viewer edits them. The
+    # reference falls back to the literal "reference" rather than
+    # subject_name, which is the pipeline's role tag for the same genome
+    # (see main.nf).
+    target_label_default, reference_label_default = default_labels(
+        alignment_stats, query_subtitle, subject_subtitle, query_name, "reference")
     query_names = [n for n, _ in ds.query_chroms]
     subject_names = [n for n, _ in ds.subject_chroms]
     subject_index = {name: i for i, (name, _) in enumerate(ds.subject_chroms)}
@@ -2283,8 +2353,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # wiring below) and is the only one that needs to exist at all.
     overview = figure(width=620, height=620, match_aspect=True,
                        x_range=Range1d(-lim, lim), y_range=Range1d(-lim, lim),
-                       title=f"{subject_subtitle or subject_name} (reference) vs "
-                             f"{query_subtitle or query_name} (target)",
+                       title=f"{reference_label_default} (reference) vs {target_label_default} (target)",
                        tools="pan,wheel_zoom,reset",
                        output_backend="svg")
     overview.axis.visible = False
@@ -2520,21 +2589,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_fig.js_on_event(DoubleTap, detail_reset_callback)
     detail_fig.js_on_event(Reset, detail_reset_callback)
 
-    # default to the actual input file name/accession (query_subtitle/
-    # subject_subtitle -- see --query_subtitle/--subject_subtitle) rather
-    # than the literal "target"/"reference" role tags, so a viewer sees
-    # which physical genome is which immediately, right in the box itself --
-    # there used to be a separate "target: <file>" Div below the header for
-    # this; removed now that it would just repeat what this box already
-    # says. Falls back to the role tag itself when no subtitle was given
-    # (--query_subtitle/--subject_subtitle are both optional). A viewer can
-    # still retype either box to anything else before exporting a panel,
-    # see SYN.applyLabels.
-    target_label_input = TextInput(title="Target label", value=query_subtitle or query_name,
+    # target_label_default/reference_label_default (see the top of this
+    # function) -- so a viewer sees which physical genome is which right in
+    # the box itself. A viewer can still retype either box to anything else
+    # before exporting a panel, see SYN.applyLabels.
+    target_label_input = TextInput(title="Target label", value=target_label_default,
                                     width=TOP_CONTROL_WIDTH)
-    # falls back to the literal "reference" rather than subject_name, which
-    # is the pipeline's role tag for the same genome (see main.nf)
-    reference_label_input = TextInput(title="Reference label", value=subject_subtitle or "reference",
+    reference_label_input = TextInput(title="Reference label", value=reference_label_default,
                                        width=TOP_CONTROL_WIDTH)
 
     palette_select = Select(title="Color palette", value=DEFAULT_PALETTE_NAME,
@@ -2620,7 +2681,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     # trailing zeros, so steps read 0.3 and typed values like
                                     # 0.25 stay as typed
                                     format='0[.][000]')
-    reset_btn = Button(label="✕ clear zoom", button_type="default", width=140,
+    reset_btn = Button(label="✕ Clear selection", button_type="default", width=150,
                         height=TOOLBAR_CONTROL_HEIGHT)
     # label is just "save" (not "save ring"/"save zoom"/"save dotplot") and
     # the button narrow to match -- which panel it saves is already obvious
@@ -2743,14 +2804,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # never appear on the zoom or dotplot panels either.
     self_links_toggle = Switch(label="Show self-links", active=False, width=RING_SWITCH_WIDTH,
                                 stylesheets=[RING_SWITCH_CSS])
-    # off by default -- hides cross-genome synteny ribbons, leaving only
-    # self-links on screen if self_links_toggle is also on (see the combined
+    # on by default -- switching it off hides cross-genome synteny ribbons,
+    # leaving only self-links on screen if self_links_toggle is on (see the combined
     # predicate in SYN.buildOverviewRibbons: is_homeolog records are governed
     # by self_links_toggle regardless of this switch; non-homeolog records
     # are governed by this switch regardless of self_links_toggle -- the two
     # compose independently, including the "both off" case, which is a valid
     # (if visually empty) combination, not specially prevented).
-    hide_synteny_toggle = Switch(label="Hide synteny", active=False, width=RING_SWITCH_WIDTH,
+    show_synteny_toggle = Switch(label="Show synteny", active=True, width=RING_SWITCH_WIDTH,
                                   stylesheets=[RING_SWITCH_DIVIDER_CSS])
     # off by default -- an assembly gap marker is a diagnostic/QC detail
     # (see bin/rename_sequences.py's --out_gaps), not something every viewer
@@ -2760,7 +2821,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # user asked for it "below the ring plot") even though it also affects
     # the zoom panel and the dotplot (see SYN.applyGapVisibility/
     # SYN.applyDotplotGapVisibility/SYN.refreshDetail's gap handling) --
-    # unlike self_links_toggle/hide_synteny_toggle, which are genuinely
+    # unlike self_links_toggle/show_synteny_toggle, which are genuinely
     # ring-only, this one switch is intentionally the single on/off control
     # for every panel's gap markers, since "show gaps" is one concept
     # regardless of which panel is currently displaying them.
@@ -2771,7 +2832,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.exportFigure(fig, 'ring', fmt.value);
     """))
     save_zoom_btn.js_on_click(CustomJS(args=dict(fig=detail_fig, fmt=zoom_format_sel), code="""
-        SYN.exportFigure(fig, 'zoom', fmt.value);
+        SYN.exportFigure(fig, 'detail', fmt.value);
     """))
     save_dotplot_btn.js_on_click(CustomJS(args=dict(fig=dotplot_fig, fmt=dotplot_format_sel), code="""
         SYN.exportFigure(fig, 'dotplot', fmt.value);
@@ -2813,7 +2874,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     size_order_toggle_callback = CustomJS(args=dict(
         query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
         color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
-        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
         order_toggle=order_toggle, gap_source=gap_src,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
         dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
@@ -2835,7 +2896,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
             minScore: min_block_spinner.value, k: color_spinner.value,
-            showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
+            showSelfLinks: self_links_toggle.active, showSynteny: show_synteny_toggle.active,
         });
         if (!order_toggle.active) {
             const dpOrder = SYN.dpOrderFor(false);
@@ -2859,7 +2920,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         order_toggle=order_toggle, size_order_toggle=size_order_toggle,
         color_spinner=color_spinner, min_block_spinner=min_block_spinner, dotplot_fig=dotplot_fig,
         query_source=q_src, subject_source=s_src, ribbon_source=r_src, label_source=label_src,
-        gap_source=gap_src, self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        gap_source=gap_src, self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
         dp_query_source=dp_q_src, dp_subject_source=dp_s_src, dp_grid_source=dp_grid_src,
         dp_q_label_source=dp_q_label_src, dp_s_label_source=dp_s_label_src,
         dp_segment_source=dp_seg_src, dp_gap_source=dp_gap_src,
@@ -2873,7 +2934,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
             minScore: min_block_spinner.value, k: color_spinner.value,
-            showSelfLinks: self_links_toggle.active, hideSynteny: hide_synteny_toggle.active,
+            showSelfLinks: self_links_toggle.active, showSynteny: show_synteny_toggle.active,
         });
 
         const dpOrder = SYN.dpOrderFor(order_toggle.active);
@@ -2994,7 +3055,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     color_callback = CustomJS(args=dict(
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, min_block_spinner=min_block_spinner,
-        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
@@ -3002,7 +3063,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
         SYN.applyOverviewRibbons(min_block_spinner.value, k, self_links_toggle.active,
-                                  hide_synteny_toggle.active, overview_ribbon_source);
+                                  show_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(min_block_spinner.value, k, dotplot_segment_source);
         SYN.refreshDetail(k, min_block_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
                            detail_gap_source);
@@ -3011,14 +3072,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     min_block_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, color_spinner=color_spinner,
-        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
         const minScore = cb_obj.value;
         const k = color_spinner.value;
         SYN.applyOverviewRibbons(minScore, k, self_links_toggle.active,
-                                  hide_synteny_toggle.active, overview_ribbon_source);
+                                  show_synteny_toggle.active, overview_ribbon_source);
         if (SYN.state.orderBySimilarity) {
             // the similarity order only counts blocks at or above the min
             // block size (see SYN.computeSimilarityOrder), so it can change here
@@ -3053,7 +3114,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # so cb_obj.active works the same as it did when this was a Toggle.
     self_links_toggle_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
-        hide_synteny_toggle=hide_synteny_toggle,
+        show_synteny_toggle=show_synteny_toggle,
     ), code="""
         // self-links are only chained while this switch is on (see
         // SYN.dispatchChain): if the ones on hand are stale, re-chain --
@@ -3064,18 +3125,18 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             return;
         }
         SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, cb_obj.active,
-                                  hide_synteny_toggle.active, overview_ribbon_source);
+                                  show_synteny_toggle.active, overview_ribbon_source);
     """)
     self_links_toggle.js_on_change('active', self_links_toggle_callback)
 
-    hide_synteny_toggle_callback = CustomJS(args=dict(
+    show_synteny_toggle_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle,
     ), code="""
         SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, self_links_toggle.active,
                                   cb_obj.active, overview_ribbon_source);
     """)
-    hide_synteny_toggle.js_on_change('active', hide_synteny_toggle_callback)
+    show_synteny_toggle.js_on_change('active', show_synteny_toggle_callback)
 
     # Single on/off switch for every panel's gap markers at once (see
     # show_gaps_toggle's own comment above for why it's not split per
@@ -3110,7 +3171,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src,
         color_spinner=color_spinner, min_block_spinner=min_block_spinner,
-        self_links_toggle=self_links_toggle, hide_synteny_toggle=hide_synteny_toggle,
+        self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src,
         label_source=detail_label_src, detail_fig=detail_fig, detail_gap_source=detail_gap_src,
     ), code="""
@@ -3119,7 +3180,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
         SYN.applyOverviewRibbons(min_block_spinner.value, k, self_links_toggle.active,
-                                  hide_synteny_toggle.active, overview_ribbon_source);
+                                  show_synteny_toggle.active, overview_ribbon_source);
         SYN.applyDotplotSegmentsForCurrentLayout(min_block_spinner.value, k, dotplot_segment_source);
         SYN.refreshDetail(k, min_block_spinner.value, bar_source, ribbon_source, label_source, detail_fig,
                            detail_gap_source);
@@ -3168,9 +3229,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                      "blocks. Show self-links, next to the ring's save button, switches whether "
                      "a genome's own self-comparison links (e.g. homeologous chromosome pairs in "
                      "a polyploid genome) are drawn on the ring alongside the cross-genome "
-                     "synteny -- off by default. Hide synteny, next to it, hides the cross-genome "
-                     "links instead, leaving only self-links on screen if Show self-links is also "
-                     "on -- off by default. The two switches are independent and compose. Show "
+                     "synteny -- off by default. Show synteny, next to it, switched off hides the "
+                     "cross-genome links instead, leaving only self-links on screen if Show "
+                     "self-links is on -- on by default. The two switches are independent and compose. Show "
                      "gaps, next to those, marks assembly gaps (runs of N's in the input FASTA, "
                      "--min_asm_gap bp or longer) on the ring, the zoom panel, and (as thin dotted "
                      "lines) the dotplot alike -- off by default. Order "
@@ -3190,7 +3251,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     # switches first, then the panel's save button and format menu
     left_col = column(overview,
-                       row(self_links_toggle, hide_synteny_toggle, show_gaps_toggle, size_order_toggle,
+                       row(self_links_toggle, show_synteny_toggle, show_gaps_toggle, size_order_toggle,
                            save_ring_btn, ring_format_sel))
     right_col = column(dotplot_fig,
                         row(order_toggle, order_help, save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
@@ -3293,7 +3354,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         min_identity_spinner=min_identity_spinner, max_gap_spinner=max_gap_spinner,
         hit_rank_select=hit_rank_select, self_links_toggle=self_links_toggle,
-        hide_synteny_toggle=hide_synteny_toggle, chain_status_div=chain_status_div,
+        show_synteny_toggle=show_synteny_toggle, chain_status_div=chain_status_div,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src, label_source=detail_label_src,
         detail_fig=detail_fig, detail_gap_source=detail_gap_src, stats_div=stats_div,
     ), code="""
@@ -3307,13 +3368,16 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             colorSpinner: color_spinner, minBlockSpinner: min_block_spinner,
             minIdentitySpinner: min_identity_spinner, maxGapSpinner: max_gap_spinner,
             hitRankSelect: hit_rank_select, selfLinksToggle: self_links_toggle,
-            hideSyntenyToggle: hide_synteny_toggle, chainStatusDiv: chain_status_div,
+            showSyntenyToggle: show_synteny_toggle, chainStatusDiv: chain_status_div,
             detailBarSource: bar_source, detailRibbonSource: ribbon_source,
             detailLabelSource: label_source, detailFig: detail_fig, detailGapSource: detail_gap_source,
         });
     """))
 
-    page_html = file_html(doc, CDN, title=f"{query_name} vs {subject_name} -- interactive synteny")
+    # INLINE, not CDN: BokehJS is embedded (~1.6 MB, only the bundles this
+    # page uses) so the page renders with no network -- offline laptops, HPC
+    # nodes without internet access -- rather than opening blank
+    page_html = file_html(doc, INLINE, title=f"{query_name} vs {subject_name} -- interactive synteny")
 
     syn_data = {
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
@@ -3321,12 +3385,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'targetGrey': TARGET_GREY,
         'targetName': query_name,
         'referenceName': subject_name,
-        # the *editable* label's own default (query_subtitle/subject_subtitle
-        # -- the actual input file name/accession -- falling back to
-        # "target"/"reference" when none was given, same fallback
-        # target_label_input/reference_label_input themselves use
-        'targetLabelDefault': query_subtitle or query_name,
-        'referenceLabelDefault': subject_subtitle or "reference",
+        # the *editable* labels' own defaults -- the same values
+        # target_label_input/reference_label_input start with (see
+        # default_labels)
+        'targetLabelDefault': target_label_default,
+        'referenceLabelDefault': reference_label_default,
         'queryNames': query_names,
         'subjectNames': subject_names,
         # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
@@ -3368,6 +3431,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # module constants above)
         'outerR': OUTER_R, 'innerR': INNER_R, 'linkR': LINK_R,
         'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
+        'ringLabelMinAngle': RING_LABEL_MIN_ANGLE,
         'detailFigWidth': DETAIL_FIG_WIDTH,
         'statsPanelWidth': STATS_PANEL_WIDTH,
         'dpRulerFrac': DP_RULER_FRAC,
@@ -3398,7 +3462,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     injected = (synchain_src_tag + "<script>\n" + chain_js_src + "\n" + SHARED_JS
                 + "\nSYN.data = " + json.dumps(syn_data) + ";\nSYN.hitsPayload = "
                 + json.dumps(hits_payload) + ";\n</script>\n</body>")
-    return page_html.replace("</body>", injected, 1)
+    # the document's own (last) </body> -- the inlined BokehJS widgets bundle
+    # (see file_html's INLINE above) contains the literal text "</body>" too,
+    # so the first occurrence can be inside that script
+    head, _, tail = page_html.rpartition("</body>")
+    return head + injected + tail
 
 
 def main():
@@ -3428,9 +3496,9 @@ def main():
                               "genome's aligned-protein count/mean identity) rather than baked "
                               'into any one exportable figure')
     parser.add_argument('--query_subtitle', default=None,
-                         help='optional subtitle under the query/target name in the page '
-                              'header -- e.g. the input file name, so a viewer can tell '
-                              'which physical genome "target"/"reference" refer to')
+                         help="optional input file name/accession of the target genome -- "
+                              "names it in the page's Target label when --stats has no species "
+                              "for it (see default_labels)")
     parser.add_argument('--subject_subtitle', default=None,
                          help='ditto, under the subject/reference name')
     parser.add_argument('--target_gaps', default=None,
