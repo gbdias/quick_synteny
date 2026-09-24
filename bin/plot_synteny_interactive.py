@@ -73,7 +73,7 @@ import numpy as np
 
 from bokeh.document import Document
 from bokeh.embed import file_html
-from bokeh.events import DocumentReady, DoubleTap, Tap
+from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
                            Button, Div, HelpButton, Range1d, Select, Spinner, Switch, TextInput, Tooltip)
@@ -2399,17 +2399,29 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_tap = TapTool(renderers=[dp_query_renderer, dp_subject_renderer], visible=False)
     dotplot_fig.add_tools(dotplot_tap)
     dotplot_fig.toolbar.active_tap = dotplot_tap
-    # double-click to reset -- see overview's identical handler above.
-    # Reads SYN.state's CURRENT rx/ry/totalX/totalY (set for real by
-    # SYN.init, see this function's own doc.js_on_event(DocumentReady, ...)
-    # below) rather than a value fixed once at render time: a reorder alone
-    # never changes them, but the min-length filter (see SYN.filterBySize)
-    # can shrink them, and resetting to the ORIGINAL (pre-filter) span would
+    # Both double-click AND the toolbar's own Reset button need to land on
+    # the CURRENT full extent, not the figure's x_range=Range1d(-1, 1)
+    # placeholder above (see that Range1d's own comment): x_range/y_range
+    # are only rewritten to the real span in JS, after this figure already
+    # exists (SYN.init/SYN.applyDotplotOrder), so Bokeh's built-in Reset
+    # tool -- which restores whatever start/end the range had at FIGURE
+    # CREATION time, i.e. that still-unreplaced placeholder -- would
+    # otherwise snap the view down to [-1, 1], which against real bp-scale
+    # data reads as a hard zoom-IN rather than a reset. Reading SYN.state's
+    # CURRENT rx/ry/totalX/totalY (rather than a value fixed once here)
+    # matters for the same reason on both events: a reorder alone never
+    # changes them, but the min-length filter (see SYN.filterBySize) can
+    # shrink them, and resetting to the ORIGINAL (pre-filter) span would
     # leave dead margin beyond wherever the plot now actually ends.
-    dotplot_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=dotplot_fig), code="""
+    dotplot_reset_callback = CustomJS(args=dict(fig=dotplot_fig), code="""
         fig.x_range.start = -SYN.state.dpRx * 3; fig.x_range.end = SYN.state.dpTotalX * 1.02;
         fig.y_range.start = -SYN.state.dpRy * 3; fig.y_range.end = SYN.state.dpTotalY * 1.02;
-    """))
+    """)
+    dotplot_fig.js_on_event(DoubleTap, dotplot_reset_callback)
+    # Runs AFTER Bokeh's own Reset tool has already reset x_range/y_range to
+    # that stale placeholder, correcting it in place -- see this callback's
+    # own comment above.
+    dotplot_fig.js_on_event(Reset, dotplot_reset_callback)
 
     detail_bar_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[]))
     detail_rib_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[]))
