@@ -159,7 +159,11 @@ Every run also finds which of a genome's own chromosomes are homeologous to
 each other (e.g. for an allopolyploid target or reference genome), for both
 genomes, with no option to set. The page's **Show self-links** switch draws
 them on the ring; it is off by default, and the page only computes them
-while it is on.
+while it is on. Self-links are drawn with a dashed outline over a fainter
+fill, so they stand apart from the cross-genome synteny: a reference
+genome's in its chromosomes' colors, a target genome's in dark grey. While
+the switch is on, the status line next to the synteny controls counts the
+self-link blocks passing Min block size (or says there are none).
 
 No ploidy ratio needs to be declared -- the same chaining logic just runs on
 each genome's hits against themselves (a protein hitting

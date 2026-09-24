@@ -132,6 +132,10 @@ PALETTES = {
 }
 DEFAULT_PALETTE_NAME = 'Default'
 TARGET_GREY = '#999999'
+# the target genome's self-links (homeologs) -- darker than TARGET_GREY so
+# they stay visible against the target's own grey wedges, and never a
+# palette color, which would read as a reference chromosome's
+TARGET_SELF_GREY = '#666666'
 
 OUTER_R = 1.0
 RING_WIDTH = 0.045
@@ -480,8 +484,11 @@ def build_overview_sources():
     q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[]))
     s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[]))
     r_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[], palette_index=[]))
+    # self-links (homeologs) on their own renderer, styled apart from the
+    # cross-genome ribbons in r_src -- see SYN.buildOverviewRibbons
+    r_self_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], line_color=[], alpha=[], label=[]))
     label_src = ColumnDataSource(dict(x=[], y=[], text=[]))
-    return q_src, s_src, r_src, label_src
+    return q_src, s_src, r_src, r_self_src, label_src
 
 
 def build_dotplot_sources():
@@ -604,6 +611,14 @@ SYN.lighten = function(hex, amount) {
     return '#' + toHex(blend(r)) + toHex(blend(g)) + toHex(blend(b));
 };
 
+SYN.darken = function(hex, amount) {
+    amount = amount === undefined ? 0.35 : amount;
+    const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+    const scale = (c) => Math.round(c * (1 - amount));
+    const toHex = (c) => c.toString(16).padStart(2, '0');
+    return '#' + toHex(scale(r)) + toHex(scale(g)) + toHex(scale(b));
+};
+
 SYN.paletteColor = function(index, k) {
     return SYN.data.palette[index % k];
 };
@@ -640,24 +655,53 @@ SYN.recolorSubjectWedges = function(k, subjectSource) {
 // happens to be currently displayed keeps them from stepping on each other
 // (e.g. recoloring after a filter must recolor only the still-visible
 // subset, not silently undo the filter or un-hide self-links).
+//
+// Returns {cross, self}: the cross-genome ribbons (r_src) and the self-links
+// (r_self_src) go to separate renderers so self-links can look different --
+// a dashed outline over a fainter fill -- rather than blending into the
+// synteny. A reference self-link keeps its chromosome's palette color; a
+// target one is dark grey (SYN.data.targetSelfGrey), matching the target's
+// own grey instead of borrowing palette colors that belong to reference
+// chromosomes.
 SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
     // self-link (is_homeolog) records are governed by showSelfLinks alone;
     // cross-genome records are governed by showSynteny alone -- the two
     // switches compose independently rather than one overriding the other
-    const records = SYN.data.ribbons.filter((r) =>
-        r.score >= minScore && (r.is_homeolog ? showSelfLinks : showSynteny));
+    const cross = SYN.data.ribbons.filter((r) => !r.is_homeolog && showSynteny && r.score >= minScore);
+    const self = SYN.data.ribbons.filter((r) => r.is_homeolog && showSelfLinks && r.score >= minScore);
+    const selfColor = (r) => r.genome === 'target' ? SYN.data.targetSelfGrey : SYN.paletteColor(r.palette_index, k);
     return {
-        xs: records.map((r) => r.xs),
-        ys: records.map((r) => r.ys),
-        fill_color: records.map((r) => SYN.lighten(SYN.paletteColor(r.palette_index, k))),
-        alpha: records.map((r) => r.alpha),
-        label: records.map((r) => r.label),
-        palette_index: records.map((r) => r.palette_index),
+        cross: {
+            xs: cross.map((r) => r.xs),
+            ys: cross.map((r) => r.ys),
+            fill_color: cross.map((r) => SYN.lighten(SYN.paletteColor(r.palette_index, k))),
+            alpha: cross.map((r) => r.alpha),
+            label: cross.map((r) => r.label),
+            palette_index: cross.map((r) => r.palette_index),
+        },
+        self: {
+            xs: self.map((r) => r.xs),
+            ys: self.map((r) => r.ys),
+            fill_color: self.map((r) => SYN.lighten(selfColor(r))),
+            line_color: self.map((r) => SYN.darken(selfColor(r), 0.2)),
+            alpha: self.map((r) => r.alpha * SYN.SELF_LINK_ALPHA_SCALE),
+            label: self.map((r) => r.label),
+        },
     };
 };
 
+// self-link fills this much fainter than a cross ribbon of the same score --
+// their dashed outline carries them, and a polyploid's many self-links
+// shouldn't drown out the synteny they sit under
+SYN.SELF_LINK_ALPHA_SCALE = 0.6;
+
+// ribbonSource is the cross-genome one; the self-link source always comes
+// from SYN.ui (set by SYN.init before anything can call this)
 SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny, ribbonSource) {
-    ribbonSource.data = SYN.buildOverviewRibbons(minScore, k, showSelfLinks, showSynteny);
+    const built = SYN.buildOverviewRibbons(minScore, k, showSelfLinks, showSynteny);
+    ribbonSource.data = built.cross;
+    SYN.ui.selfRibbonSource.data = built.self;
+    SYN.ui.selfRibbonSource.change.emit();
     // clear any stale ribbon-click highlight -- the rebuilt data's array
     // positions no longer correspond to whatever was selected before (a
     // filter/recolor/self-links change can add, drop, or reorder records),
@@ -882,7 +926,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.querySizes, queryOffsets);
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
-            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.queryColorIndex[l.q_chrom],
+            xs: poly.xs, ys: poly.ys, palette_index: null, genome: 'target',
             alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Target', 'Target') + ' (homeolog)',
             score: l.score, is_homeolog: true,
@@ -897,7 +941,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const as2 = SYN.bpToAngleJS(l.s_chrom, l.s_end, SYN.data.subjectSizes, subjectOffsets);
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
-            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom],
+            xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom], genome: 'reference',
             alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Reference', 'Reference') + ' (homeolog)',
             score: l.score, is_homeolog: true,
@@ -1122,7 +1166,7 @@ SYN.filterBySize = function(order, sizes) {
 };
 
 // Maps each name in `order` to its 0-based position in it -- the mapping
-// SYN.data.subjectColorIndex/queryColorIndex hold, that SYN.paletteColor(index,
+// SYN.data.subjectColorIndex holds, that SYN.paletteColor(index,
 // k) turns into an actual color for a chromosome's own wedge/ruler cell and
 // for every ribbon that touches it. `order` must cover every chromosome
 // that EXISTS, not just what's currently visible: a zoom panel can draw a
@@ -2201,6 +2245,7 @@ SYN.dispatchChain = function(seq, params) {
     const withSelf = SYN.ui.selfLinksToggle.active;
     SYN.chain.busy = true;
     SYN.showComputingStatus();
+    SYN.updateChainStatus();
     if (SYN.chain.useWorker) {
         SYN.chain.worker.postMessage({type: 'run', seq, params, withSelf});
     } else {
@@ -2219,6 +2264,10 @@ SYN.onChainMessage = function(msg) {
         SYN.chain.pendingSeq = null;
         SYN.chain.pendingParams = null;
         SYN.dispatchChain(seq, params);
+    } else {
+        // nothing left in flight: clear a "finding self-links…" even when
+        // this reply was stale and skipped above
+        SYN.updateChainStatus();
     }
 };
 
@@ -2284,14 +2333,30 @@ SYN.applyChainResult = function(msg) {
     SYN.updateChainStatus();
 };
 
-// "N block(s) · X ms": blocks currently passing the min-block filter, and how
-// long the last chain request took -- called after every chain result AND
-// every min-block change (a pure filter that never re-chains).
+// "N blocks": cross-genome blocks currently passing the min-block filter;
+// while Show self-links is on, also how many self-link blocks pass it --
+// or that there are none, so an empty-looking ring reads as an answer
+// rather than a switch that did nothing -- or that they're still being
+// chained. How long the last chain request took is in the hover title
+// only. Called after every chain result and request, every min-block
+// change (a pure filter that never re-chains) and every self-links toggle.
 SYN.updateChainStatus = function() {
     const ui = SYN.ui;
     if (!SYN.data.crossLinksFlat || !SYN.chain) { return; }
-    const visible = SYN.data.crossLinksFlat.filter((l) => l.score >= ui.minBlockSpinner.value).length;
-    ui.chainStatusDiv.text = `${visible} block(s) · ${(SYN.chain.lastMs || 0).toFixed(0)} ms`;
+    const minScore = ui.minBlockSpinner.value;
+    const visible = SYN.data.crossLinksFlat.filter((l) => l.score >= minScore).length;
+    let text = SYN.plural(visible, 'block');
+    if (ui.selfLinksToggle.active) {
+        if (SYN.chain.busy || !SYN.chain.selfFresh) {
+            text += ' · finding self-links…';
+        } else {
+            const self = SYN.data.targetHomeologLinks.concat(SYN.data.referenceHomeologLinks)
+                .filter((l) => l.score >= minScore).length;
+            text += self ? ` · ${SYN.plural(self, 'self-link block')}` : ' · no self-links at these settings';
+        }
+    }
+    const ms = `last computed in ${(SYN.chain.lastMs || 0).toFixed(0)} ms`;
+    ui.chainStatusDiv.text = `<span title="${ms}">${text}</span>`;
 };
 
 // The cross-genome blocks currently on screen: min block size AND min
@@ -2377,9 +2442,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     query_names = [n for n, _ in ds.query_chroms]
     subject_names = [n for n, _ in ds.subject_chroms]
     subject_index = {name: i for i, (name, _) in enumerate(ds.subject_chroms)}
-    query_index = {name: i for i, (name, _) in enumerate(ds.query_chroms)}
 
-    q_src, s_src, r_src, label_src = build_overview_sources()
+    q_src, s_src, r_src, r_self_src, label_src = build_overview_sources()
 
     # Assembly-gap wedges (both genomes' own gaps, drawn on their own half of
     # the ring): built once, client-side, by SYN.buildRingLayout at document-
@@ -2407,6 +2471,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     overview.grid.visible = False
     overview.toolbar.logo = None
 
+    # self-links first, so the cross-genome synteny draws over them -- dashed
+    # outlines over a faint fill (see SYN.buildOverviewRibbons)
+    self_ribbon_renderer = overview.patches('xs', 'ys', source=r_self_src, fill_color='fill_color',
+                                             fill_alpha='alpha', line_color='line_color', line_alpha=0.9,
+                                             line_width=0.8, line_dash='dashed')
     ribbon_renderer = overview.patches('xs', 'ys', source=r_src, fill_color='fill_color',
                                         line_color=None, fill_alpha='alpha')
     query_renderer = overview.patches('xs', 'ys', source=q_src, fill_color='fill_color',
@@ -2442,7 +2511,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # follow_mouse -- see detail_fig's identical HoverTool below for why: a
     # ribbon can span most of the ring, so the default snap-to-center
     # tooltip can land outside the current (zoomed/panned) view
-    overview.add_tools(HoverTool(renderers=[ribbon_renderer], tooltips="@label{safe}",
+    overview.add_tools(HoverTool(renderers=[ribbon_renderer, self_ribbon_renderer], tooltips="@label{safe}",
                                   point_policy='follow_mouse'))
     overview.add_tools(HoverTool(renderers=[query_renderer, subject_renderer],
                                   tooltips=[("Chromosome", "@name"), ("Size", "@size_label"),
@@ -2749,8 +2818,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                  step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
                                      "The minimum number of anchors for a syntenic block to be drawn."))
-    # One-line status ("N block(s) · X ms"), refreshed by every
-    # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
+    # One-line status ("N blocks", plus self-link blocks while Show
+    # self-links is on -- see SYN.updateChainStatus), refreshed by every
+    # chain request and result -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
     chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5))
     # Post-hoc chromosome-length filter for the ring + dotplot, independent
@@ -2899,7 +2969,6 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             // the FULL size/natural list, not the length-filtered order --
             // see SYN.buildColorIndex's own comment
             SYN.data.subjectColorIndex = SYN.buildColorIndex(bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
-            SYN.data.queryColorIndex = SYN.buildColorIndex(bySize ? SYN.data.queryNames : SYN.data.queryNamesNatural);
         }
         SYN.state.orderBySize = bySize;
         SYN.state.orderBySimilarity = bySimilarity;
@@ -3099,6 +3168,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         }
         SYN.applyOverviewRibbons(min_block_spinner.value, color_spinner.value, cb_obj.active,
                                   show_synteny_toggle.active, overview_ribbon_source);
+        SYN.updateChainStatus();
     """)
     self_links_toggle.js_on_change('active', self_links_toggle_callback)
 
@@ -3288,7 +3358,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # each getting its own CustomJS args=dict(...), unlike the older
     # callbacks above.
     doc.js_on_event(DocumentReady, CustomJS(args=dict(
-        q_src=q_src, s_src=s_src, r_src=r_src, label_src=label_src, gap_src=gap_src,
+        q_src=q_src, s_src=s_src, r_src=r_src, r_self_src=r_self_src, label_src=label_src, gap_src=gap_src,
         dp_q_src=dp_q_src, dp_s_src=dp_s_src, dp_grid_src=dp_grid_src,
         dp_q_label_src=dp_q_label_src, dp_s_label_src=dp_s_label_src,
         dp_seg_src=dp_seg_src, dp_gap_src=dp_gap_src, dotplot_fig=dotplot_fig,
@@ -3307,7 +3377,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     ), code="""
         SYN.init({
             statsDiv: stats_div,
-            querySource: q_src, subjectSource: s_src, ribbonSource: r_src,
+            querySource: q_src, subjectSource: s_src, ribbonSource: r_src, selfRibbonSource: r_self_src,
             labelSource: label_src, gapSource: gap_src,
             dpQuerySource: dp_q_src, dpSubjectSource: dp_s_src, dpGridSource: dp_grid_src,
             dpQueryLabelSource: dp_q_label_src, dpSubjectLabelSource: dp_s_label_src,
@@ -3334,6 +3404,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
         'palettes': PALETTES,
         'targetGrey': TARGET_GREY,
+        'targetSelfGrey': TARGET_SELF_GREY,
         'targetName': query_name,
         'referenceName': subject_name,
         # the *editable* labels' own defaults -- the same values
@@ -3351,11 +3422,6 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'querySizes': ds.query_sizes,
         'subjectSizes': ds.subject_sizes,
         'subjectColorIndex': subject_index,
-        # query (target) wedges are always flat TARGET_GREY, never palette-
-        # indexed -- this index exists only so the target's own homeolog
-        # ribbons can still be colored per-chromosome, same as
-        # SYN.buildRingLayout's targetHomeologLinks loop
-        'queryColorIndex': query_index,
         # Placeholders, replaced the moment the first client-side chain
         # result comes back (SYN.applyChainResult, called from
         # SYN.startChainer -- see SYN.init) -- Python computes no synteny at
@@ -3368,8 +3434,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'maxScore': 1,
         # per-chromosome assembly-gap lookup, one genome's own gaps each --
         # separate dicts (not a single by-name lookup) since target and
-        # reference chromosomes can share names, same reasoning as
-        # queryColorIndex/subjectColorIndex above. Read by SYN.buildGapRecords
+        # reference chromosomes can share names. Read by SYN.buildGapRecords
         # (ring wedges), SYN.buildDotplotGapLines (dotplot lines), and
         # SYN.gapsForChrom (zoom panel bars) -- one source of raw gap data,
         # three different geometries built from it.
