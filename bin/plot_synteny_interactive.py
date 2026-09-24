@@ -78,7 +78,8 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, HelpButton, Range1d, Select, Spinner, Switch, TextInput, Tooltip)
+                           Button, Div, HelpButton, Label, Range1d, Select, Spinner, Switch, TextInput,
+                           Tooltip)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
@@ -176,6 +177,15 @@ PLOT_TOOLBAR_WIDTH = 30
 # to Bokeh's default of the same value, so the stats box below can be offset
 # by exactly this much and line up with the frame
 DETAIL_FRAME_LEFT = 5
+
+# the detail panel's two rows, in its own data units: the reference row's
+# bars span DETAIL_TOP_Y..+DETAIL_BAR_H, the target row's DETAIL_BOT_Y..
+# +DETAIL_BAR_H, ribbons in between -- embedded as SYN.data.detailRows for
+# SYN.buildDetailData/SYN.buildPairDetailData, and read here to place the
+# row labels just above/below them (see build_page())
+DETAIL_BAR_H = 0.32
+DETAIL_TOP_Y = 1.2
+DETAIL_BOT_Y = 0.0
 
 # the stats box below detail_fig -- matched to the zoom panel's drawn frame,
 # not its full nominal width: its left edge is offset by DETAIL_FRAME_LEFT
@@ -1422,6 +1432,19 @@ SYN.gapsForChrom = function(role, name) {
     return (role === 'target' ? SYN.data.targetGapsByChrom : SYN.data.referenceGapsByChrom)[name] || [];
 };
 
+// shown in the empty detail panel (see detail_message in build_page()) --
+// two lines, since a Label doesn't wrap and one line runs past the panel
+SYN.EMPTY_DETAIL_MESSAGE = 'Click a chromosome on the ring or the dotplot,\nor a square in the dotplot, to see it here.';
+
+// "1 block" / "3 blocks"
+SYN.plural = function(n, noun) {
+    return `${n} ${noun}${n === 1 ? '' : 's'}`;
+};
+
+// empty: true is the panel with nothing selected -- SYN.applyDetail hides
+// its axis, grid and row labels and shows SYN.EMPTY_DETAIL_MESSAGE instead.
+// The builders below start from this for their own zero-block cases too,
+// setting empty back to false (there are bars to show).
 SYN.emptyDetail = function(title) {
     return {
         bars: {xs: [], ys: [], fill_color: []},
@@ -1429,7 +1452,8 @@ SYN.emptyDetail = function(title) {
         labels: {x: [], y: [], text: [], color: []},
         gaps: {xs: [], ys: [], label: []},
         x_range: [-1, 1], y_range: [-0.5, 1.5],
-        title: title || 'Click any chromosome wedge on the left to zoom in.',
+        title: title || 'Detail',
+        empty: true,
     };
 };
 
@@ -1445,10 +1469,8 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         .filter((l) => l.score >= minScore);
     const pivotSize = isPivotSubject ? SYN.data.subjectSizes[pivotName] : SYN.data.querySizes[pivotName];
     const pivotColor = isPivotSubject ? SYN.paletteColor(SYN.data.subjectColorIndex[pivotName], k) : SYN.data.targetGrey;
-    const pivotKind = isPivotSubject ? SYN.state.referenceLabel : SYN.state.targetLabel;
-    const otherKind = isPivotSubject ? SYN.state.targetLabel : SYN.state.referenceLabel;
 
-    const barH = 0.32, topY = 1.2, botY = 0.0;
+    const {barH, topY, botY} = SYN.data.detailRows;
     const pivotRowY = isPivotSubject ? topY : botY;
     const otherRowY = isPivotSubject ? botY : topY;
     const pivotRole = isPivotSubject ? 'reference' : 'target';
@@ -1473,7 +1495,8 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     };
 
     if (links.length === 0) {
-        const d = SYN.emptyDetail(`${pivotName}: no links found`);
+        const d = SYN.emptyDetail(`${pivotName} · no blocks`);
+        d.empty = false;
         d.bars = {xs: [[0, pivotSize, pivotSize, 0]],
                   ys: [[pivotRowY, pivotRowY, pivotRowY + barH, pivotRowY + barH]],
                   fill_color: [pivotColor]};
@@ -1547,7 +1570,11 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         gaps: {xs: gapXs, ys: gapYs, label: gapLabel},
         x_range: [-xMax * 0.03, xMax * 1.05],
         y_range: [botY - 0.35, topY + barH + 0.35],
-        title: `${pivotName} (${pivotKind}) — ${links.length} link(s) vs ${otherNames.length} ${otherKind} chromosome(s)`,
+        // which genome each row is comes from the row labels (see
+        // detail_reference_row_label in build_page()), so the title only
+        // names chromosomes and stays short enough not to be cut off
+        title: `${pivotName} · ${SYN.plural(links.length, 'block')} with ${SYN.plural(otherNames.length, 'chromosome')}`,
+        empty: false,
     };
 };
 
@@ -1567,7 +1594,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const subjectSize = SYN.data.subjectSizes[subjectName];
     const subjectColor = SYN.paletteColor(SYN.data.subjectColorIndex[subjectName], k);
 
-    const barH = 0.32, topY = 1.2, botY = 0.0;
+    const {barH, topY, botY} = SYN.data.detailRows;
     const xMax = Math.max(targetSize, subjectSize);
     const barXs = [[0, subjectSize, subjectSize, 0], [0, targetSize, targetSize, 0]];
     const barYs = [[topY, topY, topY + barH, topY + barH], [botY, botY, botY + barH, botY + barH]];
@@ -1603,7 +1630,8 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
             labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
             gaps,
             x_range: baseX, y_range: baseY,
-            title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.referenceLabel}) -- no links`,
+            title: `${subjectName} × ${targetName} · no blocks`,
+            empty: false,
         };
     }
 
@@ -1624,7 +1652,10 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
         labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
         gaps,
         x_range: baseX, y_range: baseY,
-        title: `${targetName} (${SYN.state.targetLabel}) × ${subjectName} (${SYN.state.referenceLabel}) -- ${links.length} link(s)`,
+        // reference first, matching the rows (reference on top) and every
+        // other title's "reference vs target" order
+        title: `${subjectName} × ${targetName} · ${SYN.plural(links.length, 'block')}`,
+        empty: false,
     };
 };
 
@@ -1678,6 +1709,11 @@ SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, g
     detailFig.y_range.start = d.y_range[0]; detailFig.y_range.end = d.y_range[1];
     detailFig.title.text = d.title;
     SYN.state.detailRange = {x0: d.x_range[0], x1: d.x_range[1], y0: d.y_range[0], y1: d.y_range[1]};
+    // SYN.ui is set by SYN.init, before any tap or chain result can get here
+    const ui = SYN.ui;
+    for (const m of ui.detailAxisModels) { m.visible = !d.empty; }
+    for (const m of ui.detailRowLabels) { m.visible = !d.empty; }
+    ui.detailMessage.text = d.empty ? SYN.EMPTY_DETAIL_MESSAGE : '';
 };
 
 // Re-renders whatever is currently shown in the zoom panel (a pivot, a
@@ -1890,7 +1926,16 @@ SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
     SYN.state.targetLabel = targetLabel;
     SYN.state.referenceLabel = referenceLabel;
     ctx.overview.title.text = `${referenceLabel} (reference) vs ${targetLabel} (target)`;
-    ctx.dotplotFig.title.text = `${targetLabel} vs ${referenceLabel} -- click a band or a grid square to zoom`;
+    ctx.dotplotFig.title.text = `${referenceLabel} vs ${targetLabel}: whole-genome dotplot`;
+    // the in-panel genome names (ring corners, dotplot axis titles, detail
+    // row labels -- see build_page()), all annotations/axes that exports keep
+    const ui = SYN.ui;
+    ui.ringReferenceLabel.text = `Reference · ${referenceLabel}`;
+    ui.ringTargetLabel.text = `Target · ${targetLabel}`;
+    ui.dotplotXAxis.axis_label = `Target · ${targetLabel}`;
+    ui.dotplotYAxis.axis_label = `Reference · ${referenceLabel}`;
+    ui.detailRowLabels[0].text = referenceLabel;
+    ui.detailRowLabels[1].text = targetLabel;
     for (const src of ctx.queryLikeSources) {
         src.data.group = src.data.group.map(() => targetLabel);
         src.change.emit();
@@ -2103,12 +2148,12 @@ SYN.startChainer = async function(payload) {
     }
 };
 
-// While a request is pending and nothing is zoomed, the zoom panel's own
-// title doubles as a busy indicator -- restored to its normal (possibly
-// still-empty) state by SYN.applyChainResult once the reply lands.
+// While a request is pending and nothing is selected, the empty detail
+// panel's message doubles as a busy indicator -- restored by
+// SYN.applyChainResult once the reply lands.
 SYN.showComputingStatus = function() {
     if (SYN.state.mode === null && !SYN.state.pivotName) {
-        SYN.ui.detailFig.title.text = 'Computing synteny…';
+        SYN.ui.detailMessage.text = 'Computing synteny…';
     }
 };
 
@@ -2214,11 +2259,11 @@ SYN.applyChainResult = function(msg) {
     }
     SYN.refreshDetail(ui.colorSpinner.value, ui.minBlockSpinner.value, ui.detailBarSource, ui.detailRibbonSource,
                        ui.detailLabelSource, ui.detailFig, ui.detailGapSource);
-    // SYN.refreshDetail is a no-op with nothing zoomed -- restore the panel
-    // title SYN.showComputingStatus overwrote for the duration of this
+    // SYN.refreshDetail is a no-op with nothing selected -- restore the
+    // message SYN.showComputingStatus overwrote for the duration of this
     // request, same condition that function itself gates on.
     if (SYN.state.mode === null && !SYN.state.pivotName) {
-        ui.detailFig.title.text = SYN.emptyDetail().title;
+        ui.detailMessage.text = SYN.EMPTY_DETAIL_MESSAGE;
     }
     ui.minBlockSpinner.high = maxAnyScore;
 
@@ -2279,6 +2324,8 @@ SYN.init = function(s) {
     SYN.state.targetLabel = SYN.data.targetLabelDefault;
     SYN.state.referenceLabel = SYN.data.referenceLabelDefault;
     if (s.statsDiv) { SYN.applyStats(SYN.state.targetLabel, SYN.state.referenceLabel, s.statsDiv); }
+    SYN.applyDetail(SYN.emptyDetail(), s.detailBarSource, s.detailRibbonSource, s.detailLabelSource,
+                     s.detailFig, s.detailGapSource);
 
     const ringOrder = SYN.ringOrderFor(true);
     SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
@@ -2368,6 +2415,20 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                          line_color='black', line_width=0.5)
     overview.text('x', 'y', source=label_src, text_align='center', text_baseline='middle',
                   text_font_size='10px')
+    # which half is which genome, in the ring itself (not just its title) --
+    # annotations, so they're in every export of the ring. Top-left corner
+    # over the reference half, bottom-left under the target half: the
+    # corners sit at radius ~1.7, well clear of the chromosome labels
+    # (OUTER_R + 0.14). Data units, since the ring's range is fixed; they
+    # pan/zoom with the ring like everything else on it. Text rewritten by
+    # SYN.applyLabels.
+    ring_group_label_style = dict(text_font_size='11px', text_font_style='bold', text_color='#333333')
+    ring_reference_label = Label(x=-lim + 0.03, y=lim - 0.03, text_baseline='top',
+                                 text=f"Reference · {reference_label_default}", **ring_group_label_style)
+    ring_target_label = Label(x=-lim + 0.03, y=-lim + 0.03, text_baseline='bottom',
+                              text=f"Target · {target_label_default}", **ring_group_label_style)
+    overview.add_layout(ring_reference_label)
+    overview.add_layout(ring_target_label)
     # drawn last (on top of the wedges) so a gap stripe is actually visible
     # against the chromosome band it marks. Not part of overview_tap below --
     # a gap marker isn't a clickable region (there's nothing to zoom into
@@ -2440,10 +2501,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # no 'tap' here -- see overview's identical figure(...) above for why
     dotplot_fig = figure(width=620, height=620,
                           x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
-                          title="Whole-genome dotplot -- click a band or a grid square to zoom",
+                          title=f"{reference_label_default} vs {target_label_default}: whole-genome dotplot",
                           tools="pan,wheel_zoom,reset",
                           output_backend="svg")
-    dotplot_fig.axis.visible = False
+    # the axes are there only for their titles (which genome runs along
+    # which axis, rewritten by SYN.applyLabels) -- the chromosome rulers and
+    # their labels stand in for ticks, so ticks, tick labels and axis lines
+    # are all hidden
+    dotplot_fig.xaxis.axis_label = f"Target · {target_label_default}"
+    dotplot_fig.yaxis.axis_label = f"Reference · {reference_label_default}"
+    dotplot_fig.axis.major_tick_line_color = None
+    dotplot_fig.axis.minor_tick_line_color = None
+    dotplot_fig.axis.major_label_text_font_size = '0px'
+    dotplot_fig.axis.axis_line_color = None
+    dotplot_fig.axis.axis_label_text_font_size = '11px'
+    dotplot_fig.axis.axis_label_text_font_style = 'bold'
+    dotplot_fig.axis.axis_label_text_color = '#333333'
+    dotplot_fig.axis.axis_label_standoff = 0
     dotplot_fig.grid.visible = False
     dotplot_fig.toolbar.logo = None
 
@@ -2539,11 +2613,33 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
                          min_border_left=DETAIL_FRAME_LEFT,
                          x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
-                         title="Click any chromosome wedge on the left to zoom in.",
+                         title="Detail",
                          tools="pan,wheel_zoom,reset",
                          output_backend="svg")
     detail_fig.yaxis.visible = False
+    # start as SYN.emptyDetail leaves them, so nothing flashes before SYN.init
+    detail_fig.xaxis.visible = False
+    detail_fig.grid.visible = False
     detail_fig.toolbar.logo = None
+    # which genome each row is, just above the reference row and just below
+    # the target row -- pinned to the frame's left edge (screen x) so a pan
+    # never slides them out of view, but at the rows' own data y. Annotations,
+    # so an exported panel keeps them. Text rewritten by SYN.applyLabels;
+    # hidden while the panel is empty (SYN.applyDetail).
+    detail_row_label_style = dict(x=4, x_units='screen', text_font_size='10px', text_color='#555555',
+                                  visible=False)
+    detail_reference_row_label = Label(y=DETAIL_TOP_Y + DETAIL_BAR_H + 0.04, text_baseline='bottom',
+                                       text=reference_label_default, **detail_row_label_style)
+    detail_target_row_label = Label(y=DETAIL_BOT_Y - 0.04, text_baseline='top',
+                                    text=target_label_default, **detail_row_label_style)
+    detail_fig.add_layout(detail_reference_row_label)
+    detail_fig.add_layout(detail_target_row_label)
+    # the empty panel's instructions (SYN.EMPTY_DETAIL_MESSAGE), centred in
+    # SYN.emptyDetail's own x/y range, in place of an axis full of zeros;
+    # also where "Computing synteny…" shows (SYN.showComputingStatus)
+    detail_message = Label(x=0, y=0.5, text='', text_align='center', text_baseline='middle',
+                           text_font_size='12px', text_color='#888888', text_line_height=1.4)
+    detail_fig.add_layout(detail_message)
     # the underlying bar/ribbon coordinates stay in bp (same units build_page's
     # other geometry uses) -- only the tick labels are rescaled for display,
     # so nothing about the actual layout math needs to change
@@ -3357,6 +3453,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         show_synteny_toggle=show_synteny_toggle, chain_status_div=chain_status_div,
         bar_source=detail_bar_src, ribbon_source=detail_rib_src, label_source=detail_label_src,
         detail_fig=detail_fig, detail_gap_source=detail_gap_src, stats_div=stats_div,
+        ring_reference_label=ring_reference_label, ring_target_label=ring_target_label,
+        dotplot_x_axis=dotplot_fig.xaxis[0], dotplot_y_axis=dotplot_fig.yaxis[0],
+        # hidden while the detail panel is empty (see SYN.applyDetail)
+        detail_axis_models=[detail_fig.xaxis[0], detail_fig.xgrid[0], detail_fig.ygrid[0]],
+        detail_row_labels=[detail_reference_row_label, detail_target_row_label],
+        detail_message=detail_message,
     ), code="""
         SYN.init({
             statsDiv: stats_div,
@@ -3371,6 +3473,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             showSyntenyToggle: show_synteny_toggle, chainStatusDiv: chain_status_div,
             detailBarSource: bar_source, detailRibbonSource: ribbon_source,
             detailLabelSource: label_source, detailFig: detail_fig, detailGapSource: detail_gap_source,
+            ringReferenceLabel: ring_reference_label, ringTargetLabel: ring_target_label,
+            dotplotXAxis: dotplot_x_axis, dotplotYAxis: dotplot_y_axis,
+            detailAxisModels: detail_axis_models, detailRowLabels: detail_row_labels,
+            detailMessage: detail_message,
         });
     """))
 
@@ -3433,6 +3539,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
         'ringLabelMinAngle': RING_LABEL_MIN_ANGLE,
         'detailFigWidth': DETAIL_FIG_WIDTH,
+        'detailRows': {'barH': DETAIL_BAR_H, 'topY': DETAIL_TOP_Y, 'botY': DETAIL_BOT_Y},
         'statsPanelWidth': STATS_PANEL_WIDTH,
         'dpRulerFrac': DP_RULER_FRAC,
         # None (-> JSON null, falsy in JS) if --stats wasn't given -- every

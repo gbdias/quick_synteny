@@ -124,9 +124,12 @@ Hover any wedge, band, or ribbon for its coordinates, protein-alignment
 and a numeric spinner recolor reference-genome chromosomes (a few curated
 palettes, cycling through 1-10 discrete colors instead of one color per
 chromosome); another spinner filters every panel down to blocks with at
-least that many supporting anchors. Two text inputs relabel "target"/
-"reference" to the actual species/genome names everywhere a title or bar
-shows them, and each panel has its own save button plus a format dropdown to
+least that many supporting anchors. Two text inputs name the two genomes
+(by default their short species names, e.g. "D. melanogaster", or their
+accessions when the species isn't known); the names appear in every panel
+-- the titles, the ring's corner labels, the dotplot's axis titles and the
+detail panel's row labels -- so any exported panel says which genome is
+which. Each panel has its own save button plus a format dropdown to
 export exactly that panel as SVG (a vector original -- open it in Inkscape,
 Illustrator, or similar to edit it or convert it to PDF), PNG, or JPEG (both
 ready to paste into a slide or document) -- named from whatever labels are
