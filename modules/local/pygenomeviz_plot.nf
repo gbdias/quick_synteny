@@ -106,7 +106,7 @@ workflow PYGENOMEVIZ_PLOT {
     target_chrom_sizes     // tuple(name, path chrom.sizes)
     reference_chrom_sizes
     min_identity           // '' auto-tunes; otherwise an explicit 0-1 floor (the page's initial control value)
-    max_gap                // max gene-rank step between consecutive chain members (the page's initial control value)
+    max_gap                // max rank step between consecutive chain members (the page's initial control value)
     min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle

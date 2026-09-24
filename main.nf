@@ -54,11 +54,11 @@ def helpMessage() {
                                 genome's mean best-hit identity, clamped to [0.3, 0.9],
                                 so a divergent pair isn't forced through a threshold
                                 tuned for close relatives. Pass a value to override.
-      --max_gap <int>          Max number of genes skipped between consecutive genes of
+      --max_gap <int>          Max number of anchors skipped between consecutive anchors of
                                 a synteny block, on either genome (default: 25). Counted
-                                in genes, not bp, so it means the same thing in a
-                                gene-dense and a gene-sparse genome.
-      --min_block <int>        Min genes (distinct loci on both genomes) per block in
+                                in anchors, not bp, so it means the same thing in an
+                                anchor-dense and an anchor-sparse genome.
+      --min_block <int>        Min anchors (distinct loci on both genomes) per block in
                                 links.tsv. Default: auto -- 15 for close relatives (weaker
                                 mean identity >= 0.8), 5 otherwise.
 

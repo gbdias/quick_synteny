@@ -23,10 +23,10 @@
 // PARAMETERS:
 //   minPositive  0-1          a hit passes only if positive >= minPositive
 //   maxHitRank   int >= 1     ... and rank <= maxHitRank (default 255: all)
-//   maxGap       int (genes)  max gene-rank step between consecutive chain
+//   maxGap       int (loci)   max rank step between consecutive chain
 //                             members, on both genomes (default 25)
 //   maxLookback  int          max valid predecessors examined per anchor (50)
-//   gapPenalty   float >= 0   score cost per skipped gene (default 0)
+//   gapPenalty   float >= 0   score cost per skipped locus (default 0)
 //   minBlock     int (loci)   minimum chain length reported as a block
 //   selfMode     bool         both sides are the same table (homeolog scan)
 //   Auto defaults (autoParams): meanBest(T) = mean over proteins of their
@@ -44,7 +44,7 @@
 //   chains (cross and both self), initialised from the cross auto values.
 //
 // CHAINING RULES (normative):
-//   1. A locus passes if any of its hits passes. A passing locus's gene rank
+//   1. A locus passes if any of its hits passes. A passing locus's rank
 //      is its 1-based position among passing loci of its chromosome, in
 //      locus-id order; other loci have no rank.
 //   2. Anchors: for each protein, every (passing hit a in A, passing hit b in
@@ -70,12 +70,12 @@
 //   7. Strict monotonicity on both genomes makes every chain member a distinct
 //      locus on both sides, so block size = number of independent loci.
 //   Consequences:
-//   (a) Gene deserts don't break chains: distance counts passing loci, so two
-//       genes with nothing between them are adjacent however many bp apart.
+//   (a) Anchor deserts don't break chains: distance counts passing loci, so two
+//       loci with nothing between them are adjacent however many bp apart.
 //       That is what makes chaining genome-size invariant (a bp limit found
 //       0.3 % of axolotl-vs-itself; this finds 98.5 %).
 //   (b) Noise can extend a block's ends, never its interior: monotonicity
-//       only leaves room beyond a block's last true gene.
+//       only leaves room beyond a block's last true anchor.
 //
 // OUTPUTS: Block = {qChrom, sChrom (chrom indices), qStart, qEnd, sStart,
 //   sEnd (min start / max end over member hits), orientation, nAnchors

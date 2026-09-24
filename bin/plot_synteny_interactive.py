@@ -73,7 +73,7 @@ import numpy as np
 
 from bokeh.document import Document
 from bokeh.embed import file_html
-from bokeh.events import DocumentReady, DoubleTap, Tap
+from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
                            Button, Div, HelpButton, Range1d, Select, Spinner, Switch, TextInput, Tooltip)
@@ -1049,6 +1049,34 @@ SYN.filterBySize = function(order, sizes) {
     return order.filter((name) => sizes[name] >= SYN.state.minSeqSize);
 };
 
+// Maps each name in `order` to its 0-based position in it -- the mapping
+// SYN.data.subjectColorIndex/queryColorIndex hold, that SYN.paletteColor(index,
+// k) turns into an actual color for a chromosome's own wedge/ruler cell and
+// for every ribbon that touches it. `order` must cover every chromosome
+// that EXISTS, not just what's currently visible: a zoom panel can draw a
+// partner chromosome that's below the min-length filter (SYN.buildDetailData
+// doesn't apply that filter to a pivot's OTHER side, only minScore -- see its
+// own code), and that name still needs a real color, so size_order_toggle's
+// own callback below passes the full (unfiltered) size/natural list, never
+// SYN.ringOrderFor's already-filtered one. SYN.paletteColor wraps with `% k`,
+// so two chromosomes sharing a color are always exactly k apart IN THIS
+// ORDER -- never adjacent, for any k >= 2. That guarantee only holds for
+// whichever order the index was actually built from, so size_order_toggle's
+// callback rebuilds it every time it can change what that order is, rather
+// than freezing it to size order once at page load the way an earlier
+// version did: with Order by size OFF, a fixed size-order index no longer
+// matches what's on screen, and two adjacent wedges can end up sharing a
+// color. Order by similarity deliberately does NOT trigger a rebuild --
+// it's a dotplot-only, transient reordering (re-run on every re-chain), and
+// a chromosome's color should stay the same everywhere (ring wedge,
+// ribbons, dotplot ruler) while it does, not reshuffle on every min-identity
+// tweak.
+SYN.buildColorIndex = function(order) {
+    const index = {};
+    order.forEach((name, i) => { index[name] = i; });
+    return index;
+};
+
 // The ring's currently-active order (size vs. natural -- it has no
 // similarity concept, see SYN.buildRingLayout's own comment), length-filtered.
 SYN.ringOrderFor = function(bySize) {
@@ -1550,7 +1578,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
-    let stats = `${l.score} genes (distinct loci)  ·  orientation=${l.orientation}`;
+    let stats = `${l.score} anchors (distinct loci)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
         && l.anchor_density !== null && l.anchor_density !== undefined) {
         stats += `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
@@ -2399,24 +2427,49 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_tap = TapTool(renderers=[dp_query_renderer, dp_subject_renderer], visible=False)
     dotplot_fig.add_tools(dotplot_tap)
     dotplot_fig.toolbar.active_tap = dotplot_tap
-    # double-click to reset -- see overview's identical handler above.
-    # Reads SYN.state's CURRENT rx/ry/totalX/totalY (set for real by
-    # SYN.init, see this function's own doc.js_on_event(DocumentReady, ...)
-    # below) rather than a value fixed once at render time: a reorder alone
-    # never changes them, but the min-length filter (see SYN.filterBySize)
-    # can shrink them, and resetting to the ORIGINAL (pre-filter) span would
+    # Both double-click AND the toolbar's own Reset button need to land on
+    # the CURRENT full extent, not the figure's x_range=Range1d(-1, 1)
+    # placeholder above (see that Range1d's own comment): x_range/y_range
+    # are only rewritten to the real span in JS, after this figure already
+    # exists (SYN.init/SYN.applyDotplotOrder), so Bokeh's built-in Reset
+    # tool -- which restores whatever start/end the range had at FIGURE
+    # CREATION time, i.e. that still-unreplaced placeholder -- would
+    # otherwise snap the view down to [-1, 1], which against real bp-scale
+    # data reads as a hard zoom-IN rather than a reset. Reading SYN.state's
+    # CURRENT rx/ry/totalX/totalY (rather than a value fixed once here)
+    # matters for the same reason on both events: a reorder alone never
+    # changes them, but the min-length filter (see SYN.filterBySize) can
+    # shrink them, and resetting to the ORIGINAL (pre-filter) span would
     # leave dead margin beyond wherever the plot now actually ends.
-    dotplot_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=dotplot_fig), code="""
+    dotplot_reset_callback = CustomJS(args=dict(fig=dotplot_fig), code="""
         fig.x_range.start = -SYN.state.dpRx * 3; fig.x_range.end = SYN.state.dpTotalX * 1.02;
         fig.y_range.start = -SYN.state.dpRy * 3; fig.y_range.end = SYN.state.dpTotalY * 1.02;
-    """))
+    """)
+    dotplot_fig.js_on_event(DoubleTap, dotplot_reset_callback)
+    # Runs AFTER Bokeh's own Reset tool has already reset x_range/y_range to
+    # that stale placeholder, correcting it in place -- see this callback's
+    # own comment above.
+    dotplot_fig.js_on_event(Reset, dotplot_reset_callback)
 
     detail_bar_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[]))
     detail_rib_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[]))
     detail_label_src = ColumnDataSource(dict(x=[], y=[], text=[], color=[]))
     detail_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
+    # x_range/y_range: an explicit Range1d placeholder (real values are set
+    # by SYN.applyDetail below, on every click), NOT the default figure()
+    # would otherwise pick (a DataRange1d, which keeps auto-fitting itself
+    # to whatever the bar/ribbon renderers currently span). That auto-fit
+    # runs asynchronously and OVERWRITES whatever SYN.applyDetail just set,
+    # shortly (well under a second) after each click, shrinking the panel's
+    # actual vertical/horizontal fill from what buildDetailData deliberately
+    # computed to Bokeh's own generic padded fit -- a real click's zoom
+    # visibly "flattens" a moment later even with no further interaction,
+    # most noticeably by the time a SECOND click (e.g. a double-click)
+    # lands. Range1d has no such auto-fit: once set, a value sticks until
+    # something else (a pan, or the code below) changes it again.
     detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
                          min_border_left=DETAIL_FRAME_LEFT,
+                         x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
                          title="Click any chromosome wedge on the left to zoom in.",
                          tools="pan,wheel_zoom,reset",
                          output_backend="svg")
@@ -2449,17 +2502,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     point_policy='follow_mouse'))
     detail_fig.add_tools(HoverTool(renderers=[detail_gap_renderer], tooltips="@label{safe}",
                                     point_policy='follow_mouse'))
-    # double-click to reset -- unlike the ring/dotplot above, this panel's
-    # range is rewritten on every click (see SYN.applyDetail), so the reset
-    # target has to be whatever SYN.applyDetail most recently stashed in
-    # SYN.state.detailRange rather than a value fixed at page load; a no-op
-    # before the first click, when there's nothing to reset to yet
-    detail_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=detail_fig), code="""
+    # Double-click AND the toolbar's own Reset button both need this: unlike
+    # the ring/dotplot above, this panel's range is rewritten on every click
+    # (see SYN.applyDetail), so the reset target has to be whatever
+    # SYN.applyDetail most recently stashed in SYN.state.detailRange rather
+    # than a value fixed at page load; a no-op before the first click, when
+    # there's nothing to reset to yet. Reset also has to correct Bokeh's own
+    # built-in reset behavior back to detailRange for the same reason the
+    # dotplot's own Reset handler does (see that one's comment) -- the
+    # figure's x_range/y_range=Range1d(-1, 1) above is only a placeholder.
+    detail_reset_callback = CustomJS(args=dict(fig=detail_fig), code="""
         const r = SYN.state.detailRange;
         if (!r) { return; }
         fig.x_range.start = r.x0; fig.x_range.end = r.x1;
         fig.y_range.start = r.y0; fig.y_range.end = r.y1;
-    """))
+    """)
+    detail_fig.js_on_event(DoubleTap, detail_reset_callback)
+    detail_fig.js_on_event(Reset, detail_reset_callback)
 
     # default to the actual input file name/accession (query_subtitle/
     # subject_subtitle -- see --query_subtitle/--subject_subtitle) rather
@@ -2508,11 +2567,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                         "residues are identical or similar (miniprot's Positive score). Starts "
                                         "at the weaker genome's average best-hit identity, kept within 30-90%. "
                                         "Lower it for distant species; raise it to cut noise from paralogs."))
-    max_gap_spinner = Spinner(title="Max gap (genes)", low=1, high=100, step=1,
+    max_gap_spinner = Spinner(title="Max gap (anchors)", low=1, high=100, step=1,
                                value=max_gap, width=TOP_CONTROL_WIDTH,
                                description=help_tip(
-                                   "The most genes a block may skip between two consecutive matched "
-                                   "genes, on either genome. Counted in genes, not base pairs, so it means "
+                                   "The most anchors a block may skip between two consecutive matched "
+                                   "anchors, on either genome. Counted in anchors, not base pairs, so it means "
                                    "the same in a compact genome and a huge one. Larger values will join "
                                    "fragmented blocks; smaller values will split blocks at small rearrangements."))
     HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
@@ -2532,7 +2591,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
                                  step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
-                                     "The minimum number of genes for a syntenic block to be drawn."))
+                                     "The minimum number of anchors for a syntenic block to be drawn."))
     # One-line status ("N block(s) · X ms"), refreshed by every
     # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
@@ -2668,7 +2727,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     order_help = HelpButton(tooltip=help_tip(
         "Reorders both dotplot axes so chromosomes that share blocks sit next to each other, which "
         "turns the synteny into a diagonal. Each chromosome is placed at the average position of its "
-        "blocks along the other axis, weighted by their gene counts, so two chromosomes matching "
+        "blocks along the other axis, weighted by their anchor counts, so two chromosomes matching "
         "opposite ends of the same partner keep the diagonal too. Only what is drawn counts: "
         "blocks below Min block size and sequences below Min sequence length are ignored, and chromosomes "
         "with no visible blocks go to the end. When off, the dotplot follows Order by size.",
@@ -2766,6 +2825,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         // size/natural order this switch selects, so toggling it never
         // silently drops that filter.
         const ringOrder = SYN.ringOrderFor(cb_obj.active);
+        // rebuild the color identity from the FULL size/natural list (not
+        // ringOrder's already length-filtered one -- see SYN.buildColorIndex's
+        // own comment for why): a fixed, size-order-only index breaks once
+        // the ring is actually showing natural order instead
+        SYN.data.subjectColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
+        SYN.data.queryColorIndex = SYN.buildColorIndex(cb_obj.active ? SYN.data.queryNames : SYN.data.queryNamesNatural);
         SYN.applyRingLayout(ringOrder.queryOrder, ringOrder.subjectOrder, {
             querySource: query_source, subjectSource: subject_source,
             labelSource: label_source, ribbonSource: ribbon_source, gapSource: gap_source,
@@ -3352,7 +3417,7 @@ def main():
                               'default (unset): SYNCHAIN.autoParams picks it client-side from the '
                               'actual hit tables')
     parser.add_argument('--max_gap', type=int, default=25,
-                         help="initial Max gap (genes) control value (bin/chain.js's PARAMETERS "
+                         help="initial Max gap (anchors) control value (bin/chain.js's PARAMETERS "
                               "header)")
     parser.add_argument('--min_block', type=int, default=None,
                          help='initial Min block size control value -- default (unset): '

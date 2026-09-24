@@ -34,23 +34,31 @@ See `nextflow run main.nf --help` for the full parameter list.
 
 ## How synteny is found (no separate ortholog aligner)
 
-The same proteome is already aligned against both genomes with `miniprot`
-to build gene models on assemblies that may have no annotation of their own.
-That alignment is reused directly as the synteny signal: `miniprot` reports
-each protein's secondary hits (`-N 5 --outs=0.7`, i.e. up to 5 alternative
-loci scoring within 70% of its best hit) alongside its primary one, so a
-protein's positions in genome A and genome B **are** the raw anchors.
+The same proteome is already aligned against both genomes with `miniprot`,
+inferring each protein's exon/intron structure directly on assemblies that
+may have no annotation of their own. That alignment is reused directly as
+the synteny signal: `miniprot` reports each protein's secondary hits
+(`-N 5 --outs=0.7`, i.e. up to 5 alternative loci scoring within 70% of its
+best hit) alongside its primary one, so a protein's positions in genome A
+and genome B **are** the raw anchors.
 
 `bin/extract_hits.py` turns each genome's alignments into a hit table and
 groups overlapping hits into loci (hits sharing coding exons, so isoforms
-count once while genes nested in another gene's intron stay separate).
-`bin/chain.js` then chains anchors in **gene order** rather than base pairs,
-MCScanX-style: consecutive genes of a block may skip at most `--max_gap`
-genes (default 25) on either genome, and must be strictly increasing on
-both genomes (`+` blocks) or increasing on one and decreasing on the other
-(`-`, inverted blocks). Counting in genes makes the same setting work for a
-gene-dense 120 Mb genome and a gene-sparse 30 Gb one. A block's score is
-its number of genes, i.e. distinct loci on both genomes.
+count once while a locus nested inside another locus's intron stays
+separate). A locus corresponds to a gene wherever the assembly's actually
+annotated -- "locus" just also covers wherever the proteome aligns without
+one, which is the more common case here. An **anchor** is one protein's
+matched locus pair, one per genome; that's this doc's basic, rigorous unit
+from here on, in place of "gene".
+
+`bin/chain.js` then chains anchors in **rank order** rather than base
+pairs, MCScanX-style: consecutive anchors of a block may skip at most
+`--max_gap` anchors (default 25) on either genome, and must be strictly
+increasing on both genomes (`+` blocks) or increasing on one and decreasing
+on the other (`-`, inverted blocks). Counting in anchors makes the same
+setting work for an anchor-dense 120 Mb genome and an anchor-sparse 30 Gb
+one. A block's score is its number of anchors, i.e. distinct loci on both
+genomes.
 
 Guardrails: `--min_identity` ignores weak hits. By default it's auto-tuned
 to the weaker genome's mean best-hit identity, `max(0.3, min(0.9,
@@ -158,7 +166,7 @@ you're asking about (as in Arabidopsis, which retains extensive triplicated
 synteny from ancient WGDs on top of the *thaliana*/*arenosa* hybridization
 that formed *suecica*), the self-scan surfaces real signal from that older
 history too, not just the one hybridization event -- this is a property of
-the underlying biology (and of per-gene reciprocal matching in general), not
+the underlying biology (and of per-anchor reciprocal matching in general), not
 something this tool tries to correct for. Separating "this event's
 homeologs" from "older paralogs" by age would need Ks-based dating, which is
 out of scope here -- validated against a real *A. thaliana* target vs.

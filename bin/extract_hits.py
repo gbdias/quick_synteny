@@ -26,10 +26,10 @@ coding exons (CDS rows, joined via Parent=) overlap by >= 1 bp are one locus,
 transitively; an mRNA without CDS rows uses its own span. Ids run 0..L-1 in
 order of (chrom index, locus min start, locus max end, smallest row index).
 Isoforms share coding exons, so they collapse into one locus and can't count
-twice as independent synteny evidence; a gene nested in another gene's
-intron shares no exon with it, so it stays separate -- which overlapping mRNA
-*spans* would not give, since in large genomes a single span can cover
-several neighbouring genes.
+twice as independent synteny evidence; a locus nested inside another locus's
+intron shares no exon with it, so it stays separate -- which overlapping
+mRNA *spans* would not give, since in large genomes a single span can cover
+several neighbouring loci.
 """
 import argparse
 import gzip
