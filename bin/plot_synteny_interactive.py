@@ -2455,8 +2455,21 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_rib_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[]))
     detail_label_src = ColumnDataSource(dict(x=[], y=[], text=[], color=[]))
     detail_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
+    # x_range/y_range: an explicit Range1d placeholder (real values are set
+    # by SYN.applyDetail below, on every click), NOT the default figure()
+    # would otherwise pick (a DataRange1d, which keeps auto-fitting itself
+    # to whatever the bar/ribbon renderers currently span). That auto-fit
+    # runs asynchronously and OVERWRITES whatever SYN.applyDetail just set,
+    # shortly (well under a second) after each click, shrinking the panel's
+    # actual vertical/horizontal fill from what buildDetailData deliberately
+    # computed to Bokeh's own generic padded fit -- a real click's zoom
+    # visibly "flattens" a moment later even with no further interaction,
+    # most noticeably by the time a SECOND click (e.g. a double-click)
+    # lands. Range1d has no such auto-fit: once set, a value sticks until
+    # something else (a pan, or the code below) changes it again.
     detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
                          min_border_left=DETAIL_FRAME_LEFT,
+                         x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
                          title="Click any chromosome wedge on the left to zoom in.",
                          tools="pan,wheel_zoom,reset",
                          output_backend="svg")
@@ -2489,17 +2502,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     point_policy='follow_mouse'))
     detail_fig.add_tools(HoverTool(renderers=[detail_gap_renderer], tooltips="@label{safe}",
                                     point_policy='follow_mouse'))
-    # double-click to reset -- unlike the ring/dotplot above, this panel's
-    # range is rewritten on every click (see SYN.applyDetail), so the reset
-    # target has to be whatever SYN.applyDetail most recently stashed in
-    # SYN.state.detailRange rather than a value fixed at page load; a no-op
-    # before the first click, when there's nothing to reset to yet
-    detail_fig.js_on_event(DoubleTap, CustomJS(args=dict(fig=detail_fig), code="""
+    # Double-click AND the toolbar's own Reset button both need this: unlike
+    # the ring/dotplot above, this panel's range is rewritten on every click
+    # (see SYN.applyDetail), so the reset target has to be whatever
+    # SYN.applyDetail most recently stashed in SYN.state.detailRange rather
+    # than a value fixed at page load; a no-op before the first click, when
+    # there's nothing to reset to yet. Reset also has to correct Bokeh's own
+    # built-in reset behavior back to detailRange for the same reason the
+    # dotplot's own Reset handler does (see that one's comment) -- the
+    # figure's x_range/y_range=Range1d(-1, 1) above is only a placeholder.
+    detail_reset_callback = CustomJS(args=dict(fig=detail_fig), code="""
         const r = SYN.state.detailRange;
         if (!r) { return; }
         fig.x_range.start = r.x0; fig.x_range.end = r.x1;
         fig.y_range.start = r.y0; fig.y_range.end = r.y1;
-    """))
+    """)
+    detail_fig.js_on_event(DoubleTap, detail_reset_callback)
+    detail_fig.js_on_event(Reset, detail_reset_callback)
 
     # default to the actual input file name/accession (query_subtitle/
     # subject_subtitle -- see --query_subtitle/--subject_subtitle) rather
