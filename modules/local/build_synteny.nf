@@ -152,7 +152,7 @@ workflow BUILD_SYNTENY {
     reference_chrom_sizes
     proteome                // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
     min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
-    max_gap                 // max gene-rank step between consecutive chain members
+    max_gap                 // max rank step between consecutive chain members
     min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
     input_sources           // tuple(query source, query species, subject source, subject species,
                             //       proteome source, proteome species) -- for the stats panel

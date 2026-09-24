@@ -1578,7 +1578,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
-    let stats = `${l.score} genes (distinct loci)  ·  orientation=${l.orientation}`;
+    let stats = `${l.score} anchors (distinct loci)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
         && l.anchor_density !== null && l.anchor_density !== undefined) {
         stats += `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
@@ -2567,11 +2567,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                         "residues are identical or similar (miniprot's Positive score). Starts "
                                         "at the weaker genome's average best-hit identity, kept within 30-90%. "
                                         "Lower it for distant species; raise it to cut noise from paralogs."))
-    max_gap_spinner = Spinner(title="Max gap (genes)", low=1, high=100, step=1,
+    max_gap_spinner = Spinner(title="Max gap (anchors)", low=1, high=100, step=1,
                                value=max_gap, width=TOP_CONTROL_WIDTH,
                                description=help_tip(
-                                   "The most genes a block may skip between two consecutive matched "
-                                   "genes, on either genome. Counted in genes, not base pairs, so it means "
+                                   "The most anchors a block may skip between two consecutive matched "
+                                   "anchors, on either genome. Counted in anchors, not base pairs, so it means "
                                    "the same in a compact genome and a huge one. Larger values will join "
                                    "fragmented blocks; smaller values will split blocks at small rearrangements."))
     HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
@@ -2591,7 +2591,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
                                  step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
-                                     "The minimum number of genes for a syntenic block to be drawn."))
+                                     "The minimum number of anchors for a syntenic block to be drawn."))
     # One-line status ("N block(s) · X ms"), refreshed by every
     # SYN.applyChainResult -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
@@ -2727,7 +2727,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     order_help = HelpButton(tooltip=help_tip(
         "Reorders both dotplot axes so chromosomes that share blocks sit next to each other, which "
         "turns the synteny into a diagonal. Each chromosome is placed at the average position of its "
-        "blocks along the other axis, weighted by their gene counts, so two chromosomes matching "
+        "blocks along the other axis, weighted by their anchor counts, so two chromosomes matching "
         "opposite ends of the same partner keep the diagonal too. Only what is drawn counts: "
         "blocks below Min block size and sequences below Min sequence length are ignored, and chromosomes "
         "with no visible blocks go to the end. When off, the dotplot follows Order by size.",
@@ -3417,7 +3417,7 @@ def main():
                               'default (unset): SYNCHAIN.autoParams picks it client-side from the '
                               'actual hit tables')
     parser.add_argument('--max_gap', type=int, default=25,
-                         help="initial Max gap (genes) control value (bin/chain.js's PARAMETERS "
+                         help="initial Max gap (anchors) control value (bin/chain.js's PARAMETERS "
                               "header)")
     parser.add_argument('--min_block', type=int, default=None,
                          help='initial Min block size control value -- default (unset): '
