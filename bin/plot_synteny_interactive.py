@@ -3443,6 +3443,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # whatever a child happens to overflow to, see left_col's own
         # comment above) rather than by a deliberate, equal gap
         row(left_col, mid_col, right_col, spacing=5),
+        # a little breathing room between the page's left edge and everything on it
+        margin=(0, 0, 0, 10),
     )
 
     # The page is built as an explicit Document (rather than handing `layout`
