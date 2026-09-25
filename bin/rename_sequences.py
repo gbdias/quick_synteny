@@ -6,14 +6,21 @@ sequence sizes and its assembly-gap runs) in the same single pass.
 NCBI headers vary a lot: some carry an explicit chromosome/linkage-group
 label in the description, some are bare accessions with nothing informative.
 Priority order:
-  1. explicit "chromosome N" / "linkage group N" / "LGN" in the header ->
-     chrN (unlocalized/unplaced scaffolds tied to a chromosome get a
-     _u<n> suffix, matching the original awk script's convention).
-  2. mitochondrion -> chrM, chloroplast/plastid -> chrPltd.
-  3. an ID that already looks like a short, clean token (not a versioned
-     GenBank/RefSeq accession) is preserved as-is.
-  4. everything else is sorted by sequence length descending and assigned
-     scafN in that order.
+  1. explicit "chromosome N" / "linkage group N" / "LGN" in the header, an
+     Ensembl "chromosome:<assembly>:N:..." description, or a chromosome-style
+     ID (chr1, Chr01, chromosome_1, SUPER_1, ...) -> chrN (unlocalized/
+     unplaced scaffolds tied to a chromosome get a _u<n> suffix, matching
+     the original awk script's convention).
+  2. mitochondrion -> chrM, chloroplast/plastid -> chrPltd (by description,
+     or by an ID like chrM/MT/Pltd).
+  3. the rest is decided per GENOME, not per sequence, so one plot never
+     mixes naming styles: if every remaining ID is a short, clean token (not
+     a versioned GenBank/RefSeq accession), they are all preserved as-is;
+     otherwise they are all sorted by sequence length descending and
+     assigned scafN in that order.
+
+Every new name is unique: a name already taken gets the original ID
+appended, and scafN numbering skips any number already in use.
 
 Always writes a lookup TSV (original_id, new_id, length, type) alongside the
 size/gap tables, since the current pipeline has no other mapping and renamed
@@ -34,9 +41,22 @@ import gzip
 import re
 import sys
 
-CHROMOSOME_RE = re.compile(r'chromosome[,:]?\s+([\w.]+)', re.IGNORECASE)
+# Ensembl: ">1 dna:chromosome chromosome:GRCh38:1:1:248956422:1 REF" -- checked
+# before CHROMOSOME_RE, which would otherwise read the "dna:chromosome
+# chromosome:..." pair as a chromosome literally named "chromosome"
+ENSEMBL_CHROMOSOME_RE = re.compile(r'\bchromosome:[^:\s]+:([^:\s]+):')
+# the lookahead keeps it off a following word ("chromosome chromosome:...")
+CHROMOSOME_RE = re.compile(r'chromosome[,:]?\s+(?!chromosome\b)([\w.]+)', re.IGNORECASE)
 LINKAGE_GROUP_RE = re.compile(r'linkage\s+group[,:]?\s+([\w.]+)', re.IGNORECASE)
-LG_SHORT_RE = re.compile(r'\bLG0*(\w+)\b', re.IGNORECASE)
+# a number must follow, so LG_scaffold_12 or a word like "LGALS" isn't a
+# linkage group
+LG_SHORT_RE = re.compile(r'\bLG[_-]?0*(\d+[A-Za-z]?)\b', re.IGNORECASE)
+# the whole ID is a chromosome name: chr1, Chr01, chrom_2, chromosome_X,
+# SUPER_1 (Darwin Tree of Life), chrZ, chr2A
+CHROMOSOME_ID_RE = re.compile(r'^(?:chr|chrom|chromosome|super)[_-]?0*(\d+[A-Za-z]?|[XYZW]\d*)$',
+                              re.IGNORECASE)
+MITOCHONDRION_ID_RE = re.compile(r'^(?:chr)?(?:M|MT|mito)$', re.IGNORECASE)
+PLASTID_ID_RE = re.compile(r'^(?:chr)?(?:Pt|Pltd|cp)$', re.IGNORECASE)
 UNLOCALIZED_RE = re.compile(r'unlocalized|unplaced', re.IGNORECASE)
 MITOCHONDRION_RE = re.compile(r'mitochondri', re.IGNORECASE)
 PLASTID_RE = re.compile(r'chloroplast|plastid', re.IGNORECASE)
@@ -139,60 +159,106 @@ def scan_fasta(fasta_path):
     return records, gaps
 
 
+def _chromosome_label(token, text):
+    """(kind, label) for a chromosome token pulled out of a header -- an
+    organelle if the token itself names one (Ensembl's chromosome MT)."""
+    token = token.rstrip('.,;')
+    if MITOCHONDRION_ID_RE.match(token):
+        return ('organelle', 'chrM')
+    if PLASTID_ID_RE.match(token):
+        return ('organelle', 'chrPltd')
+    if UNLOCALIZED_RE.search(text):
+        return ('chromosome_unplaced', f"chr{token}")
+    return ('chromosome', f"chr{token}")
+
+
 def classify(seq_id, description):
-    """Return ('chromosome'|'organelle'|'preserved'|None, label) --
-    None means "no confident label, fall back to size-based scafN"."""
+    """Return ('chromosome'|'chromosome_unplaced'|'organelle', label), or
+    (None, None) when nothing in the header names the sequence -- those are
+    named per genome by assign_names() (preserved as-is or scafN)."""
     text = f"{seq_id} {description}"
 
-    m = CHROMOSOME_RE.search(text) or LINKAGE_GROUP_RE.search(text) or LG_SHORT_RE.search(text)
+    m = (ENSEMBL_CHROMOSOME_RE.search(description) or CHROMOSOME_RE.search(text)
+         or LINKAGE_GROUP_RE.search(text) or LG_SHORT_RE.search(text))
     if m:
-        token = m.group(1).rstrip('.,;')
-        label = f"chr{token}"
-        if UNLOCALIZED_RE.search(text):
-            return ('chromosome_unplaced', label)
-        return ('chromosome', label)
+        return _chromosome_label(m.group(1), text)
 
     if MITOCHONDRION_RE.search(text):
         return ('organelle', 'chrM')
     if PLASTID_RE.search(text):
         return ('organelle', 'chrPltd')
 
-    if len(seq_id) <= 15 and not ACCESSION_RE.search(seq_id):
-        return ('preserved', seq_id)
+    m = CHROMOSOME_ID_RE.match(seq_id)
+    if m:
+        return _chromosome_label(m.group(1), text)
+    if MITOCHONDRION_ID_RE.match(seq_id):
+        return ('organelle', 'chrM')
+    if PLASTID_ID_RE.match(seq_id):
+        return ('organelle', 'chrPltd')
 
     return (None, None)
 
 
+def is_clean_id(seq_id):
+    """Short enough for a plot label and not a versioned GenBank/RefSeq
+    accession."""
+    return len(seq_id) <= 15 and not ACCESSION_RE.search(seq_id)
+
+
 def assign_names(records):
-    """records: [(seq_id, description, length), ...] -> [(seq_id, new_id, length, type), ...]"""
-    assigned = []
-    unplaced_counts = {}
+    """records: [(seq_id, description, length), ...] -> [(seq_id, new_id, length, type), ...]
+    in the same order as records."""
+    seen_ids = set()
+    for seq_id, _description, _length in records:
+        if seq_id in seen_ids:
+            raise ValueError(f"duplicate sequence ID '{seq_id}' in the FASTA")
+        seen_ids.add(seq_id)
+
+    new_ids = {}
+    kinds = {}
     used_names = set()
-    fallback = []
+    unplaced_counts = {}
+    rest = []
+
+    def claim(seq_id, name, kind):
+        # a name already taken gets the original ID appended; the numeric
+        # suffix is a last resort against even that being taken
+        candidate = name
+        if candidate in used_names:
+            candidate = f"{name}_{seq_id}"
+            n = 2
+            while candidate in used_names:
+                candidate = f"{name}_{seq_id}_{n}"
+                n += 1
+        used_names.add(candidate)
+        new_ids[seq_id] = candidate
+        kinds[seq_id] = kind
 
     for seq_id, description, length in records:
         kind, label = classify(seq_id, description)
         if kind == 'chromosome_unplaced':
             unplaced_counts[label] = unplaced_counts.get(label, 0) + 1
-            new_id = f"{label}_u{unplaced_counts[label]}"
-            assigned.append((seq_id, new_id, length, 'chromosome_unplaced'))
-            used_names.add(new_id)
-        elif kind in ('chromosome', 'organelle', 'preserved'):
-            new_id = label
-            if new_id in used_names:
-                new_id = f"{new_id}_{seq_id}"
-            assigned.append((seq_id, new_id, length, kind))
-            used_names.add(new_id)
+            claim(seq_id, f"{label}_u{unplaced_counts[label]}", kind)
+        elif kind is not None:
+            claim(seq_id, label, kind)
         else:
-            fallback.append((seq_id, description, length))
+            rest.append((seq_id, length))
 
-    fallback.sort(key=lambda r: r[2], reverse=True)
-    for i, (seq_id, description, length) in enumerate(fallback, start=1):
-        new_id = f"scaf{i}"
-        assigned.append((seq_id, new_id, length, 'scaffold'))
+    # one naming style per genome: keep the original IDs only if ALL of the
+    # remaining ones are clean, otherwise scafN for every one of them
+    if all(is_clean_id(seq_id) for seq_id, _length in rest):
+        for seq_id, _length in rest:
+            claim(seq_id, seq_id, 'preserved')
+    else:
+        n = 0
+        for seq_id, _length in sorted(rest, key=lambda r: r[1], reverse=True):
+            n += 1
+            while f"scaf{n}" in used_names:
+                n += 1
+            claim(seq_id, f"scaf{n}", 'scaffold')
 
-    order = {seq_id: i for i, (seq_id, *_r) in enumerate(records)}
-    assigned.sort(key=lambda r: order[r[0]])
+    assigned = [(seq_id, new_ids[seq_id], length, kinds[seq_id]) for seq_id, _d, length in records]
+    assert len(used_names) == len(assigned), "renamed sequence IDs are not unique"
     return assigned
 
 
@@ -214,7 +280,10 @@ def main():
     if not records:
         sys.exit(f"ERROR: no sequences found in {args.fasta}")
 
-    assigned = assign_names(records)
+    try:
+        assigned = assign_names(records)
+    except ValueError as e:
+        sys.exit(f"ERROR: {e} ({args.fasta})")
     id_map = {old: new for old, new, _length, _type in assigned}
 
     with open(args.out_lookup, 'w') as f:
