@@ -1,5 +1,6 @@
 // Ranks are queried outward from species; see bin/parse_lineage.py for the
-// exact ladder order (species,genus,family,order,class,phylum).
+// exact ladder order (species outward to phylum, every intermediate taxon
+// included -- hence --parents, which adds each ancestor's own report).
 //
 // Split into two processes because the ncbi-datasets-cli biocontainers image
 // (quay.io/staphb/ncbi-datasets, used in place of quay.io/biocontainers/
@@ -20,7 +21,7 @@ process FETCH_TAXONOMY_JSON {
 
     script:
     """
-    datasets summary taxonomy taxon ${taxid} > taxonomy.json
+    datasets summary taxonomy taxon ${taxid} --parents > taxonomy.json
     """
 }
 

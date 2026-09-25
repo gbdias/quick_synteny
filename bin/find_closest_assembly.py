@@ -3,19 +3,23 @@
 
 The datasets CLI and this script deliberately run in separate containers (the
 biocontainers ncbi-datasets-cli image has no Python), so the ladder-walk is
-split in two: a process using the datasets container queries every rank up to
---max_rank and writes one JSON-lines file per rank (<rank>.jsonl, empty if no
-hits); this script then picks the first rank (species-first order) with a
-non-empty file and ranks its candidates by assembly quality.
+split in two: query_genome_ladder.sh, in the datasets container, queries the
+lineage's taxa from species outward (intermediate ranks and clades included)
+and writes one JSON-lines file per taxon (<taxid>.jsonl, empty if no hits)
+plus query_log.tsv listing the taxa it queried, in order; this script then
+picks the first of those taxa with a usable hit and ranks its candidates by
+assembly quality.
 
 Writes, in the current directory:
   <outprefix>_selection.json   chosen accession + rank + candidate count
   <outprefix>_candidates.tsv   every candidate considered at the winning rank,
                                 best first
-  <outprefix>_search_log.tsv   rank, taxid, name, hit count for every rank
-                                actually searched (including zero-hit ranks)
+  <outprefix>_search_log.tsv   rank, taxid, name, usable hit count and how the
+                                query was cut (see query_genome_ladder.sh) for
+                                every taxon actually queried (including zero-
+                                hit ones)
 
-Exits non-zero with a clear message if no rank up to --max_rank has a hit.
+Exits non-zero with a clear message if no taxon up to --max_rank has a hit.
 """
 import argparse
 import json
@@ -47,15 +51,24 @@ def sort_key(record):
 
 
 def read_lineage(path):
-    lineage = {}
+    """(rank, taxid, name) rows, nearest first -- rank isn't unique ('clade')."""
+    lineage = []
     with open(path) as f:
         for line in f:
             line = line.rstrip('\n')
             if not line:
                 continue
             rank, taxid, name = line.split('\t', 2)
-            lineage[rank] = (taxid, name)
+            lineage.append((rank, taxid, name))
     return lineage
+
+
+def read_query_log(path):
+    """(rank, taxid, name, query mode) for every taxon queried, in order."""
+    with open(path) as f:
+        next(f)
+        return [tuple(line.rstrip('\n').split('\t')[i] for i in (0, 1, 2, 4))
+                for line in f if line.strip()]
 
 
 def read_jsonl(path):
@@ -79,8 +92,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--lineage', required=True)
     parser.add_argument('--max_rank', required=True, choices=RANKS)
-    parser.add_argument('--jsonl_dir', default='.',
-                         help='directory containing <rank>.jsonl files from the ladder query')
+    parser.add_argument('--ladder_dir', default='ladder',
+                         help='directory query_genome_ladder.sh wrote <taxid>.jsonl, '
+                              'preferred.jsonl and query_log.tsv into')
     parser.add_argument('--outprefix', required=True)
     parser.add_argument('--exclude_target', action='store_true',
                          help="exclude every candidate of the target's own species outright, "
@@ -99,16 +113,20 @@ def main():
                               "same-species candidate is still individually held to chromosome "
                               "level -- see --exclude_target -- but a DIFFERENT-species one is not.")
     parser.add_argument('--prefer_taxid', default='',
-                         help="species taxid to prefer: if any kept candidate at any searched rank "
-                              "is of this species, the best of those wins over the usual ranking. "
-                              "Proteome discovery passes the chosen reference genome's species, so "
-                              "the proteome comes from the reference species whenever it has an "
-                              "annotated assembly -- the ranking below knows assembly quality, "
-                              "not relatedness.")
+                         help="species taxid to prefer: if it has any kept candidate "
+                              "(preferred.jsonl, queried on its own), the best of those wins over "
+                              "the usual ranking. Proteome discovery passes the chosen reference "
+                              "genome's species, so the proteome comes from the reference species "
+                              "whenever it has an annotated assembly -- the ranking below knows "
+                              "assembly quality, not relatedness.")
+    parser.add_argument('--prefer_rank_taxid', default='',
+                         help="the lineage taxon --prefer_taxid's species joins the target's "
+                              "lineage at (the reference selection's own taxid), reported as the "
+                              "rank of a preferred pick")
     args = parser.parse_args()
 
     lineage = read_lineage(args.lineage)
-    ladder = RANKS[:RANKS.index(args.max_rank) + 1]
+    ladder = read_query_log(os.path.join(args.ladder_dir, 'query_log.tsv'))
     # 'species' in the lineage file is, by construction, the taxon the whole
     # search started from -- i.e. the target's own species -- not merely "a"
     # species. A same-species candidate is real, useful data in general (a
@@ -123,7 +141,7 @@ def main():
     # regardless of quality. Applied at every rank a same-species record
     # could in principle appear at, not just species -- there's no
     # structural guarantee it can't.
-    target_taxid = lineage.get('species', (None, None))[0]
+    target_taxid = next((taxid for rank, taxid, _ in lineage if rank == 'species'), None)
 
     def keep(r):
         # explicit and self-contained here, rather than relying solely on
@@ -147,42 +165,41 @@ def main():
     candidates = []
     kept_by_rank = []
 
-    for rank in ladder:
-        if rank not in lineage:
-            continue
-        taxid, name = lineage[rank]
-        records = read_jsonl(os.path.join(args.jsonl_dir, f"{rank}.jsonl"))
+    for rank, taxid, name, mode in ladder:
+        records = read_jsonl(os.path.join(args.ladder_dir, f"{taxid}.jsonl"))
         records = [r for r in records if keep(r)]
-        search_log.append((rank, taxid, name, len(records)))
-        kept_by_rank.append((rank, taxid, name, records))
+        search_log.append((rank, taxid, name, len(records), mode))
+        kept_by_rank.append((taxid, records))
         if records and not candidates:
             chosen_rank, chosen_taxid, chosen_name = rank, taxid, name
             candidates = sorted(records, key=sort_key, reverse=True)
 
-    # a candidate of the preferred species, from the first (lowest) rank that
-    # has one, beats the ranking above -- listed first, then that rank's rest
+    # a candidate of the preferred species beats the ranking above -- listed
+    # first, then the rest of the rank it joins the lineage at, if queried
     preferred = False
     if args.prefer_taxid:
-        for rank, taxid, name, records in kept_by_rank:
-            match = [r for r in records if str(r.get('organism', {}).get('tax_id', '')) == str(args.prefer_taxid)]
-            if match:
-                match = sorted(match, key=sort_key, reverse=True)
-                rest = [r for r in sorted(records, key=sort_key, reverse=True) if r not in match]
-                chosen_rank, chosen_taxid, chosen_name = rank, taxid, name
-                candidates = match + rest
-                preferred = True
-                break
+        match = [r for r in read_jsonl(os.path.join(args.ladder_dir, 'preferred.jsonl'))
+                 if keep(r) and str(r.get('organism', {}).get('tax_id', '')) == str(args.prefer_taxid)]
+        if match:
+            match = sorted(match, key=sort_key, reverse=True)
+            chosen_rank, chosen_taxid, chosen_name = next(
+                (row for row in lineage if row[1] == str(args.prefer_rank_taxid)), ('', '', ''))
+            match_ids = {r['accession'] for r in match}
+            rest = next((records for taxid, records in kept_by_rank if taxid == chosen_taxid), [])
+            rest = [r for r in sorted(rest, key=sort_key, reverse=True) if r['accession'] not in match_ids]
+            candidates = match + rest
+            preferred = True
 
     with open(f"{args.outprefix}_search_log.tsv", 'w') as f:
-        f.write("rank\ttaxid\tname\thits\n")
-        for rank, taxid, name, hits in search_log:
-            f.write(f"{rank}\t{taxid}\t{name}\t{hits}\n")
+        f.write("rank\ttaxid\tname\thits\tquery\n")
+        for rank, taxid, name, hits, mode in search_log:
+            f.write(f"{rank}\t{taxid}\t{name}\t{hits}\t{mode}\n")
 
     if not candidates:
         sys.exit(
             f"ERROR: no genome assembly found for {args.outprefix} up to "
             f"rank '{args.max_rank}' (searched: "
-            f"{','.join(r for r, *_ in search_log)}). "
+            f"{', '.join(f'{r} {n}' for r, _, n, *_ in search_log)}). "
             f"Re-run with a higher --max_rank to climb further."
         )
 
