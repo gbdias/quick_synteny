@@ -18,8 +18,18 @@ process DOWNLOAD_GENOME {
 
     script:
     """
-    datasets download genome accession ${accession} --include genome --no-progressbar --filename dl.zip
+    # dehydrated: the zip holds only a manifest; rehydrate then fetches the
+    # sequence files as separate requests. NCBI drops long single-stream
+    # downloads now and then (HTTP/2 stream resets), and a rerun of
+    # rehydrate only fetches what is still missing, so retry that step
+    datasets download genome accession ${accession} --include genome --dehydrated --no-progressbar --filename dl.zip
     unzip -q dl.zip
+    n=0
+    until datasets rehydrate --directory . --no-progressbar; do
+        n=\$((n + 1))
+        if [ \$n -ge 3 ]; then exit 1; fi
+        sleep \$((n * 60))
+    done
     mv ncbi_dataset/data/${accession}/*_genomic.fna genome.fna
     """
 }
@@ -37,8 +47,18 @@ process DOWNLOAD_PROTEIN {
 
     script:
     """
-    datasets download genome accession ${accession} --include protein --no-progressbar --filename dl.zip
+    # dehydrated: the zip holds only a manifest; rehydrate then fetches the
+    # sequence files as separate requests. NCBI drops long single-stream
+    # downloads now and then (HTTP/2 stream resets), and a rerun of
+    # rehydrate only fetches what is still missing, so retry that step
+    datasets download genome accession ${accession} --include protein --dehydrated --no-progressbar --filename dl.zip
     unzip -q dl.zip
+    n=0
+    until datasets rehydrate --directory . --no-progressbar; do
+        n=\$((n + 1))
+        if [ \$n -ge 3 ]; then exit 1; fi
+        sleep \$((n * 60))
+    done
     mv ncbi_dataset/data/${accession}/protein.faa protein.faa
     """
 }
