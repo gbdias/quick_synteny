@@ -6,7 +6,7 @@ include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly
 include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
 include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
 include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
-include { MINIPROT_ALIGN; RENAME_GFF; SPLIT_GENOME; MINIPROT_ALIGN_CHUNK; MERGE_MINIPROT_GFF } from './modules/local/miniprot_align.nf'
+include { MINIPROT_INDEX; MINIPROT_ALIGN; RENAME_GFF; SPLIT_GENOME; MINIPROT_ALIGN_CHUNK; MERGE_MINIPROT_GFF } from './modules/local/miniprot_align.nf'
 include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
 include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
 
@@ -295,8 +295,9 @@ workflow {
         }
         raw_gff = MERGE_MINIPROT_GFF(grouped_gff).gff
     } else {
-        align_in = genomes_in.combine(proteome_fasta)
-        raw_gff = MINIPROT_ALIGN(align_in, miniprot_m).gff
+        genome_index = MINIPROT_INDEX(genomes_in, miniprot_m).index
+        align_in = genome_index.combine(proteome_fasta)
+        raw_gff = MINIPROT_ALIGN(align_in).gff
     }
 
     gff = RENAME_GFF(raw_gff.join(renamed.lookup)).gff

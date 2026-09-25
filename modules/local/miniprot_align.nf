@@ -1,5 +1,6 @@
 // Generic (genome, proteome) -> gff aligner, called twice from main.nf
-// (target, reference) rather than as two separate modules.
+// (target, reference) rather than as two separate modules: MINIPROT_INDEX
+// indexes the genome, then MINIPROT_ALIGN aligns the proteome against it.
 //
 // --outs/-N are loosened from miniprot's stock defaults (0.99 / 30) so
 // secondary alignments -- a protein's OTHER hits, at a lower score than its
@@ -8,22 +9,47 @@
 // so this alignment doubles as the "ortholog search" a separate aligner
 // would otherwise be needed for.
 //
-// A single miniprot invocation, indexing the genome on the fly instead of
-// with a separate `-d` step: the old two-call form (`-d` to build a .mpi
-// index file, then align against it) wrote that index to disk only to read
-// it straight back for the one alignment that ever uses it -- on axolotl,
-// 72 GB written and 100 GB read for no benefit. All indexing options
-// (including -M) still apply here; miniprot accepts them on the alignment
-// line and builds the index in memory before aligning.
+// Indexing is its own task so it can run on one thread while the alignment
+// runs on many. miniprot's index builder gives each thread a sequence strand
+// to decode into a buffer of its own and collect k-mers from (build_worker
+// in miniprot's index.c), so the build's peak RAM grows by a decoded
+// chromosome strand plus its k-mers per thread -- 1 thread instead of 8 cut
+// it by 36% on TAIR10 -- while the index itself is byte-identical at any
+// thread count. The price is a disk round trip for the index (72 GB on
+// axolotl) that indexing on the fly inside the alignment call would avoid.
 //
-// Runs on the ORIGINAL genome fasta, not a renamed copy (RENAME_SEQUENCES
-// no longer produces one -- see that module and rename_sequences.py), so
-// the GFF this emits still carries the genome's original sequence names;
-// RENAME_GFF swaps those for the renamed IDs right after.
+// MINIPROT_INDEX reads the ORIGINAL genome fasta, not a renamed copy
+// (RENAME_SEQUENCES no longer produces one -- see that module and
+// rename_sequences.py), so the GFF MINIPROT_ALIGN emits still carries the
+// genome's original sequence names; RENAME_GFF swaps those for the renamed
+// IDs right after.
 //
 // -M (miniprot_m, optional) trades sensitivity for RAM: it samples 1/2^M of
-// genomic k-mers when building the index. Unset by default (miniprot's own
-// default applies); see main.nf --miniprot_m.
+// genomic k-mers when building the index, so it belongs on the -d line --
+// the sampling is baked into the index, and miniprot ignores -M when
+// aligning against a prebuilt one. Unset by default (miniprot's own default
+// applies); see main.nf --miniprot_m.
+
+// process_high supplies memory and time; cpus is pinned to 1 in
+// nextflow.config.
+process MINIPROT_INDEX {
+    tag "${name}"
+    label 'process_high'
+    container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
+
+    input:
+    tuple val(name), path(genome_fasta)
+    val miniprot_m   // '' keeps miniprot's own default; otherwise an int k-mer sampling exponent
+
+    output:
+    tuple val(name), path("${name}.mpi"), emit: index
+
+    script:
+    def mFlag = miniprot_m ? "-M ${miniprot_m}" : ''
+    """
+    miniprot -t ${task.cpus} ${mFlag} -d ${name}.mpi ${genome_fasta}
+    """
+}
 
 process MINIPROT_ALIGN {
     tag "${name}"
@@ -31,16 +57,14 @@ process MINIPROT_ALIGN {
     container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
 
     input:
-    tuple val(name), path(genome_fasta), path(proteome_faa)
-    val miniprot_m   // '' keeps miniprot's own default; otherwise an int k-mer sampling exponent
+    tuple val(name), path(genome_index), path(proteome_faa)
 
     output:
     tuple val(name), path("${name}.raw.gff"), emit: gff
 
     script:
-    def mFlag = miniprot_m ? "-M ${miniprot_m}" : ''
     """
-    miniprot -t ${task.cpus} ${mFlag} -I -N 5 --outs=0.7 --gff ${genome_fasta} ${proteome_faa} > ${name}.raw.gff
+    miniprot -t ${task.cpus} -I -N 5 --outs=0.7 --gff ${genome_index} ${proteome_faa} > ${name}.raw.gff
     """
 }
 
