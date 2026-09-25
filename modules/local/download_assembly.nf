@@ -27,7 +27,7 @@ process DOWNLOAD_GENOME {
     n=0
     until datasets rehydrate --directory . --no-progressbar; do
         n=\$((n + 1))
-        if [ \$n -ge 3 ]; then exit 1; fi
+        if [ \$n -gt 3 ]; then exit 1; fi
         sleep \$((n * 60))
     done
     mv ncbi_dataset/data/${accession}/*_genomic.fna genome.fna
