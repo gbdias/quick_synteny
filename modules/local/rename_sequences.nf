@@ -3,9 +3,9 @@
 // size table and the assembly-gap table that used to each cost a separate
 // full read (faSize, then a per-character Python gap scan -- see
 // rename_sequences.py's docstring). No renamed FASTA is written at all:
-// MINIPROT_ALIGN runs on the original genome_fasta, and RENAME_GFF renames
-// its output GFF's seqid column afterwards using the lookup this process
-// emits.
+// MINIPROT_INDEX indexes the original genome_fasta, and RENAME_GFF renames
+// the seqid column of MINIPROT_ALIGN's GFF afterwards using the lookup this
+// process emits.
 process RENAME_SEQUENCES {
     tag "${name}"
     label 'process_low'

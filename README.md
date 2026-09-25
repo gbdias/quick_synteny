@@ -140,7 +140,11 @@ dotplot. Gaps are found once per genome, from the same renamed sequences
 run's gap TSVs are published to `pipeline_info/*.gaps.tsv`.
 
 Hover any wedge, band, or ribbon for its coordinates, protein-alignment
-(anchor) count, mean identity, and anchor density. A color-palette dropdown
+(anchor) count, mean identity, and anchor density. Sequences are shown
+under short plot names (`chr1`, `chrM`, `scaf12`, ...); an "Original
+names" switch (under Display) relabels every panel, tooltip and the blocks
+TSV download with each sequence's own FASTA ID instead. The full mapping is
+published to `pipeline_info/*.rename_lookup.tsv`. A color-palette dropdown
 and a numeric spinner recolor reference-genome chromosomes (a few curated
 palettes, cycling through 1-10 discrete colors instead of one color per
 chromosome); another spinner filters every panel down to blocks with at

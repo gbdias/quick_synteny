@@ -80,6 +80,8 @@ process RENDER_SYNTENY_INTERACTIVE {
     val reference_subtitle  // ditto, for the reference label
     path target_gaps         // RENAME_SEQUENCES gaps output -- always a real file (unconditional)
     path reference_gaps     // ditto
+    path target_lookup       // RENAME_SEQUENCES lookup -- original sequence IDs for the ideogram hovers
+    path reference_lookup   // ditto
 
     output:
     path "${target_name}.${reference_name}.synteny.interactive.html"
@@ -97,6 +99,7 @@ process RENDER_SYNTENY_INTERACTIVE {
         --stats ${stats} \\
         --query_subtitle "${target_subtitle}" --subject_subtitle "${reference_subtitle}" \\
         --target_gaps ${target_gaps} --reference_gaps ${reference_gaps} \\
+        --target_lookup ${target_lookup} --reference_lookup ${reference_lookup} \\
         --out_prefix ${target_name}.${reference_name}.synteny
     """
 }
@@ -114,6 +117,8 @@ workflow PYGENOMEVIZ_PLOT {
     reference_subtitle    // val -- reference genome's input file name/accession, ditto
     target_gaps            // tuple(name, path gaps.tsv) -- RENAME_SEQUENCES gaps output
     reference_gaps
+    target_lookup          // tuple(name, path rename_lookup.tsv) -- RENAME_SEQUENCES lookup output
+    reference_lookup
 
     main:
     hits_by_role = hits.branch {
@@ -131,5 +136,7 @@ workflow PYGENOMEVIZ_PLOT {
         target_subtitle, reference_subtitle,
         target_gaps.map { it[1] },
         reference_gaps.map { it[1] },
+        target_lookup.map { it[1] },
+        reference_lookup.map { it[1] },
     )
 }
