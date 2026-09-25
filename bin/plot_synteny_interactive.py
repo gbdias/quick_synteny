@@ -3420,8 +3420,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # drawn (pure filters), and how everything looks. A small section title
     # over each group; a divider on each group's leading edge except the
     # first in its row.
+    # margin-left clears the "?" icon of the group to its left, which can run
+    # past its input's width when the title is long ("Min sequence length
+    # (Mb)")
     def control_group(title, *children, divider=True):
-        css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:4px;}'
+        css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:14px;}'
                if divider else '')
         header = Div(text=f"<span style='font-size:11px;font-weight:600;letter-spacing:.06em;"
                           f"text-transform:uppercase;color:#777'>{title}</span>",
