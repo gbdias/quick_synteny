@@ -302,6 +302,24 @@ def read_chrom_sizes(path):
     return chroms
 
 
+def read_original_names(path, sizes):
+    """bin/rename_sequences.py's --out_lookup output (original_id, new_id,
+    length, type; one header line) -> {new_id: original_id}, for the
+    chromosomes in `sizes` whose name actually changed. {} for path=None."""
+    if not path:
+        return {}
+    names = {}
+    with open(path) as f:
+        next(f, None)  # header
+        for line in f:
+            if not line.strip():
+                continue
+            original_id, new_id = line.rstrip('\n').split('\t')[:2]
+            if new_id in sizes and new_id != original_id:
+                names[new_id] = original_id
+    return names
+
+
 def read_gaps(path):
     """bin/rename_sequences.py's --out_gaps output: chrom, start, end -- no
     header, 0-based half-open. Returns [] for path=None (no --target_gaps/
@@ -443,7 +461,8 @@ def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names
 
 
 class Dataset:
-    def __init__(self, query_chrom_sizes, subject_chrom_sizes, query_gaps_path=None, subject_gaps_path=None):
+    def __init__(self, query_chrom_sizes, subject_chrom_sizes, query_gaps_path=None, subject_gaps_path=None,
+                 query_lookup_path=None, subject_lookup_path=None):
         # RENAME_SEQUENCES emits natural (FASTA) order now, not size order
         # (see main.nf's own comment) -- self.query_chroms/subject_chroms
         # stay the name used everywhere below (dotplot layout, color
@@ -469,6 +488,9 @@ class Dataset:
         self.query_gaps = [g for g in read_gaps(query_gaps_path) if g['chrom'] in self.query_sizes]
         self.subject_gaps = [g for g in read_gaps(subject_gaps_path) if g['chrom'] in self.subject_sizes]
 
+        self.query_original_names = read_original_names(query_lookup_path, self.query_sizes)
+        self.subject_original_names = read_original_names(subject_lookup_path, self.subject_sizes)
+
 
 def group_gaps_by_chrom(gaps):
     """{chrom: [{start, end}, ...]} -- the form the ring, the zoom panel, and
@@ -490,8 +512,9 @@ def build_overview_sources():
     doc.js_on_event(DocumentReady, ...)) fills all four via
     SYN.applyRingLayout as soon as the page's document is ready, through the
     exact same function every later reorder/filter/recolor reuses."""
-    q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[]))
-    s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[]))
+    q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], display_name=[]))
+    s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[],
+                                  display_name=[]))
     r_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[], palette_index=[],
                                   q_chrom=[], s_chrom=[], key=[]))
     # self-links (homeologs) on their own renderer, styled apart from the
@@ -511,8 +534,9 @@ def build_dotplot_sources():
     figure's actual x_range/y_range (see build_page()'s placeholder
     Range1ds) -- there is no longer an invisible grid-cell hit layer here at
     all (see SYN.dpCellAt, which hit-tests by binary search instead)."""
-    dp_q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[]))
-    dp_s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[]))
+    dp_q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], display_name=[]))
+    dp_s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[],
+                                  display_name=[]))
     dp_seg_src = ColumnDataSource(dict(xs=[], ys=[], line_color=[], alpha=[], label=[], palette_index=[],
                                        q_chrom=[], s_chrom=[], key=[]))
     dp_grid_src = ColumnDataSource(dict(xs=[], ys=[]))
@@ -577,6 +601,10 @@ SYN.state = {
     // default (see build_page()) -- kept in sync deliberately, same as
     // every other default-state pair in this file.
     showGaps: false,
+    // the "Original names" switch -- every label and tooltip shows each
+    // chromosome's own FASTA ID instead of its short plot name (see
+    // SYN.displayName). Display only: names stay the keys everywhere else.
+    originalNames: false,
     // bp floor read by SYN.filterBySize -- chromosomes shorter than this are
     // dropped from every panel (see min_seq_size_spinner in build_page()).
     // 0 by default: --min_seq_size already dropped anything smaller than the
@@ -930,6 +958,18 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
     return ribbons;
 };
 
+// What a chromosome is called on screen: its short plot name, or -- with
+// the "Original names" switch on -- the genome's own FASTA ID.
+// SYN.data.*OriginalNames only lists the names RENAME_SEQUENCES actually
+// changed, so anything missing kept its own. Every label, title and tooltip
+// goes through this; selection, links and hit-testing keep using the plot
+// names, so the switch never changes what anything IS, only what it says.
+SYN.displayName = function(genome, name) {
+    if (!SYN.state.originalNames) { return name; }
+    const names = genome === 'target' ? SYN.data.targetOriginalNames : SYN.data.referenceOriginalNames;
+    return names[name] || name;
+};
+
 SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
     const groupGap = SYN.data.groupGap;
     const subjectOffsets = SYN.computeCircularOffsets(
@@ -937,17 +977,18 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
     const queryOffsets = SYN.computeCircularOffsets(
         queryOrder, SYN.data.querySizes, Math.PI + groupGap, 2 * Math.PI - groupGap);
 
-    const q = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: []};
+    const q = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], display_name: []};
     for (const name of queryOrder) {
         const [a0, a1] = queryOffsets[name];
         const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
         q.xs.push(poly.xs); q.ys.push(poly.ys);
         q.fill_color.push(SYN.data.targetGrey); q.name.push(name);
         q.size_label.push(`${(SYN.data.querySizes[name] / 1e6).toFixed(2)} Mb`);
-        q.group.push('target');
+        q.group.push('target'); q.display_name.push(SYN.displayName('target', name));
     }
 
-    const s = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], palette_index: []};
+    const s = {xs: [], ys: [], fill_color: [], name: [], size_label: [], group: [], palette_index: [],
+               display_name: []};
     for (const name of subjectOrder) {
         const [a0, a1] = subjectOffsets[name];
         const poly = SYN.wedgePolygonJS(a0, a1, SYN.data.innerR, SYN.data.outerR);
@@ -957,22 +998,24 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         s.name.push(name);
         s.size_label.push(`${(SYN.data.subjectSizes[name] / 1e6).toFixed(2)} Mb`);
         s.group.push('reference'); s.palette_index.push(pIdx);
+        s.display_name.push(SYN.displayName('reference', name));
     }
 
     // wedges narrower than ringLabelMinAngle go unlabelled (see
     // RING_LABEL_MIN_ANGLE's Python comment)
     const labelR = SYN.data.outerR + 0.14;
     const label = {x: [], y: [], text: []};
-    const addLabels = (order, offsets) => {
+    const addLabels = (order, offsets, genome) => {
         for (const name of order) {
             const [a0, a1] = offsets[name];
             if (Math.abs(a1 - a0) < SYN.data.ringLabelMinAngle) { continue; }
             const mid = (a0 + a1) / 2;
-            label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid)); label.text.push(name);
+            label.x.push(labelR * Math.cos(mid)); label.y.push(labelR * Math.sin(mid));
+            label.text.push(SYN.displayName(genome, name));
         }
     };
-    addLabels(queryOrder, queryOffsets);
-    addLabels(subjectOrder, subjectOffsets);
+    addLabels(queryOrder, queryOffsets, 'target');
+    addLabels(subjectOrder, subjectOffsets, 'reference');
 
     const ribbons = SYN.buildRibbonRecords(queryOffsets, subjectOffsets);
 
@@ -1013,7 +1056,7 @@ SYN.buildGapRecords = function(queryOffsets, subjectOffsets, nSegments) {
             const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.querySizes, queryOffsets);
             const [lo, hi] = SYN.widenGapAngle(a0, a1);
             const poly = SYN.wedgePolygonJS(lo, hi, SYN.data.innerR, SYN.data.outerR, nSegments);
-            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel(chrom, g.start, g.end)});
+            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel('target', chrom, g.start, g.end)});
         }
     }
     for (const chrom in SYN.data.referenceGapsByChrom) {
@@ -1023,7 +1066,7 @@ SYN.buildGapRecords = function(queryOffsets, subjectOffsets, nSegments) {
             const a1 = SYN.bpToAngleJS(chrom, g.end, SYN.data.subjectSizes, subjectOffsets);
             const [lo, hi] = SYN.widenGapAngle(a0, a1);
             const poly = SYN.wedgePolygonJS(lo, hi, SYN.data.innerR, SYN.data.outerR, nSegments);
-            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel(chrom, g.start, g.end)});
+            gaps.push({xs: poly.xs, ys: poly.ys, label: SYN.formatGapLabel('reference', chrom, g.start, g.end)});
         }
     }
     return gaps;
@@ -1277,18 +1320,19 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
     const queryOffsets = SYN.computeOffsets(queryOrder, SYN.data.querySizes);
     const subjectOffsets = SYN.computeOffsets(subjectOrder, SYN.data.subjectSizes);
 
-    const qXs = [], qYs = [], qName = [], qSize = [], qGroup = [];
+    const qXs = [], qYs = [], qName = [], qSize = [], qGroup = [], qDisplay = [];
     for (const name of queryOrder) {
         const size = SYN.data.querySizes[name], x0 = queryOffsets[name];
         qXs.push([x0, x0 + size, x0 + size, x0]); qYs.push([-ry, -ry, 0, 0]);
         qName.push(name); qSize.push((size / 1e6).toFixed(2) + ' Mb'); qGroup.push('target');
+        qDisplay.push(SYN.displayName('target', name));
     }
-    const sXs = [], sYs = [], sName = [], sSize = [], sGroup = [], sIdx = [];
+    const sXs = [], sYs = [], sName = [], sSize = [], sGroup = [], sIdx = [], sDisplay = [];
     for (const name of subjectOrder) {
         const size = SYN.data.subjectSizes[name], y0 = subjectOffsets[name];
         sXs.push([-rx, -rx, 0, 0]); sYs.push([y0, y0 + size, y0 + size, y0]);
         sName.push(name); sSize.push((size / 1e6).toFixed(2) + ' Mb'); sGroup.push('reference');
-        sIdx.push(SYN.data.subjectColorIndex[name]);
+        sIdx.push(SYN.data.subjectColorIndex[name]); sDisplay.push(SYN.displayName('reference', name));
     }
 
     const gridXs = [], gridYs = [];
@@ -1316,20 +1360,21 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
     const qLabelX = [], qLabelY = [], qLabelText = [];
     for (const name of queryOrder) {
         const size = SYN.data.querySizes[name], x0 = queryOffsets[name];
-        qLabelX.push(x0 + size / 2); qLabelY.push(-ry * 1.7); qLabelText.push(name);
+        qLabelX.push(x0 + size / 2); qLabelY.push(-ry * 1.7); qLabelText.push(SYN.displayName('target', name));
     }
     const sLabelX = [], sLabelY = [], sLabelText = [];
     for (const name of subjectOrder) {
         const size = SYN.data.subjectSizes[name], y0 = subjectOffsets[name];
-        sLabelX.push(-rx * 1.7); sLabelY.push(y0 + size / 2); sLabelText.push(name);
+        sLabelX.push(-rx * 1.7); sLabelY.push(y0 + size / 2); sLabelText.push(SYN.displayName('reference', name));
     }
 
     return {
         queryOffsets, subjectOffsets, totalX, totalY, rx, ry,
         queryRuler: {xs: qXs, ys: qYs, fill_color: queryOrder.map(() => SYN.data.targetGrey),
-                     name: qName, size_label: qSize, group: qGroup},
+                     name: qName, size_label: qSize, group: qGroup, display_name: qDisplay},
         subjectRuler: {xs: sXs, ys: sYs, fill_color: sIdx.map((idx) => SYN.paletteColor(idx, k)),
-                       name: sName, size_label: sSize, group: sGroup, palette_index: sIdx},
+                       name: sName, size_label: sSize, group: sGroup, palette_index: sIdx,
+                       display_name: sDisplay},
         grid: {xs: gridXs, ys: gridYs},
         queryLabels: {x: qLabelX, y: qLabelY, text: qLabelText},
         subjectLabels: {x: sLabelX, y: sLabelY, text: sLabelText},
@@ -1371,7 +1416,12 @@ SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources)
         // like "chr13" down to "13"/"hr13"; *3 leaves every label fully
         // visible with a little room to spare while still keeping the dead
         // margin well under half of what a much larger multiplier would waste.
-        sources.fig.x_range.start = -layout.rx * 3; sources.fig.x_range.end = layout.totalX * 1.02;
+        // Longer names (the "Original names" switch -- accessions are often
+        // 10+ characters) get proportionally more room, at the same ~0.26
+        // rx per character that *3 works out to for those 5 characters.
+        const longest = layout.subjectLabels.text.reduce((m, t) => Math.max(m, t.length), 0);
+        const xMargin = Math.max(3, 1.7 + 0.28 * longest);
+        sources.fig.x_range.start = -layout.rx * xMargin; sources.fig.x_range.end = layout.totalX * 1.02;
         sources.fig.y_range.start = -layout.ry * 3; sources.fig.y_range.end = layout.totalY * 1.02;
     }
     SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, sources.segment);
@@ -1434,7 +1484,7 @@ SYN.buildDotplotGapLines = function() {
         for (const g of SYN.data.targetGapsByChrom[chrom]) {
             const mid = SYN.state.dpQueryOffsets[chrom] + (g.start + g.end) / 2;
             xs.push([mid, mid]); ys.push([-ry, totalY]);
-            label.push(SYN.formatGapLabel(chrom, g.start, g.end));
+            label.push(SYN.formatGapLabel('target', chrom, g.start, g.end));
         }
     }
     for (const chrom in SYN.data.referenceGapsByChrom) {
@@ -1442,7 +1492,7 @@ SYN.buildDotplotGapLines = function() {
         for (const g of SYN.data.referenceGapsByChrom[chrom]) {
             const mid = SYN.state.dpSubjectOffsets[chrom] + (g.start + g.end) / 2;
             xs.push([-rx, totalX]); ys.push([mid, mid]);
-            label.push(SYN.formatGapLabel(chrom, g.start, g.end));
+            label.push(SYN.formatGapLabel('reference', chrom, g.start, g.end));
         }
     }
     return {xs, ys, label};
@@ -1531,17 +1581,17 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
             const [gs, ge] = SYN.widenGapBp(g.start, g.end, refSpan);
             gapXs.push([x0 + gs, x0 + ge, x0 + ge, x0 + gs]);
             gapYs.push([rowY, rowY, rowY + barH, rowY + barH]);
-            gapLabel.push(SYN.formatGapLabel(name, g.start, g.end));
+            gapLabel.push(SYN.formatGapLabel(role, name, g.start, g.end));
         }
     };
 
     if (links.length === 0) {
-        const d = SYN.emptyDetail(`${pivotName} · no blocks`);
+        const d = SYN.emptyDetail(`${SYN.displayName(pivotRole, pivotName)} · no blocks`);
         d.empty = false;
         d.bars = {xs: [[0, pivotSize, pivotSize, 0]],
                   ys: [[pivotRowY, pivotRowY, pivotRowY + barH, pivotRowY + barH]],
                   fill_color: [pivotColor]};
-        d.labels = {x: [pivotSize / 2], y: [pivotRowY + barH / 2], text: [pivotName],
+        d.labels = {x: [pivotSize / 2], y: [pivotRowY + barH / 2], text: [SYN.displayName(pivotRole, pivotName)],
                     color: [SYN.textColorFor(pivotColor)]};
         addGapTicks(pivotRole, pivotName, 0, pivotRowY, pivotSize);
         d.gaps = {xs: gapXs, ys: gapYs, label: gapLabel};
@@ -1573,7 +1623,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         barFill.push(color);
         labelX.push(x0 + size / 2);
         labelY.push(otherRowY + barH / 2);
-        labelText.push(name);
+        labelText.push(SYN.displayName(otherRole, name));
         labelColor.push(SYN.textColorFor(color));
         addGapTicks(otherRole, name, x0, otherRowY, xMax);
     }
@@ -1582,7 +1632,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     barFill.push(pivotColor);
     labelX.push(pivotSize / 2);
     labelY.push(pivotRowY + barH / 2);
-    labelText.push(pivotName);
+    labelText.push(SYN.displayName(pivotRole, pivotName));
     labelColor.push(SYN.textColorFor(pivotColor));
     addGapTicks(pivotRole, pivotName, 0, pivotRowY, xMax);
 
@@ -1615,7 +1665,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         // which genome each row is comes from the row labels (see
         // detail_reference_row_label in build_page()), so the title only
         // names chromosomes and stays short enough not to be cut off
-        title: `${pivotName} · ${SYN.plural(links.length, 'block')} with ${SYN.plural(otherNames.length, 'chromosome')}`,
+        title: `${SYN.displayName(pivotRole, pivotName)} · ${SYN.plural(links.length, 'block')} with ${SYN.plural(otherNames.length, 'chromosome')}`,
         empty: false,
     };
 };
@@ -1643,7 +1693,9 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const barFill = [subjectColor, SYN.data.targetGrey];
     const labelX = [subjectSize / 2, targetSize / 2];
     const labelY = [topY + barH / 2, botY + barH / 2];
-    const labelText = [subjectName, targetName];
+    const subjectLabel = SYN.displayName('reference', subjectName);
+    const targetLabel = SYN.displayName('target', targetName);
+    const labelText = [subjectLabel, targetLabel];
     const labelColor = [SYN.textColorFor(subjectColor), SYN.textColorFor(SYN.data.targetGrey)];
     const baseX = [-xMax * 0.03, xMax * 1.05];
     const baseY = [botY - 0.35, topY + barH + 0.35];
@@ -1658,7 +1710,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
             const [gs, ge] = SYN.widenGapBp(g.start, g.end, xMax);
             gapXs.push([gs, ge, ge, gs]);
             gapYs.push([rowY, rowY, rowY + barH, rowY + barH]);
-            gapLabel.push(SYN.formatGapLabel(name, g.start, g.end));
+            gapLabel.push(SYN.formatGapLabel(role, name, g.start, g.end));
         }
     };
     addGapTicks('reference', subjectName, topY);
@@ -1672,7 +1724,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
             labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
             gaps,
             x_range: baseX, y_range: baseY,
-            title: `${subjectName} × ${targetName} · no blocks`,
+            title: `${subjectLabel} × ${targetLabel} · no blocks`,
             empty: false,
         };
     }
@@ -1697,7 +1749,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
         x_range: baseX, y_range: baseY,
         // reference first, matching the rows (reference on top) and every
         // other title's "reference vs target" order
-        title: `${subjectName} × ${targetName} · ${SYN.plural(links.length, 'block')}`,
+        title: `${subjectLabel} × ${targetLabel} · ${SYN.plural(links.length, 'block')}`,
         empty: false,
     };
 };
@@ -1714,6 +1766,10 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
+    // homeolog links name the same genome on both rows (see
+    // SYN.buildOverviewRibbons); everything else is reference over target
+    const sName = SYN.escapeHtml(SYN.displayName(topLabel.toLowerCase(), l.s_chrom));
+    const qName = SYN.escapeHtml(SYN.displayName(bottomLabel.toLowerCase(), l.q_chrom));
     let stats = `${l.score} anchors (distinct loci)  ·  orientation=${l.orientation}`;
     if (l.mean_identity !== null && l.mean_identity !== undefined
         && l.anchor_density !== null && l.anchor_density !== undefined) {
@@ -1722,15 +1778,15 @@ SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     }
     const coords = `<table style="border-collapse:collapse">`
         + `<tr><td style="padding-right:6px">${topLabel}</td>`
-        + `<td style="text-align:right">${l.s_chrom}:${l.s_start.toLocaleString()}-${l.s_end.toLocaleString()}</td></tr>`
+        + `<td style="text-align:right">${sName}:${l.s_start.toLocaleString()}-${l.s_end.toLocaleString()}</td></tr>`
         + `<tr><td style="padding-right:6px">${bottomLabel}</td>`
-        + `<td style="text-align:right">${l.q_chrom}:${l.q_start.toLocaleString()}-${l.q_end.toLocaleString()}</td></tr>`
+        + `<td style="text-align:right">${qName}:${l.q_start.toLocaleString()}-${l.q_end.toLocaleString()}</td></tr>`
         + `</table>`;
     return `${coords}<br>${stats}`;
 };
 
-SYN.formatGapLabel = function(chrom, start, end) {
-    return `Assembly gap<br>${SYN.escapeHtml(chrom)}:${start.toLocaleString()}-${end.toLocaleString()}`
+SYN.formatGapLabel = function(genome, chrom, start, end) {
+    return `Assembly gap<br>${SYN.escapeHtml(SYN.displayName(genome, chrom))}:${start.toLocaleString()}-${end.toLocaleString()}`
         + ` (${(end - start).toLocaleString()} bp)`;
 };
 
@@ -1812,7 +1868,7 @@ SYN.buildSelectionDetail = function(sel, k, minScore) {
     if (sel.kind === 'selfblock') {
         const d = SYN.emptyDetail();
         const label = sel.genome === 'target' ? SYN.state.targetLabel : SYN.state.referenceLabel;
-        d.message = `${sel.a} × ${sel.b}: a self-link within ${label}.\nSelf-links are drawn on the ring only.`;
+        d.message = `${SYN.displayName(sel.genome, sel.a)} × ${SYN.displayName(sel.genome, sel.b)}: a self-link within ${label}.\nSelf-links are drawn on the ring only.`;
         return d;
     }
     return SYN.buildPairDetailData(sel.target, sel.subject, k, minScore);
@@ -2554,7 +2610,11 @@ SYN.exportBlocksTsv = function() {
     const minLen = SYN.state.minSeqSize;
     const filtered = (SYN.data.crossLinksFlat || []).filter((l) => l.score >= minScore
         && SYN.data.querySizes[l.q_chrom] >= minLen && SYN.data.subjectSizes[l.s_chrom] >= minLen);
-    const tsv = SYNCHAIN.linksToTsv(filtered);
+    // named the way the page currently shows them -- with "Original names"
+    // on, the blocks line up with the input FASTAs directly
+    const tsv = SYNCHAIN.linksToTsv(!SYN.state.originalNames ? filtered : filtered.map((l) => Object.assign({}, l, {
+        q_chrom: SYN.displayName('target', l.q_chrom), s_chrom: SYN.displayName('reference', l.s_chrom),
+    })));
     SYN.downloadBlob(new Blob([tsv], {type: 'text/tab-separated-values'}), SYN.buildBlocksExportFilename());
 };
 
@@ -2702,7 +2762,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     overview.add_tools(HoverTool(renderers=[ribbon_renderer, self_ribbon_renderer], tooltips="@label{safe}",
                                   point_policy='follow_mouse'))
     overview.add_tools(HoverTool(renderers=[query_renderer, subject_renderer],
-                                  tooltips=[("Chromosome", "@name"), ("Size", "@size_label"),
+                                  tooltips=[("Chromosome", "@display_name"), ("Size", "@size_label"),
                                             ("Group", "@group")]))
     overview.add_tools(HoverTool(renderers=[gap_renderer], tooltips="@label{safe}",
                                   point_policy='follow_mouse'))
@@ -2818,7 +2878,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_fig.add_tools(HoverTool(renderers=[dp_segment_hit_renderer], tooltips="@label{safe}",
                                      point_policy='follow_mouse'))
     dotplot_fig.add_tools(HoverTool(renderers=[dp_query_renderer, dp_subject_renderer],
-                                     tooltips=[("Chromosome", "@name"), ("Size", "@size_label"),
+                                     tooltips=[("Chromosome", "@display_name"), ("Size", "@size_label"),
                                                ("Group", "@group")]))
     # line_policy='interp' (default is 'nearest', which -- since each gap
     # line here is just 2 vertices, its own start and end -- would otherwise
@@ -3159,6 +3219,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # titled inputs' boxes rather than their bottom edge.
     show_gaps_toggle = Switch(label="Show gaps", active=False, width=SWITCH_WIDTH,
                                stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
+    # off by default -- labels every chromosome by its own FASTA ID instead
+    # of the short plot name bin/rename_sequences.py gave it (see
+    # SYN.displayName). Disabled when no name was changed in either genome.
+    original_names_toggle = Switch(label="Original names", active=False, width=SWITCH_WIDTH,
+                                    disabled=not (ds.query_original_names or ds.subject_original_names),
+                                    stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
 
     save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview, fmt=ring_format_sel), code="""
         SYN.exportFigure(fig, 'ring', fmt.value);
@@ -3328,6 +3394,16 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     show_gaps_toggle.js_on_change('active', show_gaps_toggle_callback)
 
+    # Every name on the page is baked into some source's text/label column
+    # when it's built, so the switch re-runs the same full re-layout the
+    # order menu does, then redraws the detail panel for the selection.
+    original_names_callback = CustomJS(code="""
+        SYN.state.originalNames = cb_obj.active;
+        SYN.applyOrder();
+        SYN.reapplySelection();
+    """)
+    original_names_toggle.js_on_change('active', original_names_callback)
+
     # Swaps the active color array itself (SYN.data.palette -- every recolor
     # function reads from it by reference, so nothing else needs to change)
     # rather than the number of colors cycled through, which is what
@@ -3437,7 +3513,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             control_group("Synteny detection (recomputes)", min_identity_spinner, max_gap_spinner,
                           hit_rank_select, chain_status_div)),
         row(control_group("Filters", min_block_spinner, min_seq_size_spinner, divider=False),
-            control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle)),
+            control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle,
+                          original_names_toggle)),
         # spacing=5 -- row()'s default is 0, so without this the three
         # panels would sit flush against each other (or worse, apart by
         # whatever a child happens to overflow to, see left_col's own
@@ -3545,6 +3622,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # three different geometries built from it.
         'targetGapsByChrom': group_gaps_by_chrom(ds.query_gaps),
         'referenceGapsByChrom': group_gaps_by_chrom(ds.subject_gaps),
+        # renamed chromosome -> the genome's own sequence ID, for the
+        # "Original names" switch (SYN.displayName) -- only names that actually changed, and
+        # only chromosomes in chrom.sizes, so a fragmented assembly's
+        # thousands of filtered-out scaffolds add nothing to the page
+        'targetOriginalNames': ds.query_original_names,
+        'referenceOriginalNames': ds.subject_original_names,
         # ring geometry constants -- embedded (not duplicated as separate JS
         # literals) so SYN.buildRingLayout can never numerically drift from
         # the fixed figure extent build_page() already committed to at
@@ -3630,10 +3713,17 @@ def main():
                               'on the ring/zoom panel/dotplot when the page\'s "Show gaps" switch is on')
     parser.add_argument('--reference_gaps', default=None,
                          help='ditto, for the reference genome')
+    parser.add_argument('--target_lookup', default=None,
+                         help="optional bin/rename_sequences.py --out_lookup output for the target "
+                              "genome -- each chromosome's original sequence ID, for the page's "
+                              "\"Original names\" switch")
+    parser.add_argument('--reference_lookup', default=None,
+                         help='ditto, for the reference genome')
     parser.add_argument('--out_prefix', required=True)
     args = parser.parse_args()
 
-    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.reference_gaps)
+    ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.reference_gaps,
+                 args.target_lookup, args.reference_lookup)
     if not ds.query_chroms or not ds.subject_chroms:
         sys.exit("ERROR: no chromosomes to plot -- check --min_seq_size isn't "
                   "filtering out everything")

@@ -243,6 +243,11 @@ workflow {
     target_gaps     = gaps_by_role.target
     reference_gaps = gaps_by_role.reference
 
+    lookup_by_role = renamed.lookup.branch {
+        target: it[0] == 'target'
+        reference: it[0] == 'reference'
+    }
+
     // ---- align proteome against both ORIGINAL genomes (also doubles as
     // the raw synteny/homeolog anchor source -- see build_synteny.nf), then
     // rename each resulting GFF's seqid column using the lookup from the
@@ -334,5 +339,6 @@ workflow {
         synteny.stats,
         target_display_name, reference_display_name,
         target_gaps, reference_gaps,
+        lookup_by_role.target, lookup_by_role.reference,
     )
 }
