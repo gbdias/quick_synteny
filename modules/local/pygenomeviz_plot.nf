@@ -14,9 +14,10 @@
 // geometry the interactive version already draws -- retired in favor of
 // putting all further effort into the one interactive view.
 
-// plot_synteny_interactive.py draws a Circos-style ring, a linear zoom
+// plot_synteny_interactive.py draws a Circos-style ring, a linear detail
 // panel, and a whole-genome dotplot as one self-contained interactive HTML
-// (Bokeh, CustomJS only -- no server). It needs Bokeh, which isn't on
+// (Bokeh, CustomJS only, BokehJS inlined -- no server, works offline).
+// It needs Bokeh, which isn't on
 // bioconda (so no biocontainers image exists for it, and the plain-Python
 // image the non-plotting steps use -- quay.io/biocontainers/python:3.13.7 --
 // is missing libstdc++.so.6 entirely, with no package manager available in
