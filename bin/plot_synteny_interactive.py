@@ -2786,7 +2786,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # under the segments so it frames them without covering them
     dp_highlight_src = ColumnDataSource(dict(left=[], right=[], bottom=[], top=[]))
     dotplot_fig.quad(left='left', right='right', bottom='bottom', top='top', source=dp_highlight_src,
-                     fill_color='#000000', fill_alpha=0.05, line_color='#333333', line_width=1.5)
+                     fill_color='#000000', fill_alpha=0.12, line_color='#333333', line_width=1.5)
     dp_segment_renderer = dotplot_fig.multi_line('xs', 'ys', source=dp_seg_src, line_color='line_color',
                                                   line_alpha='alpha', line_width=2,
                                                   nonselection_line_alpha=RIBBON_DIM_ALPHA)
