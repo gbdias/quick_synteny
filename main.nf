@@ -34,8 +34,10 @@ def helpMessage() {
     Discovery behavior:
       --max_rank <rank>        How far to climb the taxonomy ladder before giving up.
                                 One of: ${RANKS().join(',')} (default: order).
+                                Every taxon NCBI has between these (superfamily,
+                                suborder, unranked clades, ...) is tried on the way.
       --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
-                                plot (default: 500000; pass 0 to disable filtering).
+                                plot (default: 10000; pass 0 to disable filtering).
       --exclude_target         Never pick a reference genome or proteome source of the
                                 same species as the target, even a chromosome-level one.
                                 Off by default: a same-species result is kept -- it's a
@@ -152,6 +154,7 @@ workflow {
     // by assembly quality, not relatedness); a user-supplied reference
     // genome has no known species, so it keeps the plain ranking
     proteome_prefer_taxid = Channel.value('')
+    proteome_prefer_rank_taxid = Channel.value('')
 
     // ---- reference + proteome accession discovery (or manual override) ----
     reference_fasta = null
@@ -194,11 +197,12 @@ workflow {
             reference_display_name = reference_selection.map { readSelection(it).accession }
             reference_species = reference_selection.map { readSelection(it).organism_name ?: '' }
             proteome_prefer_taxid = reference_selection.map { readSelection(it).organism_taxid ?: '' }
+            proteome_prefer_rank_taxid = reference_selection.map { readSelection(it).taxid ?: '' }
         }
 
         if (!params.proteome) {
             prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target,
-                                                    proteome_prefer_taxid).selection
+                                                    proteome_prefer_taxid, proteome_prefer_rank_taxid).selection
             prot_selection.map { f ->
                 def sel = readSelection(f)
                 def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''

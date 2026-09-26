@@ -234,6 +234,9 @@ GAP_LINE_COLOR = '#AAAAAA'
 
 MAX_COLORS = 10
 DEFAULT_COLORS = MAX_COLORS
+# the "Min sequence length (Mb)" spinner's floor and starting value -- the
+# pipeline's default --min_seq_size (10 kb), see min_seq_size_spinner
+MIN_SEQ_SIZE_FLOOR_MB = 0.01
 
 # fraction of each axis's total span given to the dotplot's chromosome-ruler
 # strips (see SHARED_JS's SYN.buildDotplotLayout) -- the clickable regions
@@ -607,12 +610,10 @@ SYN.state = {
     originalNames: false,
     // bp floor read by SYN.filterBySize -- chromosomes shorter than this are
     // dropped from every panel (see min_seq_size_spinner in build_page()).
-    // 0 by default: --min_seq_size already dropped anything smaller than the
-    // pipeline's own threshold before this script ever saw the data (see
-    // RENAME_SEQUENCES's chrom_sizes output, main.nf), so 0 here means "show
-    // everything actually embedded in this page", not "no filtering ever
-    // happened upstream".
-    minSeqSize: 0,
+    // Starts at that spinner's own floor, 10 kb (MIN_SEQ_SIZE_FLOOR_MB), the
+    // pipeline's default --min_seq_size too -- so on a default run nothing
+    // embedded in the page is hidden until the viewer raises it.
+    minSeqSize: 10000,
     // the dotplot's current total span and ruler-strip thickness -- the
     // min-length filter above can shrink these (fewer/smaller chromosomes ->
     // smaller total) even for the same order, so SYN.buildDotplotLayout
@@ -2603,7 +2604,8 @@ SYN.updateChainStatus = function() {
 // SYN.data.crossLinksFlat is already sorted in the order bin/chain.js's
 // OUTPUTS header specifies (chain.js's own blocksToLinks output, untouched --
 // see SYN.applyChainResult), and filtering preserves that order, so with min
-// sequence length at 0 this is byte-identical to `node bin/chain_blocks.mjs
+// sequence length at its 10 kb floor (and the page built with --min_seq_size
+// at least that) this is byte-identical to `node bin/chain_blocks.mjs
 // --min_block <current value>` with the same min-identity/max-gap/hit-rank.
 SYN.exportBlocksTsv = function() {
     const minScore = SYN.ui.minBlockSpinner.value;
@@ -2623,7 +2625,8 @@ SYN.buildBlocksExportFilename = function() {
     const t = sanitize(SYN.state.targetLabel) || 'target';
     const r = sanitize(SYN.state.referenceLabel) || 'reference';
     const id = Math.round(SYN.ui.minIdentitySpinner.value);
-    const minLen = SYN.state.minSeqSize ? `_minlen${+(SYN.state.minSeqSize / 1e6).toFixed(3)}Mb` : '';
+    // named only once raised above the spinner's 10 kb floor, where it starts
+    const minLen = SYN.state.minSeqSize > 10000 ? `_minlen${+(SYN.state.minSeqSize / 1e6).toFixed(3)}Mb` : '';
     return `${t}_vs_${r}_blocks_id${id}_gap${SYN.ui.maxGapSpinner.value}_min${SYN.ui.minBlockSpinner.value}${minLen}.tsv`;
 };
 
@@ -3099,24 +3102,27 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # than its own threshold before this script ever saw the data (see
     # RENAME_SEQUENCES's chrom_sizes output, main.nf), so this control can
     # only ever filter what actually made it into the page, never recover
-    # what didn't. Starts at 0 (Mb, like the ruler size labels elsewhere on
-    # this page) -- 0 means "show every chromosome embedded in this page",
-    # not "no filtering ever happened upstream". high is this dataset's own
-    # largest chromosome -- `or 1` guards the degenerate empty-dataset case,
-    # where Spinner would otherwise get low == high == 0.
+    # what didn't. In Mb, like the ruler size labels elsewhere on this page.
+    # Starts at, and never goes below, MIN_SEQ_SIZE_FLOOR_MB (10 kb, the
+    # pipeline's default --min_seq_size); above that it moves in 0.5 Mb
+    # steps -- the arrows go 0.01 -> 0.5 -> 1 -> 1.5, and a typed value is
+    # snapped to the nearest half Mb (11.7 -> 11.5) by min_seq_size_callback
+    # below, which also caps it at this dataset's own largest chromosome.
+    # Both bounds live in that callback, not in Spinner's low/high: Bokeh
+    # refuses an arrow step past `low` rather than clamping it (0.5 - 0.5 = 0
+    # would stick at 0.5 under low=0.01), and silently rejects a typed value
+    # above `high`, leaving the old value in effect under the typed text.
+    # low=0 lets the step to 0 through for the callback to lift to the floor.
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
-                                    high=round(max_seq_size / 1e6, 2) or 1,
-                                    step=0.1, value=0, width=TOP_CONTROL_WIDTH,
+                                    step=0.5, value=MIN_SEQ_SIZE_FLOOR_MB, width=TOP_CONTROL_WIDTH,
                                     description=help_tip(
                                         "Hides chromosomes and scaffolds shorter than this, in Mb, from "
-                                        "every panel and from the blocks TSV download. Sequences below the "
+                                        "every panel and from the blocks TSV download. Typed values "
+                                        "round to the nearest 0.5 Mb. Sequences below the "
                                         "pipeline's <span style='white-space:nowrap'>--min_seq_size</span> "
-                                        "(default 500 kb) were already left out of the page."),
-                                    # stepping by 0.1 accumulates float error (0.2 + 0.1 =
-                                    # 0.30000000000000004); show at most 3 decimals, no
-                                    # trailing zeros, so steps read 0.3 and typed values like
-                                    # 0.25 stay as typed
+                                        "(default 10 kb) were already left out of the page."),
+                                    # at most 3 decimals, no trailing zeros: 0.01, 0.5, 1, 1.5
                                     format='0[.][000]')
     reset_btn = Button(label="✕ Clear selection", button_type="default", width=150,
                         height=TOOLBAR_CONTROL_HEIGHT)
@@ -3258,7 +3264,19 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # order is active (SYN.activeOrder applies the filter). Any active pivot/
     # pair zoom is cleared on change, same as reset_btn -- the chromosome it
     # was zoomed into may no longer be visible at all.
-    min_seq_size_callback = CustomJS(code="""
+    min_seq_size_callback = CustomJS(code=f"""
+        // snap to the nearest half Mb, never below the floor: an arrow step
+        // off the floor (0.01 + 0.5 = 0.51) lands on 0.5, a typed 11.7 on
+        // 11.5. Never above the last half-Mb step that still shows the
+        // largest chromosome, either. Setting the value re-runs this
+        // callback with the snapped one.
+        const floor = {MIN_SEQ_SIZE_FLOOR_MB};
+        const top = Math.max(floor, Math.floor({max_seq_size / 1e6} * 2) / 2);
+        const snapped = Math.min(top, Math.max(floor, Math.round(cb_obj.value * 2) / 2));
+        if (snapped !== cb_obj.value) {{
+            cb_obj.value = snapped;
+            return;
+        }}
         SYN.state.minSeqSize = Math.round(cb_obj.value * 1e6);  // whole bp, drops the float drift
         // re-lays out both panels, which re-applies the selection -- dropped
         // if its chromosome was just filtered out (SYN.validSelection)
