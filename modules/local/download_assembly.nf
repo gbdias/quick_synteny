@@ -8,7 +8,7 @@
 process DOWNLOAD_GENOME {
     tag "${accession}"
     label 'process_low'
-    container 'quay.io/staphb/ncbi-datasets:18.35.0'
+    label 'env_ncbi_datasets'
 
     input:
     val accession
@@ -37,7 +37,7 @@ process DOWNLOAD_GENOME {
 process DOWNLOAD_PROTEIN {
     tag "${accession}"
     label 'process_low'
-    container 'quay.io/staphb/ncbi-datasets:18.35.0'
+    label 'env_ncbi_datasets'
 
     input:
     val accession

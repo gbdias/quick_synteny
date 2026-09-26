@@ -17,53 +17,15 @@
 // plot_synteny_interactive.py draws a Circos-style ring, a linear detail
 // panel, and a whole-genome dotplot as one self-contained interactive HTML
 // (Bokeh, CustomJS only, BokehJS inlined -- no server, works offline).
-// It needs Bokeh, which isn't on
-// bioconda (so no biocontainers image exists for it, and the plain-Python
-// image the non-plotting steps use -- quay.io/biocontainers/python:3.13.7 --
-// is missing libstdc++.so.6 entirely, with no package manager available in
-// the image to add it, so pip-installing Bokeh's numpy dependency there
-// fails regardless of version) -- rather than repurposing some unrelated
-// bioinformatics tool's container for its incidental working numpy (this
-// process used to run on the pygenomeviz biocontainer for exactly that
-// reason, even though pygenomeviz itself is never actually used anywhere in
-// this repo), this runs on a container built directly from conda-forge's
-// real `bokeh` package via Seqera Containers (Wave; docs.seqera.io/wave) --
-// community.wave.seqera.io builds and permanently hosts images from
-// Bioconda/conda-forge/PyPI on demand, pullable like any other registry
-// image, no Nextflow wave plugin needed. Bokeh ships in the image already,
-// so there's no runtime pip install left to fail or to need network access
-// for. numpy (used to encode the embedded hit-table payload -- see
-// bin/plot_synteny_interactive.py's build_hits_payload) ships alongside
-// Bokeh in the same conda-forge image, so it needs no separate handling
-// here. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
-// their docs): the linux/amd64 build, or under Docker on an arm64 host
-// (Apple Silicon) the linux/arm64 one (bokeh:3.10.0--35eff5f46e2379fb;
-// --77f10b7a44d9daf0 is its Singularity SIF), same host check as
-// build_synteny.nf's CHAIN_* processes.
-//
-// Two different image references, not one: Seqera Containers builds a
-// genuinely different artifact per target engine -- the Singularity one is
-// a native SIF (single sylabs.sif.layer blob, no Docker-style layered
-// filesystem), which plain `docker pull` cannot consume at all, so the same
-// SIF this pipeline's -profile slurm (Apptainer) needs would break -profile
-// standard (Docker) outright, not just run unoptimally there. Singularity
-// gets that SIF as a direct HTTPS download of its registry blob (the SIF
-// build of oras://community.wave.seqera.io/library/bokeh:3.10.0--
-// 3fdfec626f703f33), the convention nf-core modules use for Seqera images:
-// some Singularity/Apptainer versions' ORAS clients reject the manifest type
-// Seqera serves those under (seen on the cluster, 2026-09-23, for the
-// nodejs image built the same way). workflow.containerEngine (set by whichever profile is active --
-// see nextflow.config/conf/slurm.config) picks the right one per run,
-// restoring the same "one container line, works under either profile"
-// property every other process in this pipeline already has.
+// It runs on envs/bokeh.yml, conda-forge's bokeh package, whose numpy
+// dependency also encodes the embedded hit-table payload (see
+// bin/plot_synteny_interactive.py's build_hits_payload). Bokeh has no
+// bioconda recipe, and the plain-Python image once used for the other steps
+// had no libstdc++ to pip-install numpy into, hence its own environment.
 process RENDER_SYNTENY_INTERACTIVE {
     tag "${target_name} vs ${reference_name}"
     label 'process_low'
-    container { workflow.containerEngine != 'docker'
-        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/7d/7d1d2c3a4140cc15a434b599754b57408b4c840e56724c5f8ba5e8e2213a91dd/data'
-        : System.getProperty('os.arch') == 'aarch64'
-            ? 'community.wave.seqera.io/library/bokeh:3.10.0--35eff5f46e2379fb'
-            : 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001' }
+    label 'env_bokeh'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:

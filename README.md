@@ -210,18 +210,40 @@ out of scope here -- validated against a real *A. thaliana* target vs.
 - `slurm` -- Apptainer/Singularity, SLURM executor (HPC).
 - `test` -- Docker, local executor, tiny resource caps.
 
-Docker images run as their own architecture -- no `--platform` is forced.
-On an arm64 host (Apple Silicon), the chaining (node) and page-rendering
-(bokeh) steps use native linux/arm64 images, and the rest run as
-linux/amd64 under Docker Desktop's emulation. The chainer must not run
-emulated: node's Maglev compiler miscompiles it under x86-64 emulation,
-silently skewing the auto-tuned parameters. `bin/chain_blocks.mjs` also
-disables Maglev and fails (exit 3, retried) on an impossible result, in
-case it does run emulated.
+Every process runs a Seqera Containers image for the host's architecture
+(linux/arm64 on Apple Silicon, linux/amd64 otherwise) -- no `--platform` is
+forced and nothing runs emulated. That matters beyond speed: node's Maglev
+compiler miscompiles the chainer under x86-64 emulation, silently skewing
+its auto-tuned parameters. `bin/chain_blocks.mjs` also disables Maglev and
+fails (exit 3, retried) on an impossible result, in case it ever does run
+emulated.
+
+## Containers
+
+Tool versions live in one place: `envs/*.yml`, one conda environment per
+image (ncbi-datasets + unzip, python, miniprot, nodejs, bokeh). Each process
+names its environment with an `env_<name>` label. `conf/containers.config`
+maps each label to its four images -- Docker and Singularity (an HTTPS SIF
+download), each for linux/amd64 and linux/arm64 -- and is generated, not
+edited by hand:
+
+```bash
+tools/update_containers.py            # every environment
+tools/update_containers.py miniprot   # just envs/miniprot.yml
+```
+
+It asks the public Wave API behind seqera.io/containers (no token needed)
+for each image, waits for any that have to be built first, and rewrites
+the config. The same package list always gives the same frozen image, so a
+rerun only builds what changed. To update a tool, bump its version in
+`envs/<name>.yml`, run the script, and commit both files. Runs themselves
+never contact Wave -- the image URLs are fixed in the repo.
 
 ## Repository layout
 
 - `main.nf`, `nextflow.config`, `conf/` -- pipeline entrypoint and profiles.
 - `modules/local/` -- one process (or small process group) per tool.
 - `bin/` -- Python/shell helper scripts used inside processes.
+- `envs/`, `tools/update_containers.py` -- container environments and the
+  script that generates `conf/containers.config` from them.
 - `legacy/` -- the original bash/SLURM script this pipeline replaces.

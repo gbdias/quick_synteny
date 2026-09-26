@@ -5,25 +5,10 @@
 // bin/chain.js (via bin/chain_blocks.mjs) chains them -- the same chainer the
 // interactive page runs client-side. Contract: bin/chain.js's header.
 
-// CHAIN_* run conda-forge's nodejs 26.8.2 from Seqera Containers, the same
-// way RENDER_SYNTENY_INTERACTIVE gets bokeh (see pygenomeviz_plot.nf for why
-// there are two references: Docker and Singularity get different image
-// formats). chain.js is plain, dependency-free JS, so any node >= 18 would
-// do; what matters for the image is that it ships bash and procps, both of
-// which Nextflow needs in every task container (node:*-slim lacks `ps`).
-// Singularity gets the SIF as a direct HTTPS download of its registry blob
-// (the SIF build of oras://community.wave.seqera.io/library/nodejs:26.8.2--
-// 79cbd548ac9675ad), the convention nf-core modules use for Seqera images,
-// rather than the oras:// reference itself -- the cluster's Singularity
-// refused that with "could not get image manifest, received mediaType:
-// application/vnd.docker.distribution.manifest.v2+json" (2026-09-23). Both
-// are linux/amd64 builds. Under Docker on an arm64 host (Apple Silicon) the
-// same package's linux/arm64 build is used instead
-// (nodejs:26.8.2--6646c230528b0eae; --864372a79e757566 is its Singularity
-// SIF): node under x86-64 emulation miscompiles bin/chain.js (see
-// chain_blocks.mjs), so the chainers must not run emulated there. The
-// host's arch is the JVM's, which on a local Docker host is also the
-// engine's -- an x86-64 JVM under Rosetta just keeps the amd64 image.
+// CHAIN_* run node from envs/nodejs.yml (image per engine and architecture:
+// conf/containers.config). chain.js is plain, dependency-free JS, so any
+// node >= 18 would do. On an arm64 host it must be the native arm64 image:
+// node under x86-64 emulation miscompiles chain.js (see chain_blocks.mjs).
 //
 // The interactive page doesn't read any links file -- it embeds the hit
 // tables and re-chains client-side (see pygenomeviz_plot.nf). links.tsv is
@@ -36,7 +21,7 @@
 process EXTRACT_HITS {
     tag "${name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -58,11 +43,7 @@ process CHAIN_CROSS {
     // --no-maglev comment); a fresh process computes it correctly
     errorStrategy { task.exitStatus == 3 ? 'retry' : 'terminate' }
     maxRetries 2
-    container { workflow.containerEngine != 'docker'
-        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data'
-        : System.getProperty('os.arch') == 'aarch64'
-            ? 'community.wave.seqera.io/library/nodejs:26.8.2--6646c230528b0eae'
-            : 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0' }
+    label 'env_nodejs'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -96,11 +77,7 @@ process CHAIN_SELF {
     // --no-maglev comment); a fresh process computes it correctly
     errorStrategy { task.exitStatus == 3 ? 'retry' : 'terminate' }
     maxRetries 2
-    container { workflow.containerEngine != 'docker'
-        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data'
-        : System.getProperty('os.arch') == 'aarch64'
-            ? 'community.wave.seqera.io/library/nodejs:26.8.2--6646c230528b0eae'
-            : 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0' }
+    label 'env_nodejs'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -128,7 +105,7 @@ process CHAIN_SELF {
 process COMPUTE_ALIGNMENT_STATS {
     tag "${target_name} vs ${reference_name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
