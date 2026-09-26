@@ -28,7 +28,8 @@
 # and that species may join the lineage above where this climb stops.
 #
 # Writes into ./ladder/: <taxid>.jsonl per taxon queried, preferred.jsonl,
-# and query_log.tsv (rank, taxid, name, records, query) listing every taxon
+# target_taxids.txt (the target species and every taxon under it), and
+# query_log.tsv (rank, taxid, name, records, query) listing every taxon
 # queried in order -- the selection step reads the ladder from that log.
 set -u
 
@@ -41,6 +42,17 @@ cap=${LADDER_CAP:-1000}
 
 mkdir -p ladder
 target=$(awk -F'\t' '$1=="species"{print $2; exit}' "$lineage")
+
+# every taxid of the target's species: the species itself and each strain,
+# subspecies, etc. under it. Assemblies are often filed under a strain's own
+# taxid (S. cerevisiae S288C is 559292, not 4932), and each of those is
+# still the target's species -- for the stop below and for --exclude_target.
+: > ladder/target_taxids.txt
+if [ -n "$target" ]; then
+    echo "$target" > ladder/target_taxids.txt
+    datasets summary taxonomy taxon "$target" --children --report ids_only --as-json-lines \
+        | grep -o '"tax_id":[0-9]*' | cut -d: -f2 >> ladder/target_taxids.txt || true
+fi
 
 # query <taxid> <out.jsonl>: sets $mode to how the records were cut
 query() {
@@ -72,7 +84,7 @@ while IFS=$'\t' read -r rank taxid name; do
     printf '%s\t%s\t%s\t%s\t%s\n' "$rank" "$taxid" "$name" "$(grep -c . "$out")" "$mode" >> ladder/query_log.tsv
     others=0
     if [ -s "$out" ]; then
-        others=$(dataformat tsv genome --inputfile "$out" --fields organism-tax-id --elide-header | grep -cvx "$target")
+        others=$(dataformat tsv genome --inputfile "$out" --fields organism-tax-id --elide-header | grep -cvxF -f ladder/target_taxids.txt)
     fi
     if [ "$others" -gt 0 ]; then
         break

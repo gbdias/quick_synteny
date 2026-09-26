@@ -142,6 +142,17 @@ def main():
     # could in principle appear at, not just species -- there's no
     # structural guarantee it can't.
     target_taxid = next((taxid for rank, taxid, _ in lineage if rank == 'species'), None)
+    # ...and every taxon under it: assemblies are often filed under a
+    # strain's own taxid (S. cerevisiae S288C is 559292, not 4932), which is
+    # still the target's species. query_genome_ladder.sh lists them.
+    target_taxids = {target_taxid} if target_taxid else set()
+    taxids_file = os.path.join(args.ladder_dir, 'target_taxids.txt')
+    if target_taxid and os.path.exists(taxids_file):
+        with open(taxids_file) as f:
+            target_taxids |= {line.strip() for line in f if line.strip()}
+
+    def is_same_species(r):
+        return str(r.get('organism', {}).get('tax_id', '')) in target_taxids
 
     def keep(r):
         # explicit and self-contained here, rather than relying solely on
@@ -149,10 +160,7 @@ def main():
         # chromosome,complete query filter to make this true incidentally
         if args.require_chromosome_level and not is_chromosome_level(r):
             return False
-        if not target_taxid:
-            return True
-        same_species = str(r.get('organism', {}).get('tax_id', '')) == str(target_taxid)
-        if not same_species:
+        if not is_same_species(r):
             return True
         if args.exclude_target:
             return False
@@ -202,9 +210,6 @@ def main():
             f"{', '.join(f'{r} {n}' for r, _, n, *_ in search_log)}). "
             f"Re-run with a higher --max_rank to climb further."
         )
-
-    def is_same_species(r):
-        return bool(target_taxid) and str(r.get('organism', {}).get('tax_id', '')) == str(target_taxid)
 
     best = candidates[0]
     with open(f"{args.outprefix}_candidates.tsv", 'w') as f:
