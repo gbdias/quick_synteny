@@ -37,7 +37,7 @@ def helpMessage() {
                                 Every taxon NCBI has between these (superfamily,
                                 suborder, unranked clades, ...) is tried on the way.
       --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
-                                plot (default: 500000; pass 0 to disable filtering).
+                                plot (default: 10000; pass 0 to disable filtering).
       --exclude_target         Never pick a reference genome or proteome source of the
                                 same species as the target, even a chromosome-level one.
                                 Off by default: a same-species result is kept -- it's a
