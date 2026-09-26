@@ -36,13 +36,10 @@
 // bin/plot_synteny_interactive.py's build_hits_payload) ships alongside
 // Bokeh in the same conda-forge image, so it needs no separate handling
 // here. Pinned to bokeh=3.10.0 (Seqera's own build hash, stable for years per
-// their docs) and to linux/amd64, matching docker.runOptions =
-// '--platform=linux/amd64' in nextflow.config's standard profile -- every
-// container in this pipeline runs as amd64 there (Apple Silicon dev
-// machines go through Rosetta, per the README). linux/arm64 builds of the
-// same bokeh=3.10.0 also exist (community.wave.seqera.io/library/bokeh:
-// 3.10.0--35eff5f46e2379fb for Docker, --77f10b7a44d9daf0 for Singularity)
-// if a native-arm64 profile is ever added.
+// their docs): the linux/amd64 build, or under Docker on an arm64 host
+// (Apple Silicon) the linux/arm64 one (bokeh:3.10.0--35eff5f46e2379fb;
+// --77f10b7a44d9daf0 is its Singularity SIF), same host check as
+// build_synteny.nf's CHAIN_* processes.
 //
 // Two different image references, not one: Seqera Containers builds a
 // genuinely different artifact per target engine -- the Singularity one is
@@ -62,9 +59,11 @@
 process RENDER_SYNTENY_INTERACTIVE {
     tag "${target_name} vs ${reference_name}"
     label 'process_low'
-    container { workflow.containerEngine == 'docker'
-        ? 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001'
-        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/7d/7d1d2c3a4140cc15a434b599754b57408b4c840e56724c5f8ba5e8e2213a91dd/data' }
+    container { workflow.containerEngine != 'docker'
+        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/7d/7d1d2c3a4140cc15a434b599754b57408b4c840e56724c5f8ba5e8e2213a91dd/data'
+        : System.getProperty('os.arch') == 'aarch64'
+            ? 'community.wave.seqera.io/library/bokeh:3.10.0--35eff5f46e2379fb'
+            : 'community.wave.seqera.io/library/bokeh:3.10.0--daa8ae8c4a0b7001' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:

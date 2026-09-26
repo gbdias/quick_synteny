@@ -210,10 +210,14 @@ out of scope here -- validated against a real *A. thaliana* target vs.
 - `slurm` -- Apptainer/Singularity, SLURM executor (HPC).
 - `test` -- Docker, local executor, tiny resource caps.
 
-All containers now run fine under Docker Desktop's default Rosetta
-emulation on Apple Silicon -- an earlier jcvi/LAST-based version of this
-pipeline needed a QEMU/Rosetta tradeoff that no longer applies now that
-jcvi has been removed from the pipeline entirely.
+Docker images run as their own architecture -- no `--platform` is forced.
+On an arm64 host (Apple Silicon), the chaining (node) and page-rendering
+(bokeh) steps use native linux/arm64 images, and the rest run as
+linux/amd64 under Docker Desktop's emulation. The chainer must not run
+emulated: node's Maglev compiler miscompiles it under x86-64 emulation,
+silently skewing the auto-tuned parameters. `bin/chain_blocks.mjs` also
+disables Maglev and fails (exit 3, retried) on an impossible result, in
+case it does run emulated.
 
 ## Repository layout
 

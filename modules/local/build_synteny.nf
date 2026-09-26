@@ -17,10 +17,13 @@
 // rather than the oras:// reference itself -- the cluster's Singularity
 // refused that with "could not get image manifest, received mediaType:
 // application/vnd.docker.distribution.manifest.v2+json" (2026-09-23). Both
-// are linux/amd64 builds, matching docker.runOptions in the standard
-// profile; linux/arm64 builds of the same package also exist
-// (nodejs:26.8.2--6646c230528b0eae for Docker, --864372a79e757566 for
-// Singularity) if a native-arm64 profile is ever added.
+// are linux/amd64 builds. Under Docker on an arm64 host (Apple Silicon) the
+// same package's linux/arm64 build is used instead
+// (nodejs:26.8.2--6646c230528b0eae; --864372a79e757566 is its Singularity
+// SIF): node under x86-64 emulation miscompiles bin/chain.js (see
+// chain_blocks.mjs), so the chainers must not run emulated there. The
+// host's arch is the JVM's, which on a local Docker host is also the
+// engine's -- an x86-64 JVM under Rosetta just keeps the amd64 image.
 //
 // The interactive page doesn't read any links file -- it embeds the hit
 // tables and re-chains client-side (see pygenomeviz_plot.nf). links.tsv is
@@ -51,9 +54,15 @@ process EXTRACT_HITS {
 process CHAIN_CROSS {
     tag "${target_name} vs ${reference_name}"
     label 'process_low'
-    container { workflow.containerEngine == 'docker'
-        ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
-        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data' }
+    // exit 3: chain_blocks.mjs caught the node runtime miscomputing (see its
+    // --no-maglev comment); a fresh process computes it correctly
+    errorStrategy { task.exitStatus == 3 ? 'retry' : 'terminate' }
+    maxRetries 2
+    container { workflow.containerEngine != 'docker'
+        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data'
+        : System.getProperty('os.arch') == 'aarch64'
+            ? 'community.wave.seqera.io/library/nodejs:26.8.2--6646c230528b0eae'
+            : 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
@@ -83,9 +92,15 @@ process CHAIN_CROSS {
 process CHAIN_SELF {
     tag "${name} self"
     label 'process_low'
-    container { workflow.containerEngine == 'docker'
-        ? 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0'
-        : 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data' }
+    // exit 3: chain_blocks.mjs caught the node runtime miscomputing (see its
+    // --no-maglev comment); a fresh process computes it correctly
+    errorStrategy { task.exitStatus == 3 ? 'retry' : 'terminate' }
+    maxRetries 2
+    container { workflow.containerEngine != 'docker'
+        ? 'https://community-cr-prod.seqera.io/docker/registry/v2/blobs/sha256/d5/d56dd8ae13cc6187cea921d2c32cc89f5ca81a6277dbb65cd0906fbddcf1da5a/data'
+        : System.getProperty('os.arch') == 'aarch64'
+            ? 'community.wave.seqera.io/library/nodejs:26.8.2--6646c230528b0eae'
+            : 'community.wave.seqera.io/library/nodejs:26.8.2--e0ce3f03c0e9c0f0' }
     publishDir "${params.outdir}/synteny", mode: 'copy'
 
     input:
