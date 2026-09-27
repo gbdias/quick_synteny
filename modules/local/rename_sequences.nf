@@ -9,7 +9,7 @@
 process RENAME_SEQUENCES {
     tag "${name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy'
 
     input:

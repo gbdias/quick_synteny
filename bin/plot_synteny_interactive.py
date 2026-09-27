@@ -57,10 +57,9 @@ and palette indices, as embedded JSON, and inlines bin/chain.js so the browser
 can chain (and re-chain, on every parameter change) client-side, in a Web
 Worker when one is available -- see SYN.startChainer/SYN.applyChainResult.
 
-This is not run through bin/'s usual container -- it needs Bokeh, which has
-no bioconda recipe, so this runs on a Seqera Containers (Wave) image built
-directly from conda-forge's bokeh package instead. See
-modules/local/pygenomeviz_plot.nf for the full reasoning.
+This is not run in the pipeline's plain Python image -- it needs Bokeh, so
+it runs on envs/bokeh.yml's (conda-forge's bokeh package). See
+modules/local/pygenomeviz_plot.nf.
 """
 import argparse
 import base64
@@ -369,8 +368,8 @@ def read_hits_tsv(raw_bytes):
 def encode_hits_column(values, dtype):
     """One GenomeColumns column (bin/chain.js's EMBEDDED PAYLOAD header): little-
     endian typed array, gzip'd, base64'd. numpy is used only for the
-    explicit little-endian dtypes and fast bulk casting -- it ships in the
-    bokeh container (see modules/local/pygenomeviz_plot.nf)."""
+    explicit little-endian dtypes and fast bulk casting -- it ships with
+    bokeh in envs/bokeh.yml."""
     np_dtype = {'u8': '<u1', 'u16': '<u2', 'u32': '<u4', 'f64': '<f8'}[dtype]
     data = np.asarray(values, dtype=np_dtype).tobytes()
     return {'dtype': dtype, 'data': base64.b64encode(gzip.compress(data, mtime=0)).decode('ascii')}

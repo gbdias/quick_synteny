@@ -1,0 +1,8 @@
+# datasets reads CA certificates from SSL_CERT_FILE, set for env_ncbi_datasets
+# in nextflow.config -- the image's Ubuntu base has none under /etc/ssl
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - conda-forge::ncbi-datasets-cli=18.37.0
+  - conda-forge::unzip=6.0

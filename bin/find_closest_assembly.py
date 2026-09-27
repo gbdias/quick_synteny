@@ -2,7 +2,7 @@
 """Pick the closest available genome assembly from pre-fetched ladder results.
 
 The datasets CLI and this script deliberately run in separate containers (the
-biocontainers ncbi-datasets-cli image has no Python), so the ladder-walk is
+datasets image, envs/ncbi_datasets.yml, has no Python), so the ladder-walk is
 split in two: query_genome_ladder.sh, in the datasets container, queries the
 lineage's taxa from species outward (intermediate ranks and clades included)
 and writes one JSON-lines file per taxon (<taxid>.jsonl, empty if no hits)

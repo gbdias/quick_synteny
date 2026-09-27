@@ -35,7 +35,7 @@
 process MINIPROT_INDEX {
     tag "${name}"
     label 'process_high'
-    container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
+    label 'env_miniprot'
 
     input:
     tuple val(name), path(genome_fasta)
@@ -54,7 +54,7 @@ process MINIPROT_INDEX {
 process MINIPROT_ALIGN {
     tag "${name}"
     label 'process_high'
-    container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
+    label 'env_miniprot'
 
     input:
     tuple val(name), path(genome_index), path(proteome_faa)
@@ -90,7 +90,7 @@ process MINIPROT_ALIGN {
 process SPLIT_GENOME {
     tag "${name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
 
     input:
     tuple val(name), path(genome_fasta)
@@ -116,7 +116,7 @@ process SPLIT_GENOME {
 // ~4 cores' worth, so a handful of threads per chunk is already proportionate.
 process MINIPROT_ALIGN_CHUNK {
     tag "${name}:${chunk_fasta.baseName}"
-    container 'quay.io/biocontainers/miniprot:0.18--h577a1d6_0'
+    label 'env_miniprot'
     cpus 4
     memory { "${Math.ceil((chunk_bp / 1e9 * params.miniprot_gb_per_gb + 4) * Math.pow(1.5, task.attempt - 1))} GB" }
     errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
@@ -145,7 +145,7 @@ process MINIPROT_ALIGN_CHUNK {
 process MERGE_MINIPROT_GFF {
     tag "${name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
 
     input:
     tuple val(name), path(chunk_gffs)
@@ -166,7 +166,7 @@ process MERGE_MINIPROT_GFF {
 process RENAME_GFF {
     tag "${name}"
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
 
     input:
     tuple val(name), path(raw_gff), path(lookup)

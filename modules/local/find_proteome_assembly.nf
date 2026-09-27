@@ -10,7 +10,7 @@
 process QUERY_GENOME_LADDER_PROTEOME {
     tag "max_rank=${max_rank}"
     label 'process_low'
-    container 'quay.io/staphb/ncbi-datasets:18.35.0'
+    label 'env_ncbi_datasets'
 
     input:
     path lineage
@@ -28,7 +28,7 @@ process QUERY_GENOME_LADDER_PROTEOME {
 
 process SELECT_PROTEOME_ASSEMBLY {
     label 'process_low'
-    container 'quay.io/biocontainers/python:3.13.7'
+    label 'env_python'
     publishDir "${params.outdir}/pipeline_info", mode: 'copy', pattern: 'proteome_*'
 
     input:
