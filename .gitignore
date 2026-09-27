@@ -15,3 +15,6 @@ __pycache__/
 # local real-data fixtures for chainer development (large, not versioned)
 /test_data/
 /slurm/results_*/
+
+#for now
+docs/
