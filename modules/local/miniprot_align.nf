@@ -75,16 +75,30 @@ process MINIPROT_ALIGN {
 // RENAME_GFF and everything after it is unchanged either way.
 //
 // The point is peak RAM: miniprot's index is ~10 GB per Gb of genome, so
-// aligning against N smaller chunks instead of one whole-genome index caps
-// peak RSS per task at roughly (chunk size / N) instead of the whole
-// genome. Per-chunk outputs are a
-// superset of the whole-genome output (same --outs/-N filters, applied to
-// a smaller index), so MERGE_MINIPROT_GFF re-applies both filters globally
-// to recover a result equivalent to one whole-genome run -- see that
-// script's docstring for why this is exact, and its two gotchas (an
-// explicit -G computed from the WHOLE genome's length, since -I would
-// otherwise derive max intron size from a chunk's own, smaller length;
-// and per-chunk k-mer statistics that can shift sensitivity slightly).
+// aligning against smaller chunks instead of one whole-genome index caps
+// peak RSS per task at roughly one chunk's index instead of the whole
+// genome's. MERGE_MINIPROT_GFF re-applies --outs/-N globally across the
+// chunks' outputs, and -G is computed from the WHOLE genome's length (-I
+// would derive max intron size from a chunk's own, smaller length).
+//
+// The result is close to, but NOT identical to, a whole-genome run, and
+// can't be made identical without changing miniprot itself: it decides
+// per index, not per genome, (1) which k-mers are too repetitive to seed
+// from (mp_cal_max_occ: an adaptive cutoff from each query's k-mer counts
+// in the loaded index, which -c can only lower) and (2) which candidates
+// survive -p/-N, relative to the best chain in that index, before DP. So a
+// chunk can gain or lose seeds at a locus -- a hit appears, disappears, or
+// a gene model splits -- and keep candidates a whole-genome run pruned.
+// Measured on C. elegans vs C. portoensis (C. brenneri proteome, 3-6 chunks):
+// the best hit was identical for ~98% of proteins and ~97% of synteny
+// blocks matched, while ~7-10% of proteins differed somewhere in their hit
+// set (mostly weak hits, rank 4-6 secondaries, tandem arrays and exact
+// score ties) and ~1-1.5% of whole-genome hits came out of no chunk at all.
+// More chunks drift further and cost more CPU (every chunk aligns the whole
+// proteome: ~4x the CPU time there), so use chunking only when the whole-
+// genome index won't fit, with the largest chunk that does. Each mode is
+// deterministic run to run. Loosening -N/-p/--outs per chunk moves the result
+// further from whole-genome, not closer.
 // ---------------------------------------------------------------------------
 
 process SPLIT_GENOME {

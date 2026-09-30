@@ -204,6 +204,32 @@ homeologs" from "older paralogs" by age would need Ks-based dating, which is
 out of scope here -- validated against a real *A. thaliana* target vs.
 *A. suecica* reference genome run.
 
+## Large genomes: chunked alignment
+
+miniprot's whole-genome index needs about 10 GB of RAM per Gb of genome.
+When that won't fit, `--miniprot_chunk_gb` splits each genome into chunks
+of about that many Gb, aligns the proteome against each in parallel and
+merges the results; given without a value it uses 1 Gb chunks (each task
+requests `chunk Gb × --miniprot_gb_per_gb + 4` GB, ~15 GB at the default).
+Whole sequences are never split, so a chunk is never smaller than its
+longest chromosome.
+
+Chunked results are **close to, but not identical to**, a whole-genome
+run. miniprot decides per index which k-mers are too repetitive to seed
+from and which candidate hits to keep, so a chunk sees a slightly
+different picture than the whole genome does. On *C. elegans* the best hit
+was identical for ~98% of proteins and ~97% of synteny blocks matched, but
+~7-10% of proteins differed somewhere in their hit set -- mostly weak hits,
+lower-ranked secondaries, tandem gene arrays and exact score ties -- and
+the blocks that differed were all small (5-7 anchors). Each mode is
+deterministic on its own.
+
+So: leave chunking off whenever the whole-genome index fits (it's also
+cheaper -- every chunk aligns the whole proteome, which cost ~4× the CPU
+time on *C. elegans*); when it doesn't, use the largest chunk size that
+fits, since fewer chunks stay closer to whole-genome; and compare runs only
+at the same setting.
+
 ## Profiles
 
 - `standard` -- Docker, local executor (laptop/CI).
