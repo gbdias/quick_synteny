@@ -1,15 +1,25 @@
 #!/usr/bin/env python3
 """Merge per-chunk miniprot GFFs (--miniprot_chunk_gb) back into one
-GFF equivalent to a single whole-genome miniprot run.
+GFF that approximates a single whole-genome miniprot run.
 
-Why this is exact: for each query
-protein, miniprot keeps alignments with score >= --outs * bestScore, up to
--N secondaries. A hit in the GLOBAL top N+1 is also in its own chunk's top
-N+1 (a chunk's best score for that protein is <= the whole genome's best),
-so the per-chunk outputs -- each already filtered to ITS OWN local best --
-are together a superset of the whole-genome output. Re-applying both
-filters (--outs and -N) here, using the score across ALL chunks as "best",
-recovers the whole-genome result exactly.
+The idea: for each query protein, miniprot keeps alignments with score >=
+--outs * bestScore, up to -N secondaries, and a chunk's best score for a
+protein is <= the whole genome's best. Re-applying both filters (--outs
+and -N) here, using the score across ALL chunks as "best", therefore
+recovers the whole-genome result -- IF the per-chunk outputs together
+contain every whole-genome hit.
+
+They don't quite, so this is NOT exact. miniprot decides per index, not
+per genome, which k-mers are too repetitive to seed from (an adaptive
+cutoff from each query's k-mer counts in the loaded index) and which
+candidate chains survive -p/-N, before DP computes the final score. A
+chunk can therefore gain or lose seeds at a locus, and prune or keep
+different candidates, so some whole-genome hits come out of no chunk at all
+and some chunk hits exist in no whole-genome run -- no merge rule can undo
+that. Measured on C. elegans (3-6 chunks): the best hit was identical for
+~98% of proteins, ~1-1.5% of whole-genome hits were in no chunk's output,
+and weak hits, rank 4-6 secondaries, tandem arrays and exact score ties
+account for most of the difference. See modules/local/miniprot_align.nf.
 
 Per input GFF, a record is one mRNA line plus its child lines (CDS,
 stop_codon, ... -- anything with Parent=<the mRNA's ID>), read as a

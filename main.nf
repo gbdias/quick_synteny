@@ -14,6 +14,20 @@ def RANKS() {
     return ['species', 'genus', 'family', 'order', 'class', 'phylum']
 }
 
+// chunk size used when --miniprot_chunk_gb is given without a value
+def DEFAULT_CHUNK_GB() {
+    return 1.0
+}
+
+// --miniprot_chunk_gb -> chunk size in Gb, or null for the whole-genome path.
+// A bare flag arrives as boolean true; false/null/unset mean whole-genome.
+def chunkGb() {
+    def v = params.miniprot_chunk_gb
+    if (v == null || v == false) return null
+    if (v == true) return DEFAULT_CHUNK_GB()
+    return v as double
+}
+
 def helpMessage() {
     log.info """
     quick_synteny — taxonomy-guided synteny plotting
@@ -71,13 +85,22 @@ def helpMessage() {
                                 sensitivity -- useful on RAM-constrained hardware
                                 (a laptop, a small VM). Default: unset (miniprot's
                                 own default applies).
-      --miniprot_chunk_gb <float>  Align the proteome against genome chunks of about
-                                this many Gb each, in parallel, instead of one
-                                whole-genome index -- caps miniprot's peak RAM
-                                (~10 GB per Gb of genome) without changing results
-                                (equivalent to a single whole-genome run; see
-                                modules/local/miniprot_align.nf). Default: unset
-                                (one whole-genome alignment, as above).
+      --miniprot_chunk_gb [<float>]  Align the proteome against genome chunks of
+                                about this many Gb each, in parallel, instead of
+                                one whole-genome index -- caps miniprot's peak RAM
+                                (~10 GB per Gb of genome) for genomes whose whole-
+                                genome index won't fit. Given without a value,
+                                chunks are ${DEFAULT_CHUNK_GB()} Gb. Whole sequences are never
+                                split, so a chunk is never smaller than its
+                                longest sequence. NOT identical to a whole-
+                                genome run: miniprot filters seeds and ranks hits
+                                within each chunk, so ~2% of proteins get a
+                                different best hit and weak/secondary hits, tied
+                                best hits and small blocks can differ (large
+                                blocks don't). More chunks drift further and cost
+                                more CPU, so use the largest size that fits, and
+                                compare runs only at the same setting. Default:
+                                unset (one whole-genome alignment).
       --miniprot_gb_per_gb <float>  RAM (GB) requested per Gb of CHUNK when
                                 --miniprot_chunk_gb is set, plus a fixed 4 GB
                                 overhead; multiplied by 1.5 per retry attempt
@@ -119,6 +142,11 @@ def validateParams() {
     }
     if (params.proteome && !file(params.proteome).exists()) {
         exit 1, "ERROR: --proteome file not found: ${params.proteome}"
+    }
+
+    def chunk = params.miniprot_chunk_gb
+    if (chunk != null && !(chunk instanceof Boolean) && !(chunk instanceof Number && chunk > 0)) {
+        exit 1, "ERROR: --miniprot_chunk_gb must be a positive number of Gb (or given without a value for ${DEFAULT_CHUNK_GB()} Gb), got '${chunk}'"
     }
 }
 
@@ -260,12 +288,13 @@ workflow {
     // to '' here for the same reason as min_identity below -- see that comment
     def miniprot_m = params.miniprot_m ?: ''
 
-    if (params.miniprot_chunk_gb) {
-        // Chunked path: split each genome into ~miniprot_chunk_gb-sized
-        // pieces, align each in its own (smaller-index, lower-RAM) miniprot
-        // task, then merge back into a GFF equivalent to a whole-genome run
-        // -- see modules/local/miniprot_align.nf.
-        def target_chunk_bp = Math.round(params.miniprot_chunk_gb * 1_000_000_000)
+    def chunk_gb = chunkGb()
+    if (chunk_gb) {
+        // Chunked path: split each genome into ~chunk_gb-sized pieces, align
+        // each in its own (smaller-index, lower-RAM) miniprot task, then
+        // merge back into one GFF -- close to, but not identical to, a
+        // whole-genome run; see modules/local/miniprot_align.nf.
+        def target_chunk_bp = Math.round(chunk_gb * 1_000_000_000)
 
         split_ch = SPLIT_GENOME(genomes_in, target_chunk_bp)
 
