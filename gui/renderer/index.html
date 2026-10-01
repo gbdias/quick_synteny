@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+<title>quick_synteny</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>quick_synteny</h1>
+  <div id="env" class="env"><span class="pill">checking environment…</span></div>
+  <button id="btn-setup" class="primary" hidden>Set up runtime</button>
+  <button id="btn-settings" class="ghost">Settings</button>
+  <button id="btn-open-result" class="ghost">Open result…</button>
+</header>
+
+<div id="update-banner" class="update" hidden>
+  <span class="msg"></span>
+  <button type="button" id="update-download" class="primary">Download</button>
+  <button type="button" id="update-notes">What's new</button>
+  <button type="button" id="update-dismiss" class="ghost">Dismiss</button>
+  <p class="hint" id="update-mac-hint" hidden>The new version isn't signed either: the first time you open it, macOS asks
+    you to allow it again (System Settings → Privacy &amp; Security → Open Anyway).</p>
+</div>
+
+<section id="settings" class="card" hidden>
+  <h2>Settings</h2>
+  <p class="hint">Only to use your own Nextflow instead of the app's managed runtime (in <code id="runtime-root"></code>).</p>
+  <label>Nextflow executable <input id="set-nextflow" placeholder="managed runtime"></label>
+  <label>Java home (17+) <input id="set-java" placeholder="managed runtime"></label>
+  <label class="check"><input type="checkbox" id="set-updates" checked> Check GitHub for a new version when the app starts</label>
+  <div class="row"><button id="btn-save-settings">Save &amp; re-check</button></div>
+</section>
+
+<main>
+  <form id="form" class="card">
+    <h2>Target genome</h2>
+    <div class="file-row">
+      <button type="button" data-pick="assembly" data-title="Target genome FASTA">Choose FASTA…</button>
+      <span class="path" id="path-assembly">none</span>
+    </div>
+    <p class="field-status" id="status-assembly" hidden></p>
+
+    <h2>Reference genome &amp; proteome</h2>
+    <div class="tabs">
+      <label><input type="radio" name="mode" value="auto" checked> Discover from NCBI</label>
+      <label><input type="radio" name="mode" value="manual"> Use my own files</label>
+    </div>
+
+    <div id="mode-auto">
+      <label>Target organism
+        <input id="taxon-search" placeholder="species name or taxid, e.g. Saccharomyces cerevisiae" autocomplete="off">
+      </label>
+      <ul id="taxon-results" class="suggest" hidden></ul>
+      <p class="field-status" id="search-status" hidden></p>
+      <div class="grid">
+        <label>Taxid <input id="taxid" name="taxid" inputmode="numeric" autocomplete="off"></label>
+        <label>Climb up to
+          <select name="max_rank">
+            <option>species</option><option>genus</option><option>family</option>
+            <option selected>order</option><option>class</option><option>phylum</option>
+          </select>
+        </label>
+      </div>
+      <p class="field-status" id="taxid-status" hidden></p>
+      <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference</label>
+    </div>
+
+    <div id="mode-manual" hidden>
+      <div class="file-row">
+        <button type="button" data-pick="reference" data-title="Reference genome FASTA">Reference FASTA…</button>
+        <span class="path" id="path-reference">none</span>
+      </div>
+      <p class="field-status" id="status-reference" hidden></p>
+      <div class="file-row">
+        <button type="button" data-pick="proteome" data-title="Proteome FASTA">Proteome FASTA…</button>
+        <span class="path" id="path-proteome">none</span>
+      </div>
+      <p class="field-status" id="status-proteome" hidden></p>
+    </div>
+
+    <details>
+      <summary>Advanced</summary>
+      <!-- help texts: same voice as the result page's "?" tips, and the
+           pipeline's --help (main.nf) for what each option means -->
+      <div class="grid">
+        <label>Min sequence length (bp) <button type="button" class="help" data-help="Chromosomes and scaffolds shorter than this are left out of the plot entirely: the result page can hide more, but can't bring these back. Default 10,000 bp; 0 keeps every sequence." aria-label="Chromosomes and scaffolds shorter than this are left out of the plot entirely: the result page can hide more, but can't bring these back. Default 10,000 bp; 0 keeps every sequence.">?</button>
+          <input name="min_seq_size" placeholder="10000"></label>
+        <label>Min assembly gap (bp) <button type="button" class="help" data-help="The shortest run of N's that counts as an assembly gap, for the result page's Show gaps switch. Default 100 bp." aria-label="The shortest run of N's that counts as an assembly gap, for the result page's Show gaps switch. Default 100 bp.">?</button>
+          <input name="min_asm_gap" placeholder="100"></label>
+        <label>Min identity (0–1) <button type="button" class="help" data-help="A protein's hit counts only if at least this share of its aligned residues are identical or similar (miniprot's Positive score). Default: the weaker genome's average best-hit identity, kept within 0.3–0.9. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards." aria-label="A protein's hit counts only if at least this share of its aligned residues are identical or similar (miniprot's Positive score). Default: the weaker genome's average best-hit identity, kept within 0.3–0.9. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards.">?</button>
+          <input name="min_identity" placeholder="auto"></label>
+        <label>Max gap (anchors) <button type="button" class="help" data-help="The most anchors a block may skip between two consecutive matched anchors, on either genome. Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Default 25. The result page can change it afterwards." aria-label="The most anchors a block may skip between two consecutive matched anchors, on either genome. Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Default 25. The result page can change it afterwards.">?</button>
+          <input name="max_gap" placeholder="25"></label>
+        <label>Min block (anchors) <button type="button" class="help" data-help="The minimum number of anchors for a syntenic block to be kept, in links.tsv and the result page's starting view. Default: 15 for close relatives (weaker genome's identity ≥ 0.8), 5 otherwise. The result page can change it afterwards." aria-label="The minimum number of anchors for a syntenic block to be kept, in links.tsv and the result page's starting view. Default: 15 for close relatives (weaker genome's identity ≥ 0.8), 5 otherwise. The result page can change it afterwards.">?</button>
+          <input name="min_block" placeholder="auto"></label>
+        <label>miniprot -M <button type="button" class="help" data-help="Index only 1 in 2^M of each genome's k-mers: miniprot needs less RAM, at some cost to sensitivity. Try it when a genome only just doesn't fit. Default: miniprot's own." aria-label="Index only 1 in 2^M of each genome's k-mers: miniprot needs less RAM, at some cost to sensitivity. Try it when a genome only just doesn't fit. Default: miniprot's own.">?</button>
+          <input name="miniprot_m" placeholder="miniprot default"></label>
+        <label>Chunk size (Gb) <button type="button" class="help" data-help="Align against chunks of about this many Gb, in parallel, instead of one whole-genome index. That caps miniprot's RAM at about 11 GB per Gb of chunk, plus 4 GB. Results are close to, but not identical to, a whole-genome run: leave it empty when the genome fits, otherwise use the largest size that does." aria-label="Align against chunks of about this many Gb, in parallel, instead of one whole-genome index. That caps miniprot's RAM at about 11 GB per Gb of chunk, plus 4 GB. Results are close to, but not identical to, a whole-genome run: leave it empty when the genome fits, otherwise use the largest size that does.">?</button>
+          <input name="miniprot_chunk_gb" id="chunk" placeholder="off: whole genome"></label>
+      </div>
+    </details>
+
+    <h2>Tools</h2>
+    <div class="tabs">
+      <label><input type="radio" name="engine" value="conda" checked> Conda (no Docker needed)</label>
+      <label><input type="radio" name="engine" value="docker"> Docker</label>
+    </div>
+    <p class="hint" id="engine-hint"></p>
+
+    <h2>Output</h2>
+    <div class="file-row">
+      <button type="button" id="pick-outdir">Output folder…</button>
+      <span class="path" id="path-outdir">none</span>
+    </div>
+    <div class="field-status" id="outdir-status" hidden>
+      <span class="msg"></span>
+      <button type="button" id="btn-subfolder" hidden></button>
+    </div>
+    <label class="check"><input type="checkbox" name="resume"> Resume (reuse finished steps from a previous run in this folder)</label>
+
+    <div id="preflight" class="preflight" hidden></div>
+
+    <div class="row">
+      <button type="submit" id="btn-run" class="primary">Run</button>
+      <button type="button" id="btn-cancel" hidden>Cancel</button>
+    </div>
+  </form>
+
+  <section class="card run">
+    <h2>Progress <span id="run-status" class="pill">idle</span></h2>
+    <p id="run-note" class="note" hidden></p>
+    <div id="run-error" class="error-box" hidden>
+      <strong class="title"></strong>
+      <p class="msg"></p>
+      <p class="err-hint" hidden></p>
+      <pre class="detail"></pre>
+      <div class="row">
+        <button type="button" id="err-workdir">Show the step's work folder</button>
+        <button type="button" id="err-log">Open .nextflow.log</button>
+      </div>
+    </div>
+    <ul id="tasks" class="tasks"></ul>
+    <div id="results" class="results"></div>
+    <details id="log-box" open>
+      <summary>Nextflow log</summary>
+      <pre id="log"></pre>
+    </details>
+  </section>
+</main>
+
+<script src="renderer.js"></script>
+</body>
+</html>

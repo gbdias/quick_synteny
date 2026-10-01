@@ -1,0 +1,9 @@
+# What the app itself needs to launch the pipeline: Nextflow and a Java for
+# it. Installed by the app with micromamba into ~/.quick_synteny; the
+# pipeline's own tools come from ../envs/*.yml (the conda profile).
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - bioconda::nextflow=25.10.4
+  - conda-forge::openjdk=21
