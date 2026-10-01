@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('qs', {
     setupRuntime: () => ipcRenderer.invoke('runtime:setup'),
     checkDocker: () => ipcRenderer.invoke('docker:check'),
     checkNetwork: () => ipcRenderer.invoke('net:check'),
+    getSchema: () => ipcRenderer.invoke('schema:get'),
     checkForUpdate: () => ipcRenderer.invoke('update:check'),
     dismissUpdate: (version) => ipcRenderer.invoke('update:dismiss', version),
     openUpdate: (url) => ipcRenderer.invoke('update:open', url),

@@ -1,0 +1,7 @@
+The following invalid input values have been detected:
+
+* --maxRank: genus
+
+ -- Check script '/opt/quick_synteny/main.nf' at line: 53 or see '.nextflow.log' file for more details
+N E X T F L O W  ~  version 25.10.4
+Launching `/opt/quick_synteny/main.nf` [hungry_minsky] DSL2 - revision: 6b76cf5357

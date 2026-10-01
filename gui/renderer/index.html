@@ -56,15 +56,14 @@
       <p class="field-status" id="search-status" hidden></p>
       <div class="grid">
         <label>Taxid <input id="taxid" name="taxid" inputmode="numeric" autocomplete="off"></label>
-        <label>Climb up to
-          <select name="max_rank">
-            <option>species</option><option>genus</option><option>family</option>
-            <option selected>order</option><option>class</option><option>phylum</option>
-          </select>
+        <label>Climb up to <button type="button" class="help" data-param="max_rank">?</button>
+          <!-- options: the schema's enum, default selected -->
+          <select name="max_rank"></select>
         </label>
       </div>
       <p class="field-status" id="taxid-status" hidden></p>
-      <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference</label>
+      <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference
+        <button type="button" class="help" data-param="exclude_target">?</button></label>
     </div>
 
     <div id="mode-manual" hidden>
@@ -82,22 +81,22 @@
 
     <details>
       <summary>Advanced</summary>
-      <!-- help texts: same voice as the result page's "?" tips, and the
-           pipeline's --help (main.nf) for what each option means -->
+      <!-- each "?" shows its parameter's help_text from the pipeline's
+           nextflow_schema.json (renderer.js, applySchema) -->
       <div class="grid">
-        <label>Min sequence length (bp) <button type="button" class="help" data-help="Chromosomes and scaffolds shorter than this are left out of the plot entirely: the result page can hide more, but can't bring these back. Default 10,000 bp; 0 keeps every sequence." aria-label="Chromosomes and scaffolds shorter than this are left out of the plot entirely: the result page can hide more, but can't bring these back. Default 10,000 bp; 0 keeps every sequence.">?</button>
+        <label>Min sequence length (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
           <input name="min_seq_size" placeholder="10000"></label>
-        <label>Min assembly gap (bp) <button type="button" class="help" data-help="The shortest run of N's that counts as an assembly gap, for the result page's Show gaps switch. Default 100 bp." aria-label="The shortest run of N's that counts as an assembly gap, for the result page's Show gaps switch. Default 100 bp.">?</button>
+        <label>Min assembly gap (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
           <input name="min_asm_gap" placeholder="100"></label>
-        <label>Min identity (0–1) <button type="button" class="help" data-help="A protein's hit counts only if at least this share of its aligned residues are identical or similar (miniprot's Positive score). Default: the weaker genome's average best-hit identity, kept within 0.3–0.9. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards." aria-label="A protein's hit counts only if at least this share of its aligned residues are identical or similar (miniprot's Positive score). Default: the weaker genome's average best-hit identity, kept within 0.3–0.9. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards.">?</button>
+        <label>Min identity (0–1) <button type="button" class="help" data-param="min_identity">?</button>
           <input name="min_identity" placeholder="auto"></label>
-        <label>Max gap (anchors) <button type="button" class="help" data-help="The most anchors a block may skip between two consecutive matched anchors, on either genome. Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Default 25. The result page can change it afterwards." aria-label="The most anchors a block may skip between two consecutive matched anchors, on either genome. Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Default 25. The result page can change it afterwards.">?</button>
+        <label>Max gap (anchors) <button type="button" class="help" data-param="max_gap">?</button>
           <input name="max_gap" placeholder="25"></label>
-        <label>Min block (anchors) <button type="button" class="help" data-help="The minimum number of anchors for a syntenic block to be kept, in links.tsv and the result page's starting view. Default: 15 for close relatives (weaker genome's identity ≥ 0.8), 5 otherwise. The result page can change it afterwards." aria-label="The minimum number of anchors for a syntenic block to be kept, in links.tsv and the result page's starting view. Default: 15 for close relatives (weaker genome's identity ≥ 0.8), 5 otherwise. The result page can change it afterwards.">?</button>
+        <label>Min block (anchors) <button type="button" class="help" data-param="min_block">?</button>
           <input name="min_block" placeholder="auto"></label>
-        <label>miniprot -M <button type="button" class="help" data-help="Index only 1 in 2^M of each genome's k-mers: miniprot needs less RAM, at some cost to sensitivity. Try it when a genome only just doesn't fit. Default: miniprot's own." aria-label="Index only 1 in 2^M of each genome's k-mers: miniprot needs less RAM, at some cost to sensitivity. Try it when a genome only just doesn't fit. Default: miniprot's own.">?</button>
+        <label>miniprot -M <button type="button" class="help" data-param="miniprot_m">?</button>
           <input name="miniprot_m" placeholder="miniprot default"></label>
-        <label>Chunk size (Gb) <button type="button" class="help" data-help="Align against chunks of about this many Gb, in parallel, instead of one whole-genome index. That caps miniprot's RAM at about 11 GB per Gb of chunk, plus 4 GB. Results are close to, but not identical to, a whole-genome run: leave it empty when the genome fits, otherwise use the largest size that does." aria-label="Align against chunks of about this many Gb, in parallel, instead of one whole-genome index. That caps miniprot's RAM at about 11 GB per Gb of chunk, plus 4 GB. Results are close to, but not identical to, a whole-genome run: leave it empty when the genome fits, otherwise use the largest size that does.">?</button>
+        <label>Chunk size (Gb) <button type="button" class="help" data-param="miniprot_chunk_gb">?</button>
           <input name="miniprot_chunk_gb" id="chunk" placeholder="off: whole genome"></label>
       </div>
     </details>

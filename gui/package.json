@@ -41,6 +41,10 @@
         "to": "pipeline/nextflow.config"
       },
       {
+        "from": "../nextflow_schema.json",
+        "to": "pipeline/nextflow_schema.json"
+      },
+      {
         "from": "../bin",
         "to": "pipeline/bin",
         "filter": [

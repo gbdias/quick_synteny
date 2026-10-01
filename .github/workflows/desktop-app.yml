@@ -12,6 +12,7 @@ on:
       - gui/**
       - main.nf
       - nextflow.config
+      - nextflow_schema.json
       - bin/**
       - modules/**
       - conf/**
@@ -22,6 +23,7 @@ on:
       - gui/**
       - main.nf
       - nextflow.config
+      - nextflow_schema.json
       - bin/**
       - modules/**
       - conf/**

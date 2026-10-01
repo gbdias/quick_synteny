@@ -1,0 +1,10 @@
+N E X T F L O W  ~  version 25.10.4
+Launching `/opt/quick_synteny/main.nf` [agitated_plateau] DSL2 - revision: 6b76cf5357
+ERROR ~ Validation of pipeline parameters failed!
+
+ -- Check '.nextflow.log' file for details
+The following invalid input values have been detected:
+
+* --taxid (): 0 is less than 1 (must be an NCBI taxid, a positive whole number)
+
+ -- Check script '/opt/quick_synteny/main.nf' at line: 53 or see '.nextflow.log' file for more details

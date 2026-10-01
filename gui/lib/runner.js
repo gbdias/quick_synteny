@@ -9,7 +9,7 @@ const { spawn } = require('node:child_process');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { CONDA_CACHE, WEBLOG_PLUGIN } = require('./runtime');
+const { CONDA_CACHE, WEBLOG_PLUGIN, pipelinePlugins } = require('./runtime');
 const { ErrorCollector, withNetwork } = require('./nferror');
 const { checkNetwork } = require('./network');
 
@@ -35,12 +35,16 @@ function buildArgs(pipelineDir, form, guiConfig) {
 
 // config the app layers over the pipeline's for each run. The weblog is
 // set here because -with-weblog is deprecated in favor of its config scope,
-// with its plugin pinned so runs work offline (see runtime.js).
+// with its plugin pinned so runs work offline (see runtime.js). A plugins
+// block in a -c config replaces the pipeline's rather than adding to it, so
+// it repeats the pipeline's own pins (nf-schema) too: otherwise Nextflow
+// loads those unpinned, asking the registry for the latest version.
 // The conda engine uses the runtime's micromamba (on PATH, see
 // runtime.runtimeEnv) and keeps its environments under the runtime root,
 // shared across runs.
 function guiConfigText(form, weblogUrl) {
-    let text = `plugins {\n    id '${WEBLOG_PLUGIN}'\n}\nweblog {\n    enabled = true\n    url = '${weblogUrl}'\n}\n`;
+    const plugins = [WEBLOG_PLUGIN, ...pipelinePlugins()].map((id) => `    id '${id}'\n`).join('');
+    let text = `plugins {\n${plugins}}\nweblog {\n    enabled = true\n    url = '${weblogUrl}'\n}\n`;
     if (form.engine === 'conda') {
         text += `conda {\n    useMicromamba = true\n    cacheDir = '${CONDA_CACHE}'\n}\n`;
     }
@@ -146,4 +150,4 @@ class Run {
     }
 }
 
-module.exports = { Run, buildArgs, findResults };
+module.exports = { Run, buildArgs, findResults, guiConfigText, PARAMS };

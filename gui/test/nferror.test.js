@@ -48,6 +48,19 @@ test("a conda env that couldn't be built offline: named as such, retries collaps
     assert.match(e.detail, /Retrying in 2 seconds {2}\(×14\)/);
 });
 
+test('parameters nextflow_schema.json rejects: nf-schema\'s own list (stderr), not its generic ERROR line', () => {
+    const e = collect('schema-invalid-taxid.txt');
+    assert.equal(e.title, 'A parameter is not valid');
+    // nf-schema prints a falsy value as "()"; dropped
+    assert.equal(e.message, '--taxid: 0 is less than 1 (must be an NCBI taxid, a positive whole number)');
+});
+
+test('unrecognised parameters: listed although nf-schema prints no ERROR line, whatever the stream order', () => {
+    const e = collect('schema-unrecognised.txt');
+    assert.equal(e.title, 'A parameter is not valid');
+    assert.equal(e.message, '--maxRank: genus');
+});
+
 test('no error block at all: the last lines of output', () => {
     const c = new ErrorCollector();
     ['Launching foo', 'Exception in thread main java.lang.OutOfMemoryError'].forEach((l) => c.push(l));

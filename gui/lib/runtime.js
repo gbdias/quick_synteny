@@ -30,7 +30,25 @@ const NXF_HOME = path.join(ROOT, 'nextflow');            // the app's Nextflow h
 // leaving setup as the only step that needs a connection. Bump it together
 // with runtime.yml's nextflow.
 const WEBLOG_PLUGIN = 'nf-weblog@1.2.0';
-const WEBLOG_PLUGIN_DIR = path.join(NXF_HOME, 'plugins', WEBLOG_PLUGIN.replace('@', '-'));
+
+// The pipeline's own plugins (nf-schema), as its nextflow.config pins them
+// in `plugins { id '...' }`, read from there so their versions live in one
+// place; setup installs them with the weblog, for the same reason.
+let pipelineDir = null;
+function configure(opts) {
+    pipelineDir = opts.pipelineDir;
+}
+
+function pipelinePlugins() {
+    if (!pipelineDir) return [];
+    const config = fs.readFileSync(path.join(pipelineDir, 'nextflow.config'), 'utf8');
+    const block = config.match(/^plugins\s*\{([^}]*)\}/m);
+    return block ? [...block[1].matchAll(/id\s+['"]([\w-]+@[\w.-]+)['"]/g)].map((m) => m[1]) : [];
+}
+
+const PLUGINS = () => [WEBLOG_PLUGIN, ...pipelinePlugins()];
+const pluginDir = (id) => path.join(NXF_HOME, 'plugins', id.replace('@', '-'));
+const missingPlugins = () => PLUGINS().filter((id) => !fs.existsSync(pluginDir(id)));
 const BUNDLED_MICROMAMBA = process.resourcesPath && path.join(process.resourcesPath, 'micromamba', 'micromamba');
 const MICROMAMBA = BUNDLED_MICROMAMBA && fs.existsSync(BUNDLED_MICROMAMBA) ? BUNDLED_MICROMAMBA
     : path.join(ROOT, 'bin', 'micromamba');
@@ -92,7 +110,7 @@ function runtimeEnv(base = process.env) {
 async function status() {
     const hasMamba = fs.existsSync(MICROMAMBA);
     const nextflow = path.join(RUNTIME_PREFIX, 'bin', 'nextflow');
-    if (!hasMamba || !fs.existsSync(nextflow) || !fs.existsSync(WEBLOG_PLUGIN_DIR)) return { ok: false, root: ROOT, hasMamba };
+    if (!hasMamba || !fs.existsSync(nextflow) || missingPlugins().length) return { ok: false, root: ROOT, hasMamba };
     const r = await run(nextflow, ['-v'], { env: runtimeEnv() });
     const m = r.stdout.match(/nextflow version (\S+)/);
     return m ? { ok: true, root: ROOT, nextflow, version: m[1], condaCache: CONDA_CACHE }
@@ -126,8 +144,7 @@ async function downloadMicromamba(platformArch, dest, onLog) {
 }
 
 // does only what's missing: micromamba (from source), the runtime env, the
-// weblog plugin -- so a runtime set up before the plugin was part of it just
-// gains the plugin
+// plugins -- so a runtime set up before a plugin was needed just gains it
 async function setup(runtimeYml, onLog) {
     fs.mkdirSync(ROOT, { recursive: true });
     if (MICROMAMBA === BUNDLED_MICROMAMBA) onLog(`Using the bundled micromamba ${MICROMAMBA_VERSION}\n`);
@@ -138,9 +155,9 @@ async function setup(runtimeYml, onLog) {
         await stream(MICROMAMBA, ['create', '--yes', '--prefix', RUNTIME_PREFIX, '--file', runtimeYml],
             { ...process.env, ...MAMBA_ENV }, onLog);
     }
-    if (!fs.existsSync(WEBLOG_PLUGIN_DIR)) {
-        onLog(`Installing the Nextflow plugin ${WEBLOG_PLUGIN}…\n`);
-        await stream(nextflow, ['plugin', 'install', WEBLOG_PLUGIN], runtimeEnv(), onLog);
+    for (const id of missingPlugins()) {
+        onLog(`Installing the Nextflow plugin ${id}…\n`);
+        await stream(nextflow, ['plugin', 'install', id], runtimeEnv(), onLog);
     }
     const s = await status();
     if (!s.ok) throw new Error(`runtime installed, but nextflow does not start:\n${s.detail || ''}`);
@@ -148,4 +165,5 @@ async function setup(runtimeYml, onLog) {
     return s;
 }
 
-module.exports = { ROOT, CONDA_CACHE, WEBLOG_PLUGIN, MICROMAMBA_VERSION, status, setup, runtimeEnv, downloadMicromamba };
+module.exports = { ROOT, CONDA_CACHE, WEBLOG_PLUGIN, MICROMAMBA_VERSION, configure, pipelinePlugins, status, setup, runtimeEnv,
+    downloadMicromamba };
