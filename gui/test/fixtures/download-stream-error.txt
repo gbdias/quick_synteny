@@ -1,0 +1,27 @@
+ERROR ~ Error executing process > 'DOWNLOAD_GENOME (GCA_056824455.1)'
+
+Caused by:
+  Process `DOWNLOAD_GENOME (GCA_056824455.1)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  datasets download genome accession GCA_056824455.1 --include genome --dehydrated --no-progressbar --filename dl.zip
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Command error:
+  New version of client (18.38.0) available at https://ftp.ncbi.nlm.nih.gov/pub/datasets/command-line/LATEST/mac/datasets.
+  Error: Download error: stream error: stream ID 5; INTERNAL_ERROR; received from peer
+  Use datasets download genome accession <command> --help for detailed help about a command.
+
+Work dir:
+  /tmp/run/work/ab/cdef0123456789
+
+Tip: when you have fixed the problem you can continue the execution adding the option `-resume` to the run command line
+
+ -- Check '.nextflow.log' file for details

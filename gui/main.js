@@ -7,6 +7,7 @@ const runtime = require('./lib/runtime');
 const inputs = require('./lib/inputs');
 const updates = require('./lib/updates');
 const network = require('./lib/network');
+const { smokeTest } = require('./lib/smoke');
 
 // the pipeline: this repo in development, a bundled copy once packaged
 const PIPELINE_DIR = app.isPackaged ? path.join(process.resourcesPath, 'pipeline') : path.resolve(__dirname, '..');
@@ -147,6 +148,14 @@ ipcMain.handle('result:pick', async () => {
 ipcMain.handle('path:reveal', (_e, p) => shell.openPath(p));
 
 app.whenReady().then(async () => {
+    // `--smoke-test`: check the app works here, print the result, exit
+    // (lib/smoke.js; the CI workflow runs it on every build)
+    if (process.argv.includes('--smoke-test')) {
+        await env.fixPath();
+        const ok = await smokeTest({ pipelineDir: PIPELINE_DIR, runtimeYml: RUNTIME_YML, log: (t) => process.stdout.write(t) });
+        app.exit(ok ? 0 : 1);
+        return;
+    }
     // a packaged app gets its icon from the bundle; from source, the Dock
     // would show Electron's
     if (!app.isPackaged && process.platform === 'darwin') app.dock.setIcon(path.join(__dirname, 'build', 'icon-macos.png'));

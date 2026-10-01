@@ -1,0 +1,5 @@
+N E X T F L O W  ~  version 25.10.4
+Launching `/opt/quick_synteny/main.nf` [sick_einstein] DSL2 - revision: 4f544b89a6
+ERROR ~ ERROR: --taxid must be an NCBI taxid (a positive whole number), got '0'
+
+ -- Check '.nextflow.log' file for details

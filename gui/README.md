@@ -14,17 +14,21 @@ It targets macOS and Linux; Windows isn't supported (see
 [Platforms](#platforms)). The app isn't signed, and won't be for the
 foreseeable future. So macOS asks users to allow it once per install and
 per update, and the app can't update itself: it tells you when there's a
-new version instead (see [Updates](#updates)). Only the Apple Silicon build
-exists so far.
+new version instead (see [Updates](#updates)).
 
 ## Platforms
 
-| platform | status |
-|---|---|
-| macOS, Apple Silicon | built and tested (`npm run dist:mac`) |
-| macOS, Intel | not built yet: needs `--x64` and a `darwin-x64` micromamba, which `fetch-micromamba.js` already knows |
-| Linux, x64 and arm64 | not built yet: an AppImage (and optionally `.deb`/`.rpm`) with a `linux-*` micromamba, best built and tried in CI. Recent Ubuntu versions restrict Electron's sandbox, so an AppImage may need `--no-sandbox` or an AppArmor profile there |
-| Windows | not supported |
+| platform | build | status |
+|---|---|---|
+| macOS, Apple Silicon | `.dmg` | tested in full by hand; smoke-tested in CI |
+| macOS, Intel | `.dmg` | smoke-tested here under Rosetta and in CI, on an Intel runner |
+| Linux, x64 and arm64 | AppImage | smoke-tested in CI only; no full run yet |
+| Windows | — | not supported |
+
+On Linux, an AppImage may need `--no-sandbox` on recent Ubuntu versions,
+which restrict the sandbox Electron uses (or an AppArmor profile). On
+machines without FUSE, `APPIMAGE_EXTRACT_AND_RUN=1` makes it unpack itself
+instead of mounting.
 
 Windows would need more than a build. Nextflow needs a POSIX system (bash
 for every task, Unix scripts in `bin/`), and miniprot has no Windows conda
@@ -37,11 +41,17 @@ command-line pipeline, inside WSL2, without support.
 ```bash
 cd gui
 npm install
-npm run dist:mac      # -> dist/quick_synteny-<version>-mac-arm64.dmg
+npm test                  # unit tests (test/, node:test)
+npm run dist:mac-arm64    # -> dist/quick_synteny-<version>-mac-arm64.dmg
+npm run dist:mac-x64      # -> dist/quick_synteny-<version>-mac-x64.dmg
+npm run dist:linux-x64    # -> dist/quick_synteny-<version>-linux-x86_64.AppImage
+npm run dist:linux-arm64  # -> dist/quick_synteny-<version>-linux-arm64.AppImage
 ```
 
-`dist:mac` first puts conda-forge's micromamba, pinned and sha256-checked
-(`scripts/fetch-micromamba.js`), into `vendor/`. electron-builder then
+Each build first puts conda-forge's micromamba for that target, pinned and
+sha256-checked (`scripts/fetch-micromamba.js`), into `vendor/`. A Mac can
+build all four. Linux AppImages cross-build fine, but can only be run on
+Linux. electron-builder then
 packages the app. Everything it copies into the app's `Resources/` is set
 in `package.json` (`build.extraResources`):
 
@@ -51,8 +61,9 @@ in `package.json` (`build.extraResources`):
 - that micromamba.
 
 Files are named `quick_synteny-<version>-<mac|linux>-<arch>.<ext>`
-(`build.artifactName`). Keep that pattern: the update notice looks for it
-in a release's files.
+(`build.artifactName`). electron-builder writes an x64 AppImage's arch as
+`x86_64`. Keep that pattern: the update notice looks for it, under either
+spelling, in a release's files.
 
 The app is ad-hoc signed, with the hardened runtime and
 `build/entitlements.mac.plist`. Apple Silicon won't run an app with no
@@ -61,6 +72,39 @@ satisfy Gatekeeper, though.
 
 To run from source instead, use `npm start`. The app then downloads
 micromamba into the runtime folder on first launch.
+
+### Smoke test
+
+`quick_synteny --smoke-test` checks that a built app works on this machine,
+without opening a window (`lib/smoke.js`). It:
+1. checks that the bundled pipeline is complete and its scripts executable;
+2. runs the real first-launch setup into `QS_HOME`, using the bundled
+   micromamba to install Nextflow, Java and the weblog plugin;
+3. starts that Nextflow;
+4. runs `nextflow run main.nf --help -profile conda` on the bundled
+   pipeline.
+
+It prints each step and exits 0 or 1. Point `QS_HOME` at a scratch folder,
+or it sets up `~/.quick_synteny`:
+
+```bash
+QS_HOME=/tmp/qs dist/mac-arm64/quick_synteny.app/Contents/MacOS/quick_synteny --smoke-test
+```
+
+It doesn't run the pipeline itself: that needs NCBI and real genomes.
+
+### CI
+
+`.github/workflows/desktop-app.yml` runs on every push or pull request
+that touches `gui/` or the pipeline (the app bundles it), and on demand:
+1. the unit tests;
+2. the four builds, each on a runner of its own platform and architecture
+   (`macos-15`, `macos-15-intel`, `ubuntu-24.04`, `ubuntu-24.04-arm`);
+3. a smoke test of each build. On Linux it runs under Xvfb, with
+   `--no-sandbox` and `APPIMAGE_EXTRACT_AND_RUN`, since the runners have no
+   display and no FUSE.
+
+The builds are kept as run artifacts for 14 days. Nothing is published.
 
 ## Installing on macOS
 
@@ -318,6 +362,8 @@ would close that gap.
 - `build/`: packaging resources: icons and macOS entitlements.
 - `scripts/fetch-micromamba.js`: puts the pinned micromamba in `vendor/`
   for packaging.
+- `lib/smoke.js`: `--smoke-test`.
+- `test/`: unit tests, with fixtures of Nextflow's real console output.
 - `runtime.yml`: the app's own Nextflow and Java.
 - `lib/runtime.js`: micromamba download and verification, runtime setup,
   and the environment Nextflow runs with.

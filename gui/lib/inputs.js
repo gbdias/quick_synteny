@@ -48,8 +48,9 @@ function inspectOutdir(dir) {
 
 // a folder name for a new run inside a chosen folder: <target>_vs_<taxid>
 function suggestRunName(assembly, taxid) {
-    const stem = assembly ? path.basename(assembly).replace(/\.gz$/, '').replace(/\.[^.]+$/, '') : 'quick_synteny';
-    return `${stem}_vs_${taxid || 'reference'}`.replace(/[^\w.-]+/g, '_');
+    const safe = (s) => s.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
+    const stem = assembly ? safe(path.basename(assembly).replace(/\.gz$/, '').replace(/\.[^.]+$/, '')) : '';
+    return `${stem || 'quick_synteny'}_vs_${safe(String(taxid || '')) || 'reference'}`;
 }
 
 module.exports = { sniffFasta, inspectOutdir, suggestRunName };

@@ -1,0 +1,25 @@
+ERROR ~ Error executing process > 'RESOLVE_TAXONOMY:FETCH_TAXONOMY_JSON (4932)'
+
+Caused by:
+  Process `RESOLVE_TAXONOMY:FETCH_TAXONOMY_JSON (4932)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  datasets summary taxonomy taxon 4932 --parents > taxonomy.json
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Command error:
+  Error: [gateway] Post "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/related_ids": POST https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/related_ids giving up after 11 attempt(s): Post "https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/related_ids": dial tcp: lookup api.ncbi.nlm.nih.gov: no such host
+
+Work dir:
+  /tmp/run/work/ab/cdef0123456789
+
+Tip: when you have fixed the problem you can continue the execution adding the option `-resume` to the run command line
+
+ -- Check '.nextflow.log' file for details
