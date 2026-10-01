@@ -7,18 +7,24 @@ const runtime = require('./lib/runtime');
 const inputs = require('./lib/inputs');
 const updates = require('./lib/updates');
 const network = require('./lib/network');
+const taxa = require('./lib/taxa');
 const { smokeTest } = require('./lib/smoke');
+const { History } = require('./lib/history');
+const record = require('./lib/record');
 
 // the pipeline: this repo in development, a bundled copy once packaged
 const PIPELINE_DIR = app.isPackaged ? path.join(process.resourcesPath, 'pipeline') : path.resolve(__dirname, '..');
 // read by micromamba itself, so it can't live inside an asar archive
 const RUNTIME_YML = app.isPackaged ? path.join(process.resourcesPath, 'runtime.yml') : path.join(__dirname, 'runtime.yml');
 runtime.configure({ pipelineDir: PIPELINE_DIR });
+// settings and the run history; QS_USER_DATA moves them, for testing
+if (process.env.QS_USER_DATA) app.setPath('userData', process.env.QS_USER_DATA);
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
 
 let mainWindow = null;
 let currentRun = null;
 let lastEnv = null;
+let history = null;
 
 function loadSettings() {
     try { return JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')); } catch { return {}; }
@@ -33,9 +39,13 @@ function send(channel, payload) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
+// macOS: the traffic lights sit inset over the sidebar, which doubles as the
+// title bar (renderer/style.css marks the drag regions); elsewhere the
+// window keeps its normal frame
 function createMainWindow() {
     mainWindow = new BrowserWindow({
-        width: 1100, height: 860, title: 'quick_synteny',
+        width: 1200, height: 800, minWidth: 980, minHeight: 640, title: 'quick_synteny', backgroundColor: '#FFFFFF',
+        ...(process.platform === 'darwin' ? { titleBarStyle: 'hiddenInset', trafficLightPosition: { x: 18, y: 18 } } : {}),
         webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true },
     });
     mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -84,25 +94,34 @@ ipcMain.handle('update:open', (_e, url) => {
 ipcMain.handle('settings:get', () => loadSettings());
 ipcMain.handle('settings:set', (_e, s) => saveSettings({ ...loadSettings(), ...s }));
 
+// a picked or dropped file: its size, and whether it looks like FASTA
+function inspectFile(file) {
+    const st = fs.statSync(file);
+    if (!st.isFile()) throw new Error(`${path.basename(file)} is a folder, not a file`);
+    return { path: file, bytes: st.size, kind: inputs.sniffFasta(file) };
+}
 ipcMain.handle('dialog:file', async (_e, { title, filters }) => {
     const r = await dialog.showOpenDialog(mainWindow, { title, properties: ['openFile'], filters });
-    if (r.canceled) return null;
-    const file = r.filePaths[0];
-    return { path: file, bytes: fs.statSync(file).size, kind: inputs.sniffFasta(file) };
+    return r.canceled ? null : inspectFile(r.filePaths[0]);
 });
+ipcMain.handle('file:inspect', (_e, file) => inspectFile(file));
 ipcMain.handle('dialog:dir', async (_e, { title }) => {
     const r = await dialog.showOpenDialog(mainWindow, { title, properties: ['openDirectory', 'createDirectory'] });
     return r.canceled ? null : inputs.inspectOutdir(r.filePaths[0]);
 });
 ipcMain.handle('outdir:suggest', (_e, { assembly, taxid }) => inputs.suggestRunName(assembly, taxid));
-
-// scientific/common name -> taxid, via NCBI Datasets' taxon_suggest
-ipcMain.handle('taxon:suggest', async (_e, query) => {
-    const url = `https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy/taxon_suggest/${encodeURIComponent(query)}`;
-    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
-    if (!r.ok) throw new Error(`NCBI returned ${r.status}`);
-    return (await r.json()).sci_name_and_ids || [];
+// where a run goes unless the user picks a folder: Documents/quick_synteny/
+// <target>_vs_<taxid or reference>, with -2, -3... once that's taken
+ipcMain.handle('outdir:default', (_e, { assembly, taxid, reference }) => {
+    const base = path.join(app.getPath('documents'), 'quick_synteny',
+        inputs.suggestRunName(assembly, taxid || record.fileStem(reference)));
+    let dir = base;
+    for (let n = 2; fs.existsSync(dir); n++) dir = `${base}-${n}`;
+    return { path: dir, writable: true, empty: true, isRun: false, isNew: true };
 });
+
+// scientific/common name -> taxa to pick from (lib/taxa.js)
+ipcMain.handle('taxon:suggest', (_e, query) => taxa.searchTaxa(query));
 
 // taxid -> its name and rank, or { found: false } when NCBI has no such
 // taxon (a 200 carrying `errors`, not an HTTP error). Throws only when NCBI
@@ -117,7 +136,49 @@ ipcMain.handle('taxon:lookup', async (_e, taxid) => {
     return { found: true, taxid: String(t.tax_id), name: t.organism_name, rank: t.rank?.toLowerCase(), common: t.common_name };
 });
 
-ipcMain.handle('run:start', async (_e, form) => {
+// ---------- runs ----------
+
+function publishRun(r) {
+    history.put(r);
+    send('run:update', r);
+}
+
+// a finished run's result page, rendered in a hidden window and captured for
+// the run screen: the panels, below the page's title and controls (about
+// the top 220 px at this width). Bokeh lays the page out after it loads,
+// hence the wait.
+async function captureThumbnail(html, out) {
+    const win = new BrowserWindow({ show: false, width: 1600, height: 1000, webPreferences: { contextIsolation: true, sandbox: true } });
+    try {
+        await win.loadFile(html);
+        await new Promise((r) => setTimeout(r, 3000));
+        const image = await win.webContents.capturePage({ x: 0, y: 220, width: 1600, height: 780 });
+        if (image.isEmpty()) return false;
+        fs.mkdirSync(path.dirname(out), { recursive: true });
+        fs.writeFileSync(out, image.resize({ width: 1200 }).toPNG());
+        return true;
+    } catch {
+        return false;
+    } finally {
+        win.destroy();
+    }
+}
+
+ipcMain.handle('runs:list', () => history.list());
+ipcMain.handle('runs:remove', (_e, id) => {
+    if (currentRun && !currentRun.done && currentRun.record.id === id) throw new Error('that run is still going');
+    history.remove(id);
+    send('runs:changed', history.list());
+});
+ipcMain.handle('thumb:get', (_e, id) => {
+    try {
+        return `data:image/png;base64,${fs.readFileSync(history.thumbnailPath(id)).toString('base64')}`;
+    } catch {
+        return null;
+    }
+});
+
+ipcMain.handle('run:start', async (_e, form, meta = {}) => {
     if (currentRun && !currentRun.done) throw new Error('a run is already in progress');
     if (!lastEnv?.nextflow?.ok) throw new Error('Nextflow is not available');
     // checked now rather than trusting the page's last check: Docker
@@ -130,8 +191,37 @@ ipcMain.handle('run:start', async (_e, form) => {
     // checks, plugins); what a run itself needs online is the page's call
     const online = (await network.checkNetwork()).online;
     const launch = online ? lastEnv.nextflow : { ...lastEnv.nextflow, env: { ...lastEnv.nextflow.env, NXF_OFFLINE: 'true' } };
-    currentRun = new Run({ pipelineDir: PIPELINE_DIR, launch, form, send });
-    await currentRun.start();
+    const r = record.newRecord(form, { targetSpecies: meta.targetSpecies });
+    const tasks = new Map();
+    // the runner's events become the record's; only the log goes to the
+    // page as it is
+    const onEvent = async (channel, payload) => {
+        if (channel === 'run:log') return send('run:log', { id: r.id, text: payload });
+        if (channel === 'run:done') {
+            record.finishRecord(r, tasks, payload);
+            publishRun(r);
+            if (r.status === 'finished' && r.results[0]) {
+                r.hasThumbnail = await captureThumbnail(r.results[0], history.thumbnailPath(r.id));
+                publishRun(r);
+            }
+            if (r.results.length === 1) openResult(r.results[0]);
+            return;
+        }
+        if (record.applyEvent(r, tasks, channel, payload)) publishRun(r);
+    };
+    currentRun = new Run({ pipelineDir: PIPELINE_DIR, launch, form, send: onEvent });
+    currentRun.record = r;
+    publishRun(r);
+    try {
+        await currentRun.start();
+    } catch (e) {
+        currentRun.done = true;
+        r.status = 'failed';
+        r.finishedAt = new Date().toISOString();
+        r.error = { title: 'The run could not start', message: e.message };
+        publishRun(r);
+    }
+    return r.id;
 });
 ipcMain.handle('run:cancel', () => currentRun?.cancel());
 
@@ -170,6 +260,12 @@ app.whenReady().then(async () => {
         if (process.env.QS_DOWNLOAD_DIR) item.setSavePath(path.join(process.env.QS_DOWNLOAD_DIR, item.getFilename()));
         else item.setSaveDialogOptions({ defaultPath: path.join(app.getPath('downloads'), item.getFilename()) });
     });
+    history = new History(app.getPath('userData'));
+    // finished discovery runs from before the selections were read at the
+    // end, whose log lines the runner couldn't parse (a rank of several
+    // words): fill in what was found, and their titles
+    for (const r of history.list()) if (r.status === 'finished') record.fillFound(r);
+    history.save(true);
     createMainWindow();
 });
 

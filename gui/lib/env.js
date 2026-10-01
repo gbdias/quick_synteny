@@ -88,7 +88,7 @@ async function checkDocker() {
 
 async function checkAll(settings) {
     const nextflow = await nextflowLaunch(settings);
-    return { nextflow, host: { memBytes: os.totalmem(), cpus: os.cpus().length }, runtimeRoot: runtime.ROOT };
+    return { nextflow, host: { memBytes: os.totalmem(), cpus: os.cpus().length }, runtimeRoot: runtime.ROOT, home: os.homedir() };
 }
 
 module.exports = { fixPath, checkAll, checkDocker };

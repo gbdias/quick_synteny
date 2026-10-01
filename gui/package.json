@@ -13,7 +13,8 @@
     "dist:mac-arm64": "node scripts/fetch-micromamba.js darwin-arm64 && electron-builder --mac dmg --arm64 --publish never",
     "dist:mac-x64": "node scripts/fetch-micromamba.js darwin-x64 && electron-builder --mac dmg --x64 --publish never",
     "dist:linux-x64": "node scripts/fetch-micromamba.js linux-x64 && electron-builder --linux AppImage --x64 --publish never",
-    "dist:linux-arm64": "node scripts/fetch-micromamba.js linux-arm64 && electron-builder --linux AppImage --arm64 --publish never"
+    "dist:linux-arm64": "node scripts/fetch-micromamba.js linux-arm64 && electron-builder --linux AppImage --arm64 --publish never",
+    "icons": "electron scripts/make-icns.js"
   },
   "devDependencies": {
     "electron": "^44.5.1",
@@ -80,7 +81,7 @@
       "hardenedRuntime": true,
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
-      "icon": "build/icon-macos.png"
+      "icon": "build/icon.icns"
     },
     "linux": {
       "target": "AppImage",

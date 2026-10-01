@@ -2,153 +2,270 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:">
 <title>quick_synteny</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header>
-  <h1>quick_synteny</h1>
-  <div id="env" class="env"><span class="pill">checking environment…</span></div>
-  <button id="btn-setup" class="primary" hidden>Set up runtime</button>
-  <button id="btn-settings" class="ghost">Settings</button>
-  <button id="btn-open-result" class="ghost">Open result…</button>
-</header>
+<div class="app">
 
-<div id="update-banner" class="update" hidden>
-  <span class="msg"></span>
-  <button type="button" id="update-download" class="primary">Download</button>
-  <button type="button" id="update-notes">What's new</button>
-  <button type="button" id="update-dismiss" class="ghost">Dismiss</button>
-  <p class="hint" id="update-mac-hint" hidden>The new version isn't signed either: the first time you open it, macOS asks
-    you to allow it again (System Settings → Privacy &amp; Security → Open Anyway).</p>
-</div>
+<!-- ======================= sidebar ======================= -->
+<aside class="sidebar">
+  <div class="drag sidebar-top"></div>
+  <button type="button" id="btn-new" class="btn primary block">
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+    New run
+  </button>
+  <div class="side-label">Runs</div>
+  <nav id="run-list" class="run-list" aria-label="Runs"></nav>
+  <p id="runs-empty" class="side-empty">Your runs will show up here.</p>
+  <div class="side-foot">
+    <button type="button" id="tools-status" class="tools-status"><span class="dot"></span><span class="txt">Checking tools…</span></button>
+    <button type="button" id="btn-open-result" class="icon-btn" aria-label="Open a result…" title="Open a result…">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+    </button>
+    <button type="button" id="btn-settings" class="icon-btn" aria-label="Settings" title="Settings">
+      <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>
+    </button>
+  </div>
+</aside>
 
-<section id="settings" class="card" hidden>
-  <h2>Settings</h2>
-  <p class="hint">Only to use your own Nextflow instead of the app's managed runtime (in <code id="runtime-root"></code>).</p>
-  <label>Nextflow executable <input id="set-nextflow" placeholder="managed runtime"></label>
-  <label>Java home (17+) <input id="set-java" placeholder="managed runtime"></label>
-  <label class="check"><input type="checkbox" id="set-updates" checked> Check GitHub for a new version when the app starts</label>
-  <div class="row"><button id="btn-save-settings">Save &amp; re-check</button></div>
-</section>
+<!-- ======================= main ======================= -->
+<main class="main">
+  <div class="drag main-top"></div>
 
-<main>
-  <form id="form" class="card">
-    <h2>Target genome</h2>
-    <div class="file-row">
-      <button type="button" data-pick="assembly" data-title="Target genome FASTA">Choose FASTA…</button>
-      <span class="path" id="path-assembly">none</span>
+  <div id="update-banner" class="update" hidden>
+    <span class="msg"></span>
+    <button type="button" id="update-download" class="btn primary">Download</button>
+    <button type="button" id="update-notes" class="btn">What's new</button>
+    <button type="button" id="update-dismiss" class="btn ghost">Dismiss</button>
+    <p class="hint" id="update-mac-hint" hidden>The new version isn't signed either: the first time you open it, macOS asks
+      you to allow it again (System Settings → Privacy &amp; Security → Open Anyway).</p>
+  </div>
+
+  <!-- ---------- new run ---------- -->
+  <form id="form" class="view view-new" novalidate>
+    <div class="scroll">
+      <header class="view-head">
+        <h1>New run</h1>
+        <p>Plot a genome against a related one, or against files of your own.</p>
+      </header>
+
+      <section class="block">
+        <h2>Your genome</h2>
+        <div class="drop" id="drop-assembly" data-drop="assembly">
+          <div class="drop-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4"></path><path d="M7 9l5-5 5 5"></path><path d="M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"></path></svg></div>
+          <div class="drop-title">Drop your genome's FASTA here</div>
+          <div class="drop-sub">FASTA or gzipped FASTA · <button type="button" class="link" data-pick="assembly" data-title="Your genome (FASTA)">Choose a file…</button></div>
+        </div>
+        <div class="file-card" id="card-assembly" data-drop="assembly" hidden>
+          <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></div>
+          <div class="file-text"><div class="file-name"></div><div class="file-meta"></div></div>
+          <button type="button" class="btn" data-pick="assembly" data-title="Your genome (FASTA)">Change…</button>
+        </div>
+        <p class="field-status" id="status-assembly" hidden></p>
+      </section>
+
+      <section class="block">
+        <h2>Compare it with</h2>
+        <div class="segmented" role="radiogroup" aria-label="Compare it with">
+          <label><input type="radio" name="mode" value="manual" checked><span>My own files</span></label>
+          <label><input type="radio" name="mode" value="auto"><span>A relative on NCBI</span></label>
+        </div>
+
+        <div id="mode-manual" class="mode-body">
+          <div class="slot" id="slot-reference" data-drop="reference">
+            <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></div>
+            <div class="file-text"><div class="slot-label">Reference genome</div><div class="file-name">Drop or choose a genome FASTA</div><div class="file-meta"></div></div>
+            <button type="button" class="btn" data-pick="reference" data-title="Reference genome (FASTA)">Choose…</button>
+          </div>
+          <p class="field-status" id="status-reference" hidden></p>
+          <div class="slot" id="slot-proteome" data-drop="proteome">
+            <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></div>
+            <div class="file-text"><div class="slot-label">Proteome</div><div class="file-name">Drop or choose a protein FASTA</div><div class="file-meta"></div></div>
+            <button type="button" class="btn" data-pick="proteome" data-title="Proteome (protein FASTA)">Choose…</button>
+          </div>
+          <p class="field-status" id="status-proteome" hidden></p>
+          <p class="hint">The proteins are aligned to both genomes, and their matches are what the synteny is built from. Works offline.</p>
+        </div>
+
+        <div id="mode-auto" class="mode-body" hidden>
+          <label for="taxon-search" class="field-label">Which organism is your genome from?</label>
+          <div class="search">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+            <input id="taxon-search" placeholder="Species name, or an NCBI taxid" autocomplete="off">
+          </div>
+          <ul id="taxon-results" class="suggest" hidden></ul>
+          <p class="field-status" id="search-status" hidden></p>
+          <div class="grid">
+            <label>Taxid <input id="taxid" name="taxid" inputmode="numeric" autocomplete="off"></label>
+            <label>Look as far as <button type="button" class="help" data-param="max_rank">?</button>
+              <select name="max_rank"></select>
+            </label>
+          </div>
+          <p class="field-status" id="taxid-status" hidden></p>
+          <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference
+            <button type="button" class="help" data-param="exclude_target">?</button></label>
+        </div>
+      </section>
+
+      <section class="block">
+        <h2>Save to</h2>
+        <div class="save-row">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+          <span class="path" id="path-outdir">A folder is suggested once you add a genome</span>
+          <button type="button" class="btn" id="pick-outdir">Change…</button>
+        </div>
+        <div class="field-status" id="outdir-status" hidden>
+          <span class="msg"></span>
+          <button type="button" class="btn" id="btn-subfolder" hidden></button>
+        </div>
+        <label class="check" id="resume-row" hidden><input type="checkbox" name="resume"> Reuse this folder's finished steps (resume)</label>
+      </section>
+
+      <details class="options" id="options">
+        <summary>
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>
+          <span class="sum-text"><span class="sum-title">Options</span><span class="sum-sub">Tools, chaining and memory. The defaults suit most genomes.</span></span>
+          <svg class="ico chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
+        </summary>
+        <div class="options-body">
+          <h3>Tools</h3>
+          <div class="tabs">
+            <label><input type="radio" name="engine" value="conda" checked> Conda (no Docker needed)</label>
+            <label><input type="radio" name="engine" value="docker"> Docker</label>
+          </div>
+          <p class="hint" id="engine-hint"></p>
+          <p class="field-status" id="docker-status" hidden></p>
+
+          <h3>Sequences and chaining</h3>
+          <!-- each "?" shows its parameter's help from the pipeline's
+               nextflow_schema.json (form.js, applySchema) -->
+          <div class="grid">
+            <label>Min sequence length (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
+              <input name="min_seq_size"></label>
+            <label>Min assembly gap (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
+              <input name="min_asm_gap"></label>
+            <label>Min identity (0–1) <button type="button" class="help" data-param="min_identity">?</button>
+              <input name="min_identity" placeholder="automatic"></label>
+            <label>Max gap (anchors) <button type="button" class="help" data-param="max_gap">?</button>
+              <input name="max_gap"></label>
+            <label>Min block (anchors) <button type="button" class="help" data-param="min_block">?</button>
+              <input name="min_block" placeholder="automatic"></label>
+          </div>
+          <h3>Memory</h3>
+          <div class="grid">
+            <label>miniprot -M <button type="button" class="help" data-param="miniprot_m">?</button>
+              <input name="miniprot_m" placeholder="miniprot's default"></label>
+            <label>Chunk size (Gb) <button type="button" class="help" data-param="miniprot_chunk_gb">?</button>
+              <input name="miniprot_chunk_gb" id="chunk" placeholder="off: whole genome"></label>
+          </div>
+        </div>
+      </details>
+
+      <div id="preflight" class="preflight" hidden></div>
     </div>
-    <p class="field-status" id="status-assembly" hidden></p>
 
-    <h2>Reference genome &amp; proteome</h2>
-    <div class="tabs">
-      <label><input type="radio" name="mode" value="auto" checked> Discover from NCBI</label>
-      <label><input type="radio" name="mode" value="manual"> Use my own files</label>
-    </div>
-
-    <div id="mode-auto">
-      <label>Target organism
-        <input id="taxon-search" placeholder="species name or taxid, e.g. Saccharomyces cerevisiae" autocomplete="off">
-      </label>
-      <ul id="taxon-results" class="suggest" hidden></ul>
-      <p class="field-status" id="search-status" hidden></p>
-      <div class="grid">
-        <label>Taxid <input id="taxid" name="taxid" inputmode="numeric" autocomplete="off"></label>
-        <label>Climb up to <button type="button" class="help" data-param="max_rank">?</button>
-          <!-- options: the schema's enum, default selected -->
-          <select name="max_rank"></select>
-        </label>
-      </div>
-      <p class="field-status" id="taxid-status" hidden></p>
-      <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference
-        <button type="button" class="help" data-param="exclude_target">?</button></label>
-    </div>
-
-    <div id="mode-manual" hidden>
-      <div class="file-row">
-        <button type="button" data-pick="reference" data-title="Reference genome FASTA">Reference FASTA…</button>
-        <span class="path" id="path-reference">none</span>
-      </div>
-      <p class="field-status" id="status-reference" hidden></p>
-      <div class="file-row">
-        <button type="button" data-pick="proteome" data-title="Proteome FASTA">Proteome FASTA…</button>
-        <span class="path" id="path-proteome">none</span>
-      </div>
-      <p class="field-status" id="status-proteome" hidden></p>
-    </div>
-
-    <details>
-      <summary>Advanced</summary>
-      <!-- each "?" shows its parameter's help_text from the pipeline's
-           nextflow_schema.json (renderer.js, applySchema) -->
-      <div class="grid">
-        <label>Min sequence length (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
-          <input name="min_seq_size" placeholder="10000"></label>
-        <label>Min assembly gap (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
-          <input name="min_asm_gap" placeholder="100"></label>
-        <label>Min identity (0–1) <button type="button" class="help" data-param="min_identity">?</button>
-          <input name="min_identity" placeholder="auto"></label>
-        <label>Max gap (anchors) <button type="button" class="help" data-param="max_gap">?</button>
-          <input name="max_gap" placeholder="25"></label>
-        <label>Min block (anchors) <button type="button" class="help" data-param="min_block">?</button>
-          <input name="min_block" placeholder="auto"></label>
-        <label>miniprot -M <button type="button" class="help" data-param="miniprot_m">?</button>
-          <input name="miniprot_m" placeholder="miniprot default"></label>
-        <label>Chunk size (Gb) <button type="button" class="help" data-param="miniprot_chunk_gb">?</button>
-          <input name="miniprot_chunk_gb" id="chunk" placeholder="off: whole genome"></label>
-      </div>
-    </details>
-
-    <h2>Tools</h2>
-    <div class="tabs">
-      <label><input type="radio" name="engine" value="conda" checked> Conda (no Docker needed)</label>
-      <label><input type="radio" name="engine" value="docker"> Docker</label>
-    </div>
-    <p class="hint" id="engine-hint"></p>
-
-    <h2>Output</h2>
-    <div class="file-row">
-      <button type="button" id="pick-outdir">Output folder…</button>
-      <span class="path" id="path-outdir">none</span>
-    </div>
-    <div class="field-status" id="outdir-status" hidden>
-      <span class="msg"></span>
-      <button type="button" id="btn-subfolder" hidden></button>
-    </div>
-    <label class="check"><input type="checkbox" name="resume"> Resume (reuse finished steps from a previous run in this folder)</label>
-
-    <div id="preflight" class="preflight" hidden></div>
-
-    <div class="row">
-      <button type="submit" id="btn-run" class="primary">Run</button>
-      <button type="button" id="btn-cancel" hidden>Cancel</button>
-    </div>
+    <footer class="form-foot">
+      <p id="form-msg" class="form-msg"></p>
+      <button type="submit" id="btn-run" class="btn primary lg">
+        <svg class="ico fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+        Start run
+      </button>
+    </footer>
   </form>
 
-  <section class="card run">
-    <h2>Progress <span id="run-status" class="pill">idle</span></h2>
-    <p id="run-note" class="note" hidden></p>
-    <div id="run-error" class="error-box" hidden>
-      <strong class="title"></strong>
-      <p class="msg"></p>
-      <p class="err-hint" hidden></p>
-      <pre class="detail"></pre>
-      <div class="row">
-        <button type="button" id="err-workdir">Show the step's work folder</button>
-        <button type="button" id="err-log">Open .nextflow.log</button>
+  <!-- ---------- a run ---------- -->
+  <section id="view-run" class="view view-run" hidden>
+    <div class="scroll">
+      <header class="run-head">
+        <div class="run-head-text">
+          <h1 id="run-title"></h1>
+          <div id="run-chips" class="chips"></div>
+        </div>
+        <div id="run-actions" class="actions"></div>
+      </header>
+
+      <div id="run-error" class="error-box" hidden>
+        <strong class="title"></strong>
+        <p class="msg"></p>
+        <p class="err-hint" hidden></p>
+        <pre class="detail"></pre>
+        <div class="row">
+          <button type="button" class="btn" id="err-workdir">Show the step's work folder</button>
+          <button type="button" class="btn" id="err-log">Open .nextflow.log</button>
+        </div>
+      </div>
+
+      <div id="run-preview" class="preview" hidden><img id="run-thumb" alt="The run's interactive synteny page"></div>
+      <div id="run-stats" class="stats" hidden></div>
+
+      <div class="run-grid">
+        <div class="card"><ol id="run-steps" class="steps"></ol></div>
+        <div class="side-col">
+          <div class="card found">
+            <div class="card-label" id="found-label">What we found</div>
+            <div id="run-found"></div>
+          </div>
+          <details id="log-box" class="log-box">
+            <summary>Show the technical log</summary>
+            <pre id="log"></pre>
+          </details>
+        </div>
       </div>
     </div>
-    <ul id="tasks" class="tasks"></ul>
-    <div id="results" class="results"></div>
-    <details id="log-box" open>
-      <summary>Nextflow log</summary>
-      <pre id="log"></pre>
-    </details>
+  </section>
+
+  <!-- ---------- first-launch setup ---------- -->
+  <section id="view-setup" class="view view-setup" hidden>
+    <div class="scroll narrow">
+      <header class="view-head">
+        <h1>Getting quick_synteny ready</h1>
+        <p>The first launch installs Nextflow, Java and two Nextflow plugins into <code id="setup-root"></code>.
+          It takes about a minute and needs an internet connection, this once.</p>
+      </header>
+      <div class="card setup-card">
+        <div class="setup-row" id="setup-progress">
+          <svg class="ico spin" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" class="spin-track"></circle><path d="M21 12a9 9 0 0 0-9-9"></path></svg>
+          <span>Installing…</span>
+        </div>
+        <div id="setup-error" class="error-box" hidden>
+          <strong class="title"></strong>
+          <p class="msg"></p>
+          <p class="err-hint" hidden></p>
+        </div>
+        <div class="row" id="setup-actions" hidden>
+          <button type="button" class="btn primary" id="btn-setup">Retry setup</button>
+        </div>
+      </div>
+      <details class="log-box"><summary>Show the technical log</summary><pre id="setup-log"></pre></details>
+    </div>
+  </section>
+
+  <!-- ---------- settings ---------- -->
+  <section id="view-settings" class="view view-settings" hidden>
+    <div class="scroll narrow">
+      <header class="view-head">
+        <h1>Settings</h1>
+      </header>
+      <div class="card settings-card">
+        <h2>Tools</h2>
+        <p id="settings-tools" class="settings-line"></p>
+        <p class="hint">Installed by the app in <code id="runtime-root"></code>.</p>
+        <h3>Use your own Nextflow instead</h3>
+        <label>Nextflow executable <input id="set-nextflow" placeholder="the app's own"></label>
+        <label>Java home (17+) <input id="set-java" placeholder="the app's own"></label>
+        <h2>Updates</h2>
+        <label class="check"><input type="checkbox" id="set-updates" checked> Check GitHub for a new version when the app starts</label>
+        <div class="row"><button type="button" class="btn primary" id="btn-save-settings">Save</button></div>
+      </div>
+    </div>
   </section>
 </main>
+</div>
 
-<script src="renderer.js"></script>
+<script src="ui.js"></script>
+<script src="form.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
