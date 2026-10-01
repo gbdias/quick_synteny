@@ -1,0 +1,80 @@
+{
+  "name": "quick-synteny-gui",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Feasibility prototype: a desktop launcher for the quick_synteny Nextflow pipeline",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "node scripts/fetch-micromamba.js darwin-arm64 && electron-builder --mac dmg --arm64"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "productName": "quick_synteny",
+  "build": {
+    "appId": "se.nbis.quick-synteny",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "lib/**",
+      "renderer/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../main.nf",
+        "to": "pipeline/main.nf"
+      },
+      {
+        "from": "../nextflow.config",
+        "to": "pipeline/nextflow.config"
+      },
+      {
+        "from": "../bin",
+        "to": "pipeline/bin",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**"
+        ]
+      },
+      {
+        "from": "../modules",
+        "to": "pipeline/modules"
+      },
+      {
+        "from": "../conf",
+        "to": "pipeline/conf"
+      },
+      {
+        "from": "../envs",
+        "to": "pipeline/envs"
+      },
+      {
+        "from": "runtime.yml",
+        "to": "runtime.yml"
+      },
+      {
+        "from": "vendor/micromamba/${platform}-${arch}/micromamba",
+        "to": "micromamba/micromamba"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "target": "dmg",
+      "identity": "-",
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "icon": "build/icon-macos.png"
+    },
+    "linux": {
+      "icon": "build/icons"
+    },
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
+  }
+}

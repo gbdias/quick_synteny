@@ -1,0 +1,96 @@
+:root {
+    --bg: #f5f5f3; --card: #fff; --fg: #1d1d1b; --muted: #6b6b66; --line: #deded8;
+    --accent: #2f6fdf; --ok: #2e8540; --warn: #b36b00; --bad: #c0392b;
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+    :root { --bg: #1b1b1a; --card: #242423; --fg: #ececea; --muted: #9a9a94; --line: #3a3a38; --accent: #6d9bff; }
+}
+* { box-sizing: border-box; }
+/* `hidden` must win over the display: flex/grid set on .update, .field-status etc. */
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+header { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 8px 0 0; }
+.env { flex: 1; display: flex; gap: 6px; flex-wrap: wrap; }
+main { display: grid; grid-template-columns: minmax(360px, 1fr) minmax(360px, 1fr); gap: 16px; padding: 16px 20px; }
+main > * { min-width: 0; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px; }
+#settings { margin: 16px 20px 0; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 8px; }
+h2:first-child { margin-top: 0; }
+label { display: block; margin: 6px 0; color: var(--muted); font-size: 12px; }
+label.check, .tabs label { color: var(--fg); font-size: 13px; }
+input:not([type]), input[inputmode], select {
+    display: block; width: 100%; margin-top: 3px; padding: 6px 8px; font: inherit;
+    border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg);
+}
+/* a "?" after a label, like the result page's: its tip opens below it,
+   on hover or keyboard focus, as a wrapped box. In the grid's right-hand
+   column it opens leftwards, so it stays inside the form. */
+.help {
+    display: inline-flex; align-items: center; justify-content: center; position: relative;
+    width: 14px; height: 14px; margin-left: 3px; padding: 0; vertical-align: 1px;
+    border: 1px solid var(--muted); border-radius: 50%; background: none;
+    color: var(--muted); font-size: 9px; font-weight: 700; line-height: 1; cursor: help;
+}
+.help:hover, .help:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+.help::after {
+    content: attr(data-help); display: none; position: absolute; top: calc(100% + 6px); left: -8px; z-index: 10;
+    width: 260px; padding: 8px 10px; white-space: normal; line-height: 1.35; text-align: left;
+    font-size: 12px; font-weight: normal; color: var(--fg);
+    background: var(--card); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0, 0, 0, .18);
+    pointer-events: none;
+}
+.help:hover::after, .help:focus-visible::after { display: block; }
+.grid > label:nth-child(even) .help::after { left: auto; right: -8px; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.tabs { display: flex; gap: 16px; margin-bottom: 6px; }
+.tabs label { display: inline-flex; gap: 5px; margin: 0; }
+button { font: inherit; padding: 6px 12px; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.ghost { background: none; }
+button:disabled { opacity: .5; cursor: default; }
+.row { display: flex; gap: 8px; margin-top: 12px; }
+.file-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+.path { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.hint { color: var(--muted); font-size: 12px; margin: 0 0 8px; }
+details { margin-top: 10px; }
+summary { cursor: pointer; color: var(--muted); }
+.pill { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+.pill.ok { color: var(--ok); border-color: var(--ok); }
+.pill.bad { color: var(--bad); border-color: var(--bad); }
+.pill.warn { color: var(--warn); border-color: var(--warn); }
+.suggest { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 5px; max-height: 180px; overflow: auto; }
+.suggest li { padding: 5px 8px; cursor: pointer; }
+.suggest li:hover { background: var(--bg); }
+.suggest small { color: var(--muted); }
+.preflight { margin-top: 12px; padding: 8px 10px; border-radius: 5px; border: 1px solid var(--warn); color: var(--warn); font-size: 12px; }
+.tasks { list-style: none; margin: 0; padding: 0; font-size: 13px; max-height: 320px; overflow: auto; }
+.tasks li { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.tasks .st { flex: none; width: 80px; font-size: 11px; color: var(--muted); }
+.tasks .nm { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tasks .st.COMPLETED { color: var(--ok); }
+.tasks .st.FAILED { color: var(--bad); }
+.tasks .st.RUNNING { color: var(--accent); }
+.tasks .meta { flex: none; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.note { margin: 0 0 8px; color: var(--accent); font-size: 12px; }
+code { font-size: 11px; }
+.field-status { margin: 2px 0 6px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.field-status.ok { color: var(--ok); }
+.field-status.warn { color: var(--warn); }
+.field-status.bad { color: var(--bad); }
+.field-status button { font-size: 12px; padding: 3px 8px; }
+.error-box { border: 1px solid var(--bad); border-radius: 6px; padding: 10px 12px; margin: 0 0 10px; }
+.error-box .title { color: var(--bad); }
+.error-box .msg { margin: 4px 0; overflow-wrap: anywhere; }
+.error-box .err-hint { margin: 4px 0; color: var(--muted); font-size: 12px; }
+.error-box .detail { max-height: 160px; overflow: auto; font-size: 11px; background: var(--bg); padding: 6px 8px; border-radius: 4px; white-space: pre-wrap; margin: 6px 0 0; }
+.error-box .detail:empty { display: none; }
+.error-box .row { margin-top: 8px; }
+.update { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 20px 0; padding: 10px 14px;
+    border: 1px solid var(--accent); border-radius: 8px; background: var(--card); }
+.update .msg { flex: 1; min-width: 240px; }
+.update .hint { flex-basis: 100%; margin: 0; }
+.results { margin: 10px 0; display: flex; flex-direction: column; gap: 6px; }
+pre#log { max-height: 360px; overflow: auto; font-size: 11px; background: var(--bg); padding: 8px; border-radius: 5px; white-space: pre-wrap; }
