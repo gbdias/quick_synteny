@@ -233,16 +233,25 @@ at the same setting.
 ## Profiles
 
 - `standard` -- Docker, local executor (laptop/CI).
+- `conda` -- no container engine: conda environments built from
+  `envs/*.yml`, local executor. Needs conda, mamba or micromamba (add
+  `-c` config with `conda.useMicromamba = true` for the latter).
 - `slurm` -- Apptainer/Singularity, SLURM executor (HPC).
 - `test` -- Docker, local executor, tiny resource caps.
 
-Every process runs a Seqera Containers image for the host's architecture
-(linux/arm64 on Apple Silicon, linux/amd64 otherwise) -- no `--platform` is
-forced and nothing runs emulated. That matters beyond speed: node's Maglev
-compiler miscompiles the chainer under x86-64 emulation, silently skewing
-its auto-tuned parameters. `bin/chain_blocks.mjs` also disables Maglev and
-fails (exit 3, retried) on an impossible result, in case it ever does run
-emulated.
+`conda` pins the same tool versions as the images, but each host solves
+those environments itself, so dependencies and build strings can differ
+from the images; results can too, though on an *S. cerevisiae* run every
+output matched the `standard` profile's byte for byte. Compare runs made
+with the same profile.
+
+In the container profiles, every process runs a Seqera Containers image
+for the host's architecture (linux/arm64 on Apple Silicon, linux/amd64
+otherwise) -- no `--platform` is forced and nothing runs emulated. That
+matters beyond speed: node's Maglev compiler miscompiles the chainer under
+x86-64 emulation, silently skewing its auto-tuned parameters.
+`bin/chain_blocks.mjs` also disables Maglev and fails (exit 3, retried) on
+an impossible result, in case it ever does run emulated.
 
 ## Containers
 

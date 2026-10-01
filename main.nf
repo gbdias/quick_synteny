@@ -115,6 +115,7 @@ def helpMessage() {
 
     Profiles:
       -profile standard         Docker + local executor (default for a laptop/CI).
+      -profile conda             Conda envs from envs/*.yml + local executor (no Docker).
       -profile slurm             Apptainer + SLURM executor (HPC).
       -profile test              Docker + local executor with tiny resource caps.
     """.stripIndent()
