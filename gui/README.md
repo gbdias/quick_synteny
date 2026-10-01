@@ -79,7 +79,8 @@ micromamba into the runtime folder on first launch.
 without opening a window (`lib/smoke.js`). It:
 1. checks that the bundled pipeline is complete and its scripts executable;
 2. runs the real first-launch setup into `QS_HOME`, using the bundled
-   micromamba to install Nextflow, Java and the weblog plugin;
+   micromamba to install Nextflow, Java and the plugins (weblog and
+   nf-schema);
 3. starts that Nextflow;
 4. runs `nextflow run main.nf --help -profile conda` on the bundled
    pipeline.
@@ -134,7 +135,7 @@ in it.
 | `bin/micromamba` | micromamba 2.9.0, only when running from source | conda-forge build, sha256 checked (`lib/runtime.js`) |
 | `runtime/` | Nextflow 25.10.4, openjdk 21 | `runtime.yml` |
 | `conda_envs/` | one env per `envs/*.yml` | built by Nextflow on first use |
-| `nextflow/` | the app's Nextflow home (`NXF_HOME`): the `nf-weblog` plugin, run history | setup installs the plugin |
+| `nextflow/` | the app's Nextflow home (`NXF_HOME`): the `nf-weblog` and `nf-schema` plugins, run history | setup installs the plugins |
 | `mamba/` | micromamba's package cache | shared by all of the above |
 
 A packaged app uses its bundled micromamba instead of `bin/micromamba`.
@@ -154,8 +155,8 @@ instead.
 ## Offline
 
 The app needs a connection for three things:
-- **First launch:** setup downloads Nextflow, Java and the `nf-weblog`
-  plugin.
+- **First launch:** setup downloads Nextflow, Java and the plugins
+  (`nf-weblog`, `nf-schema`).
 - **The first run of each step:** it builds that step's tool environment.
 - **Finding a reference on NCBI:** needed on every run that uses it.
 
@@ -183,10 +184,17 @@ say "network" either: with a cached index, micromamba only reports "Could
 not load repodata.json … after retry".
 
 When a run starts offline, Nextflow gets `NXF_OFFLINE=true`, so it doesn't
-reach for anything itself. Its weblog plugin is pinned (`nf-weblog@1.2.0`
-in `lib/runtime.js`, set in each run's config) and installed by setup,
-because offline Nextflow refuses an unpinned plugin. Without that, progress
-reporting would have needed the internet on every run. Nextflow's own
+reach for anything itself. Offline Nextflow refuses an unpinned plugin, so
+every plugin is pinned and installed by setup:
+- the weblog (`nf-weblog@1.2.0` in `lib/runtime.js`), without which
+  progress reporting would need the internet on every run;
+- the pipeline's own plugins (`nf-schema`), read from the `plugins` block
+  of the bundled `nextflow.config`, so their version is set in one place.
+
+Each run's config repeats all of these pins. A `plugins` block in a `-c`
+config replaces the pipeline's own instead of adding to it, and without
+the repeat Nextflow loaded nf-schema unpinned, asking the registry for its
+latest version. Nextflow's own
 version check is always off (`NXF_DISABLE_CHECK_LATEST`): the app pins its
 Nextflow, so a "26.x is available" notice would only mislead.
 
@@ -227,10 +235,12 @@ The app's version is `package.json`'s `version`. A release tagged
   resolves to a taxid through NCBI Datasets' `taxon_suggest`, plus max rank
   and exclude-target) or your own reference and proteome; advanced chaining
   and miniprot options; **Tools** (Conda or Docker); output folder;
-  `-resume`. Each advanced option has a "?" like the result page's. It
-  explains the option, gives its default, and notes when the result page
-  can change it later. The texts are in `renderer/index.html` (`data-help`),
-  and the tip is CSS only.
+  `-resume`. The advanced options, the rank and the same-species switch
+  each have a "?" like the result page's. Its text is the parameter's
+  `description`, then its `help_text`, then its default, all from the
+  bundled `nextflow_schema.json`: the same text as `--help <parameter>`.
+  The tip itself is CSS only. Defaults and the rank list come from the
+  schema too.
 - **Input checks.** These run before a run starts (`lib/inputs.js`, and
   the `taxon:lookup` handler in `main.js`), so a bad input fails here and
   not minutes into a run:
@@ -239,6 +249,11 @@ The app's version is `package.json`'s `version`. A release tagged
     taxon"; the last two block **Run**. If NCBI can't be reached, the run
     isn't blocked, since the pipeline checks the taxid again.
   - Each picked file has to start with a `>` line, possibly gzipped.
+  - Typed numbers are checked against the schema's types and limits, e.g.
+    "Min block (anchors) must be at least 2". These are the rules the
+    pipeline applies, so a bad value fails before the run starts rather
+    than as Nextflow's error. If one does reach the pipeline, nf-schema's
+    message goes in the error box.
   - An output folder that can't be read (macOS privacy settings) or
     written blocks the run. A folder that isn't empty and isn't a previous
     run gets a warning and a **Use a new subfolder instead** button. It
@@ -272,7 +287,20 @@ The app's version is `package.json`'s `version`. A release tagged
 
 ## Tested
 
-On macOS (Apple Silicon), the packaged app was copied out of the `.dmg` and
+With the parameter schema (nf-schema), on macOS (Apple Silicon):
+- The smoke test on an empty runtime folder installed both plugins and
+  ran the schema-built `--help` offline.
+- An existing runtime gained nf-schema by itself on the next launch.
+- The form showed the schema's tips, defaults and rank list. Six
+  out-of-range or malformed numbers were each blocked with their own
+  message.
+- A value forced past the form (`--min_block 1`) showed nf-schema's message
+  in the error box.
+- A full discovery run completed (23 tasks), and an offline run with your
+  own files completed (15 tasks) with both plugins pinned and no registry
+  requests.
+
+Earlier, the packaged app was copied out of the `.dmg` and
 launched with a Finder-like minimal PATH, an empty runtime folder, and
 Docker not running:
 
@@ -375,6 +403,9 @@ would close that gap.
   box's title, message, and detail.
 - `lib/inputs.js`: FASTA sniffing, output-folder inspection, and subfolder
   names.
+- `test/schema.test.js`: checks that the schema, `nextflow.config`'s
+  params, the form and the runner name the same parameters with the same
+  defaults, and that the run config pins every plugin.
 - `lib/updates.js`: the new-version check against GitHub Releases.
 - `lib/network.js`: whether NCBI and conda-forge can be reached.
 - `preload.js`: the IPC bridge exposed to the form as `window.qs`.

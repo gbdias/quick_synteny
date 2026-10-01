@@ -7,7 +7,9 @@
 //      (set it to a scratch folder; ~/.quick_synteny otherwise);
 //   2. the Nextflow it would launch (env.checkAll);
 //   3. `nextflow run main.nf --help -profile conda` on the bundled pipeline,
-//      which parses main.nf, nextflow.config and conf/conda.config.
+//      which parses main.nf, nextflow.config and conf/conda.config and
+//      loads nf-schema for the help. It runs with NXF_OFFLINE, so a plugin
+//      setup didn't install fails here instead of being downloaded.
 //
 // It doesn't run the pipeline: that needs NCBI and tens of MB of genome.
 
@@ -33,7 +35,8 @@ async function smokeTest({ pipelineDir, runtimeYml, log }) {
     const step = (s) => log(`\n== ${s}\n`);
     try {
         step(`platform ${process.platform}-${process.arch}, runtime root ${runtime.ROOT}`);
-        for (const f of ['main.nf', 'nextflow.config', 'conf/conda.config', 'envs/miniprot.yml', 'bin/chain_blocks.mjs']) {
+        for (const f of ['main.nf', 'nextflow.config', 'nextflow_schema.json', 'conf/conda.config', 'envs/miniprot.yml',
+            'bin/chain_blocks.mjs']) {
             if (!fs.existsSync(path.join(pipelineDir, f))) throw new Error(`the bundled pipeline is missing ${f}`);
         }
         for (const f of ['bin/chain_blocks.mjs', 'bin/parse_lineage.py']) {
@@ -51,9 +54,10 @@ async function smokeTest({ pipelineDir, runtimeYml, log }) {
         step('pipeline --help');
         const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'qs-smoke-'));
         const r = await capture(nextflow.bin, ['run', path.join(pipelineDir, 'main.nf'), '--help', '-profile', 'conda'],
-            { cwd, env: nextflow.env });
+            { cwd, env: { ...nextflow.env, NXF_OFFLINE: 'true' } });
         log(r.out.split('\n').slice(0, 8).join('\n') + '\n…\n');
-        if (r.code !== 0 || !/taxonomy-guided synteny plotting/.test(r.out)) {
+        // nf-schema's help, built from nextflow_schema.json
+        if (r.code !== 0 || !/taxonomy-guided synteny plotting/.test(r.out) || !/--max_rank/.test(r.out)) {
             throw new Error(`\`nextflow run main.nf --help\` exited ${r.code}:\n${r.out.slice(-2000)}`);
         }
 

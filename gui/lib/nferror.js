@@ -26,9 +26,26 @@
 //
 // The weblog doesn't cover the first form at all (it runs before the
 // workflow starts), so this reads the console for both.
+//
+// Parameters that fail nextflow_schema.json are reported by nf-schema, on
+// stderr, as a list of its own; the ERROR line on stdout then only says
+// "Validation of pipeline parameters failed!" (and for unrecognised
+// parameters there's no ERROR line at all):
+//
+//   The following invalid input values have been detected:
+//
+//   * --taxid (): 0 is less than 1 (must be an NCBI taxid, a positive whole number)
+//   * --max_rank (kingdom): Expected any of [species, genus, family, order, class, phylum]
+//
+//    -- Check script '.../main.nf' at line: 53 or see '.nextflow.log' file for more details
 
 const START = /^ERROR ~ /;
+const SCHEMA_START = /^The following invalid input values have been detected:/;
+const SCHEMA_ITEM = /^\* (.+)$/;
+// nf-schema colours its list, terminal or not
+const ANSI = /\x1b\[[0-9;]*m/g;
 const END = /^ -- Check '.*\.nextflow\.log' file for details/;
+const END_SCRIPT = /^ -- Check script /;
 
 // "Command error:" etc. -- flush-left and ending in a colon
 const SECTION = /^([A-Z][A-Za-z ]+):$/;
@@ -143,12 +160,27 @@ class ErrorCollector {
     constructor() {
         this.block = null;
         this.capturing = false;
+        this.schemaItems = null;
+        this.inSchemaList = false;
         this.tail = [];
     }
 
-    push(line) {
+    push(raw) {
+        const line = raw.replace(ANSI, '');
         this.tail.push(line);
         if (this.tail.length > 30) this.tail.shift();
+        // nf-schema's list (stderr), wherever it falls among stdout's lines
+        if (SCHEMA_START.test(line)) {
+            this.schemaItems = this.schemaItems || [];
+            this.inSchemaList = true;
+            return;
+        }
+        if (this.inSchemaList) {
+            const item = line.match(SCHEMA_ITEM);
+            if (item) this.schemaItems.push(item[1].replace(/^(--\S+) \(\):/, '$1:'));
+            else if (END_SCRIPT.test(line)) this.inSchemaList = false;
+            if (item || !line.trim()) return;
+        }
         if (!this.block && START.test(line)) {
             this.block = [line];
             this.capturing = true;
@@ -159,6 +191,14 @@ class ErrorCollector {
     }
 
     result(code) {
+        if (this.schemaItems && this.schemaItems.length) {
+            const n = this.schemaItems.length;
+            return {
+                title: n === 1 ? 'A parameter is not valid' : `${n} parameters are not valid`,
+                message: n === 1 ? this.schemaItems[0] : this.schemaItems.join('; '),
+                detail: this.schemaItems.join('\n'),
+            };
+        }
         if (this.block) return parse(this.block);
         const tail = this.tail.filter((l) => l.trim());
         return {

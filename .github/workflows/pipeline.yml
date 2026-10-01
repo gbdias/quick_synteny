@@ -1,0 +1,53 @@
+# Checks of the pipeline itself that need no data: parameter validation
+# against nextflow_schema.json, and --help (tests/params.sh).
+
+name: Pipeline
+
+on:
+  push:
+    paths:
+      - main.nf
+      - nextflow.config
+      - nextflow_schema.json
+      - modules/**
+      - conf/**
+      - tests/**
+      - gui/runtime.yml
+      - .github/workflows/pipeline.yml
+  pull_request:
+    paths:
+      - main.nf
+      - nextflow.config
+      - nextflow_schema.json
+      - modules/**
+      - conf/**
+      - tests/**
+      - gui/runtime.yml
+      - .github/workflows/pipeline.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  params:
+    name: Parameter validation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      # the same Nextflow the desktop app pins
+      - name: Install Nextflow
+        run: |
+          version=$(sed -nE 's/.*nextflow=([0-9.]+).*/\1/p' gui/runtime.yml)
+          echo "Nextflow $version"
+          curl -fsSL https://get.nextflow.io | NXF_VER=$version bash
+          ./nextflow -v
+      - run: NEXTFLOW=$PWD/nextflow tests/params.sh

@@ -13,6 +13,7 @@ const { smokeTest } = require('./lib/smoke');
 const PIPELINE_DIR = app.isPackaged ? path.join(process.resourcesPath, 'pipeline') : path.resolve(__dirname, '..');
 // read by micromamba itself, so it can't live inside an asar archive
 const RUNTIME_YML = app.isPackaged ? path.join(process.resourcesPath, 'runtime.yml') : path.join(__dirname, 'runtime.yml');
+runtime.configure({ pipelineDir: PIPELINE_DIR });
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
 
 let mainWindow = null;
@@ -59,6 +60,8 @@ ipcMain.handle('env:check', async () => {
     return lastEnv;
 });
 ipcMain.handle('docker:check', () => env.checkDocker());
+// the bundled pipeline's parameter schema: the form's tips, defaults and limits
+ipcMain.handle('schema:get', () => JSON.parse(fs.readFileSync(path.join(PIPELINE_DIR, 'nextflow_schema.json'), 'utf8')));
 ipcMain.handle('net:check', () => network.checkNetwork());
 ipcMain.handle('runtime:setup', async () => {
     if (currentRun && !currentRun.done) throw new Error('a run is in progress');

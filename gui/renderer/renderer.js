@@ -302,10 +302,13 @@ function updatePreflight() {
 }
 $('#chunk').oninput = updatePreflight;
 
+// the Advanced section's fields, each named after its pipeline parameter
+const ADVANCED = ['min_seq_size', 'min_asm_gap', 'min_identity', 'max_gap', 'min_block', 'miniprot_m', 'miniprot_chunk_gb'];
+
 function collectForm() {
     const fd = new FormData($('#form'));
     const form = { engine: engine(), outdir, assembly: files.assembly?.path, resume: fd.get('resume') === 'on' };
-    for (const k of ['min_seq_size', 'min_asm_gap', 'min_identity', 'max_gap', 'min_block', 'miniprot_m', 'miniprot_chunk_gb']) {
+    for (const k of ADVANCED) {
         const v = String(fd.get(k) || '').trim();
         if (v) form[k] = v;
     }
@@ -333,6 +336,10 @@ function validate(form) {
         if (!form.taxid) return 'Pick the target organism (a taxid).';
         if (taxon.status === 'invalid') return `"${form.taxid}" is not a taxid: NCBI taxids are positive whole numbers.`;
         if (taxon.status === 'unknown') return `NCBI has no taxon ${form.taxid}. Search by name to find the right one.`;
+    }
+    for (const k of ADVANCED) {
+        const bad = form[k] !== undefined && checkNumber(k, form[k]);
+        if (bad) return bad;
     }
     if (!form.outdir) return 'Choose an output folder.';
     if (outdirInfo?.unreadable || outdirInfo?.writable === false) return 'The output folder can\'t be used (see the note under it).';
@@ -487,7 +494,51 @@ async function showUpdate() {
     banner.hidden = false;
 }
 
+// ---------- the pipeline's parameter schema ----------
+
+// nextflow_schema.json, flattened to { name: property }: the "?" tips show
+// each parameter's help_text, fields without their own placeholder show its
+// default, the rank list is its enum, and numbers are checked against its
+// limits before a run -- the same rules the pipeline applies, so a bad value
+// is caught here instead of at Nextflow's start
+let schema = {};
+
+async function applySchema() {
+    const s = await window.qs.getSchema();
+    schema = Object.assign({}, ...Object.values(s.$defs || {}).map((d) => d.properties || {}));
+    // a tip reads like --help <param>: the one-line description, the
+    // help_text that follows on from it, and the default
+    document.querySelectorAll('.help[data-param]').forEach((btn) => {
+        const p = schema[btn.dataset.param] || {};
+        const text = [p.description, p.help_text, p.default !== undefined && `Default: ${p.default}.`].filter(Boolean).join(' ');
+        btn.dataset.help = text;
+        btn.setAttribute('aria-label', text);
+    });
+    document.querySelectorAll('#form input[name]').forEach((input) => {
+        const p = schema[input.name];
+        if (p && p.default !== undefined && typeof p.default !== 'boolean') input.placeholder = String(p.default);
+    });
+    const rank = schema.max_rank;
+    $('select[name=max_rank]').replaceChildren(...rank.enum.map((r) => new Option(r, r, false, r === rank.default)));
+}
+
+// a typed value against its schema property: a message, or null if it's fine
+function checkNumber(name, value) {
+    const p = schema[name];
+    if (!p) return null;
+    const types = [].concat(p.type);
+    const label = document.querySelector(`#form [name=${name}]`).closest('label').firstChild.textContent.trim();
+    const n = Number(value);
+    if (types.includes('integer') && !(/^-?\d+$/.test(value))) return `${label} must be a whole number.`;
+    if ((types.includes('number') || types.includes('integer')) && !Number.isFinite(n)) return `${label} must be a number.`;
+    if (p.minimum !== undefined && n < p.minimum) return `${label} must be at least ${p.minimum}.`;
+    if (p.exclusiveMinimum !== undefined && n <= p.exclusiveMinimum) return `${label} must be more than ${p.exclusiveMinimum}.`;
+    if (p.maximum !== undefined && n > p.maximum) return `${label} must be at most ${p.maximum}.`;
+    return null;
+}
+
 loadSettings();
+applySchema();
 checkEnv().then(() => {
     if (env.nextflow.needsSetup) setupRuntime();
 });

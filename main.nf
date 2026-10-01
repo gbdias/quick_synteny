@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+include { validateParameters } from 'plugin/nf-schema'
+
 include { RESOLVE_TAXONOMY }        from './modules/local/resolve_taxonomy.nf'
 include { FIND_REFERENCE_ASSEMBLY } from './modules/local/find_reference_assembly.nf'
 include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly.nf'
@@ -9,10 +11,6 @@ include { RENAME_SEQUENCES }        from './modules/local/rename_sequences.nf'
 include { MINIPROT_INDEX; MINIPROT_ALIGN; RENAME_GFF; SPLIT_GENOME; MINIPROT_ALIGN_CHUNK; MERGE_MINIPROT_GFF } from './modules/local/miniprot_align.nf'
 include { BUILD_SYNTENY }           from './modules/local/build_synteny.nf'
 include { PYGENOMEVIZ_PLOT }        from './modules/local/pygenomeviz_plot.nf'
-
-def RANKS() {
-    return ['species', 'genus', 'family', 'order', 'class', 'phylum']
-}
 
 // chunk size used when --miniprot_chunk_gb is given without a value
 def DEFAULT_CHUNK_GB() {
@@ -28,133 +26,15 @@ def chunkGb() {
     return v as double
 }
 
-def helpMessage() {
-    log.info """
-    quick_synteny — taxonomy-guided synteny plotting
-
-    Usage:
-      nextflow run main.nf --taxid <TAXID> --assembly <target.fa> [options]
-
-    Required:
-      --taxid <int>            NCBI taxid of the target organism. Drives reference/
-                                proteome discovery. Not required if both --reference
-                                and --proteome are given.
-      --assembly <path>        FASTA of the target genome to place on the synteny plot.
-
-    Manual overrides (skip NCBI discovery entirely):
-      --reference <path>       Reference genome FASTA to use instead of auto-discovery.
-      --proteome <path>        Proteome FASTA to use instead of auto-discovery.
-
-    Discovery behavior:
-      --max_rank <rank>        How far to climb the taxonomy ladder before giving up.
-                                One of: ${RANKS().join(',')} (default: order).
-                                Every taxon NCBI has between these (superfamily,
-                                suborder, unranked clades, ...) is tried on the way.
-      --min_seq_size <int>     Minimum sequence length (bp) to include in the synteny
-                                plot (default: 10000; pass 0 to disable filtering).
-      --exclude_target         Never pick a reference genome or proteome source of the
-                                same species as the target, even a chromosome-level one.
-                                Off by default: a same-species result is kept -- it's a
-                                legitimate outcome (e.g. a second, independently submitted
-                                assembly of the same organism, or the only chromosome-level
-                                resource available for a sparsely-sequenced group) -- as
-                                long as it's chromosome-level or better; only a lower-
-                                quality same-species candidate is dropped either way.
-      --min_asm_gap <int>       Minimum run of N's (bp) counted as an assembly gap, shown
-                                 by the plot's "Show gaps" switch (default: 100).
-
-    Synteny chaining (the interactive page can re-chain with any values; these
-    set its starting point and the published links.tsv):
-      --min_identity <float>   Per-hit identity (miniprot Positive=, 0-1) below which a
-                                hit is ignored. Default: auto-tuned from the weaker
-                                genome's mean best-hit identity, clamped to [0.3, 0.9],
-                                so a divergent pair isn't forced through a threshold
-                                tuned for close relatives. Pass a value to override.
-      --max_gap <int>          Max number of anchors skipped between consecutive anchors of
-                                a synteny block, on either genome (default: 25). Counted
-                                in anchors, not bp, so it means the same thing in an
-                                anchor-dense and an anchor-sparse genome.
-      --min_block <int>        Min anchors (distinct loci on both genomes) per block in
-                                links.tsv. Default: auto -- 15 for close relatives (weaker
-                                mean identity >= 0.8), 5 otherwise.
-
-    Resource tuning:
-      --miniprot_m <int>       Miniprot k-mer sampling exponent: samples 1/2^INT
-                                of genomic k-mers when building its index. Higher
-                                values cut peak alignment RAM at some cost to
-                                sensitivity -- useful on RAM-constrained hardware
-                                (a laptop, a small VM). Default: unset (miniprot's
-                                own default applies).
-      --miniprot_chunk_gb [<float>]  Align the proteome against genome chunks of
-                                about this many Gb each, in parallel, instead of
-                                one whole-genome index -- caps miniprot's peak RAM
-                                (~10 GB per Gb of genome) for genomes whose whole-
-                                genome index won't fit. Given without a value,
-                                chunks are ${DEFAULT_CHUNK_GB()} Gb. Whole sequences are never
-                                split, so a chunk is never smaller than its
-                                longest sequence. NOT identical to a whole-
-                                genome run: miniprot filters seeds and ranks hits
-                                within each chunk, so ~2% of proteins get a
-                                different best hit and weak/secondary hits, tied
-                                best hits and small blocks can differ (large
-                                blocks don't). More chunks drift further and cost
-                                more CPU, so use the largest size that fits, and
-                                compare runs only at the same setting. Default:
-                                unset (one whole-genome alignment).
-      --miniprot_gb_per_gb <float>  RAM (GB) requested per Gb of CHUNK when
-                                --miniprot_chunk_gb is set, plus a fixed 4 GB
-                                overhead; multiplied by 1.5 per retry attempt
-                                on a 137/140 (OOM) exit. Default: 11.
-
-    Output:
-      --outdir <path>          Output directory (default: results).
-
-    Execution (-profile slurm only):
-      --slurm_queue <name>            SLURM queue/partition (default: normal).
-      --singularity_cache_dir <path>  Shared Apptainer/Singularity image cache dir.
-
-    Profiles:
-      -profile standard         Docker + local executor (default for a laptop/CI).
-      -profile conda             Conda envs from envs/*.yml + local executor (no Docker).
-      -profile slurm             Apptainer + SLURM executor (HPC).
-      -profile test              Docker + local executor with tiny resource caps.
-    """.stripIndent()
-}
-
+// What nextflow_schema.json can't say: --taxid is needed unless both
+// overrides are given. Everything else about each parameter -- types,
+// ranges, allowed values, files that must exist, unknown parameters -- is
+// checked by validateParameters() against the schema, which is also where
+// --help comes from.
 def validateParams() {
-    if (!RANKS().contains(params.max_rank)) {
-        exit 1, "ERROR: --max_rank must be one of ${RANKS().join(',')}, got '${params.max_rank}'"
-    }
-
-    if (!params.assembly) {
-        exit 1, "ERROR: --assembly <target genome fasta> is required. Run with --help for usage."
-    }
-    if (!file(params.assembly).exists()) {
-        exit 1, "ERROR: --assembly file not found: ${params.assembly}"
-    }
-
-    // Nextflow turns a numeric value into a number (--taxid 000000 arrives
-    // as 0) and a bare flag into true, so test for presence first and
-    // validity separately -- a falsy 0 isn't a missing taxid
     def skipDiscovery = params.reference && params.proteome
-    def hasTaxid = params.taxid != null && params.taxid != false
-    if (!hasTaxid && !skipDiscovery) {
+    if (params.taxid == null && !skipDiscovery) {
         exit 1, "ERROR: --taxid is required unless both --reference and --proteome are given. Run with --help for usage."
-    }
-    if (hasTaxid && !(params.taxid.toString() ==~ /[1-9][0-9]*/)) {
-        exit 1, "ERROR: --taxid must be an NCBI taxid (a positive whole number), got '${params.taxid}'"
-    }
-
-    if (params.reference && !file(params.reference).exists()) {
-        exit 1, "ERROR: --reference file not found: ${params.reference}"
-    }
-    if (params.proteome && !file(params.proteome).exists()) {
-        exit 1, "ERROR: --proteome file not found: ${params.proteome}"
-    }
-
-    def chunk = params.miniprot_chunk_gb
-    if (chunk != null && !(chunk instanceof Boolean) && !(chunk instanceof Number && chunk > 0)) {
-        exit 1, "ERROR: --miniprot_chunk_gb must be a positive number of Gb (or given without a value for ${DEFAULT_CHUNK_GB()} Gb), got '${chunk}'"
     }
 }
 
@@ -163,11 +43,14 @@ def readSelection(selectionFile) {
 }
 
 workflow {
-    if (params.help) {
-        helpMessage()
+    // --help/--helpFull are nf-schema's, built from nextflow_schema.json (see
+    // nextflow.config). It prints them as the run starts, but doesn't stop
+    // this workflow: without the exit, validation would then fail on the
+    // missing --assembly
+    if (params.help || params.containsKey('helpFull') && params.helpFull) {
         exit 0
     }
-
+    validateParameters()
     validateParams()
 
     log.info "quick_synteny: assembly=${params.assembly} taxid=${params.taxid ?: '(skipped, using overrides)'} outdir=${params.outdir}"
@@ -294,7 +177,7 @@ workflow {
     // matching RENAME_SEQUENCES call (join()'d by role name) ----
     // params.miniprot_m defaults to null (miniprot's own default); normalized
     // to '' here for the same reason as min_identity below -- see that comment
-    def miniprot_m = params.miniprot_m ?: ''
+    def miniprot_m = params.miniprot_m != null ? params.miniprot_m : ''
 
     def chunk_gb = chunkGb()
     if (chunk_gb) {
