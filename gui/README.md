@@ -374,11 +374,16 @@ would close that gap.
   plus a viewer: no framework, no build step.
 - **Without a container, macOS doesn't report task runtime metrics** (peak
   RSS and so on); Nextflow warns about this. Durations still show.
-- **Icons** live in `build/`. macOS uses `icon-macos.png`, the padded
-  rounded square that macOS expects (`mac.icon`). Linux uses the size set
-  in `icons/`, and the full-bleed `icon.png` is electron-builder's default
-  for anything else. The SVGs are the source artwork. When running from
-  source, `main.js` sets the Dock icon itself.
+- **Icons** live in `build/`. macOS uses `icon.icns`, built from
+  `icon-macos.svg` (the padded rounded square macOS expects) by `npm run
+  icons` (`scripts/make-icns.js`, macOS only); commit the result. The
+  script has Chromium render the vector artwork at each size, 16 to
+  1024 px, and Apple's `iconutil` pack them. Letting electron-builder
+  convert a PNG instead wrote the 16 and 32 px sizes, the ones Spotlight
+  and Finder's list view use, as noise; scaling the PNG down with `sips`
+  left a pale fringe. Linux uses the size set in `icons/`, and the
+  full-bleed `icon.png` is electron-builder's default for anything else.
+  When running from source, `main.js` sets the Dock icon itself.
 - **`nextflow_schema.json` (nf-core style)** would let the form be generated
   rather than hand-written, and let other launchers (Seqera Platform,
   EPI2ME Desktop) run the pipeline as-is.
