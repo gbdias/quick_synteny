@@ -30,7 +30,38 @@ nextflow run main.nf -profile slurm \
   --taxid 562 --assembly target_genome.fa --outdir results
 ```
 
-See `nextflow run main.nf --help` for the full parameter list.
+Needs Nextflow 25.10 or newer.
+
+## Parameters
+
+Every parameter is described in `nextflow_schema.json`: its type,
+allowed values, default, and help. Three things read it:
+
+- **`--help`** lists the parameters, grouped. `--help <parameter>` shows one
+  parameter's full help, e.g. `nextflow run main.nf --help max_rank`.
+- **Validation:** every run checks its parameters against the schema
+  before anything starts. That covers types and ranges, allowed values,
+  input files that must exist, and unknown parameters: a misspelled
+  `--max-rank` is an error, not silently ignored. `validateParams()` in
+  `main.nf` adds the one rule the schema can't express: `--taxid` is
+  needed unless both `--reference` and `--proteome` are given.
+- **The desktop app** takes its tips, defaults and limits from the schema.
+
+Validation and help come from the
+[nf-schema](https://github.com/nextflow-io/nf-schema) plugin, pinned in
+`nextflow.config` (2.7.3, the last release for Nextflow 25.10). Nextflow
+downloads it on the first run. On a machine without internet access, such
+as some HPC nodes, install it once beforehand:
+
+```bash
+nextflow plugin install nf-schema@2.7.3
+```
+
+To add or change a parameter, edit both `nextflow.config`'s `params` block
+and the schema. The desktop app's unit tests (`gui/test/schema.test.js`)
+fail when their parameters or defaults differ. `tests/params.sh` checks
+the validation and `--help`: no data needed, just Nextflow, and the
+Pipeline CI workflow runs it.
 
 ## How synteny is found (no separate ortholog aligner)
 
@@ -277,8 +308,12 @@ never contact Wave -- the image URLs are fixed in the repo.
 ## Repository layout
 
 - `main.nf`, `nextflow.config`, `conf/` -- pipeline entrypoint and profiles.
+- `nextflow_schema.json` -- every parameter: validation, `--help`, and the
+  desktop app's form.
+- `tests/params.sh` -- parameter validation and `--help` checks.
 - `modules/local/` -- one process (or small process group) per tool.
 - `bin/` -- Python/shell helper scripts used inside processes.
 - `envs/`, `tools/update_containers.py` -- container environments and the
   script that generates `conf/containers.config` from them.
 - `legacy/` -- the original bash/SLURM script this pipeline replaces.
+- `gui/` -- the desktop app (see `gui/README.md`).

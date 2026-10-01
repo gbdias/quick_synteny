@@ -1,0 +1,229 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://raw.githubusercontent.com/gbdias/quick_synteny/main/nextflow_schema.json",
+    "title": "quick_synteny parameters",
+    "description": "Taxonomy-guided synteny plotting: auto-discovers a reference genome and proteome from NCBI and aligns a target assembly against them.",
+    "type": "object",
+    "$defs": {
+        "input_output": {
+            "title": "Input and output",
+            "type": "object",
+            "description": "The genome to plot, what to compare it with, and where results go.",
+            "required": [
+                "assembly",
+                "outdir"
+            ],
+            "properties": {
+                "assembly": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "FASTA of the target genome to place on the synteny plot (may be gzipped).",
+                    "fa_icon": "fas fa-file"
+                },
+                "taxid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "errorMessage": "must be an NCBI taxid, a positive whole number",
+                    "description": "NCBI taxid of the target organism; drives reference genome and proteome discovery.",
+                    "help_text": "Not needed when both --reference and --proteome are given. Find a taxid by name at https://www.ncbi.nlm.nih.gov/taxonomy.",
+                    "fa_icon": "fas fa-sitemap"
+                },
+                "reference": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Reference genome FASTA, instead of finding one on NCBI.",
+                    "help_text": "With --proteome too, NCBI discovery is skipped entirely and --taxid isn't needed.",
+                    "fa_icon": "fas fa-file"
+                },
+                "proteome": {
+                    "type": "string",
+                    "format": "file-path",
+                    "exists": true,
+                    "description": "Proteome FASTA (protein sequences), instead of finding one on NCBI.",
+                    "help_text": "Aligned against both genomes with miniprot; its hits are the synteny anchors. With --reference too, NCBI discovery is skipped entirely and --taxid isn't needed.",
+                    "fa_icon": "fas fa-file"
+                },
+                "outdir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "default": "results",
+                    "description": "Output directory.",
+                    "fa_icon": "fas fa-folder-open"
+                }
+            }
+        },
+        "discovery": {
+            "title": "Reference discovery",
+            "type": "object",
+            "description": "How a reference genome and proteome are found on NCBI.",
+            "properties": {
+                "max_rank": {
+                    "type": "string",
+                    "enum": [
+                        "species",
+                        "genus",
+                        "family",
+                        "order",
+                        "class",
+                        "phylum"
+                    ],
+                    "default": "order",
+                    "description": "How far up the taxonomy to look for a reference before giving up.",
+                    "help_text": "Discovery starts at the target's species and climbs outward, trying every taxon NCBI has on the way (superfamily, suborder, unranked clades, ...), and stops at this rank.",
+                    "fa_icon": "fas fa-level-up-alt"
+                },
+                "exclude_target": {
+                    "type": "boolean",
+                    "description": "Never pick a reference genome or proteome of the target's own species.",
+                    "help_text": "Off by default: a same-species reference is kept as long as it's chromosome-level or better -- a legitimate outcome, e.g. a second, independently submitted assembly of the same organism, or the only chromosome-level resource for a sparsely sequenced group. A lower-quality same-species candidate is dropped either way.",
+                    "fa_icon": "fas fa-ban"
+                }
+            }
+        },
+        "sequences": {
+            "title": "Sequences",
+            "type": "object",
+            "description": "Which sequences go on the plot, and what counts as an assembly gap.",
+            "properties": {
+                "min_seq_size": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "default": 10000,
+                    "description": "Minimum sequence length (bp) to include in the plot; 0 keeps every sequence.",
+                    "help_text": "Shorter chromosomes and scaffolds are left out of the plot entirely: the result page can hide more, but can't bring these back.",
+                    "fa_icon": "fas fa-ruler-horizontal"
+                },
+                "min_asm_gap": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 100,
+                    "description": "Shortest run of N's (bp) that counts as an assembly gap.",
+                    "help_text": "Assembly gaps show on the result page with its Show gaps switch.",
+                    "fa_icon": "fas fa-grip-lines-vertical"
+                }
+            }
+        },
+        "chaining": {
+            "title": "Synteny chaining",
+            "type": "object",
+            "description": "How anchors are chained into synteny blocks. These set the result page's starting point and the published links.tsv; the page can re-chain with any values.",
+            "properties": {
+                "min_identity": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Per-hit identity (0-1) below which a protein hit is ignored; automatic by default.",
+                    "help_text": "Identity is the share of a hit's aligned residues that are identical or similar (miniprot's Positive score). Automatic: the weaker genome's average best-hit identity, kept within 0.3-0.9, so a divergent pair isn't forced through a threshold tuned for close relatives. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards.",
+                    "fa_icon": "fas fa-percentage"
+                },
+                "max_gap": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 25,
+                    "description": "Most anchors a block may skip between two consecutive anchors, on either genome.",
+                    "help_text": "Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Larger values join fragmented blocks; smaller values split blocks at small rearrangements. 25 is MCScanX's default. The result page can change it afterwards.",
+                    "fa_icon": "fas fa-arrows-alt-h"
+                },
+                "min_block": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "description": "Minimum anchors per synteny block in links.tsv; automatic by default.",
+                    "help_text": "An anchor is one locus matched on both genomes. Applies to links.tsv and to the result page's starting view. Automatic: 15 for close relatives (the weaker genome's average identity is 0.8 or more), 5 otherwise. The result page can change it afterwards.",
+                    "fa_icon": "fas fa-cubes"
+                }
+            }
+        },
+        "resources": {
+            "title": "Resource tuning",
+            "type": "object",
+            "description": "Trading miniprot's memory use against sensitivity or exactness, for genomes that don't fit.",
+            "properties": {
+                "miniprot_m": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "miniprot's -M: index only 1 in 2^M of each genome's k-mers; miniprot's own default when unset.",
+                    "help_text": "Higher values cut miniprot's peak RAM at some cost to sensitivity, which helps on RAM-constrained hardware (a laptop, a small VM) when a genome only just doesn't fit. Unset: miniprot's own default (1).",
+                    "fa_icon": "fas fa-compress"
+                },
+                "miniprot_chunk_gb": {
+                    "type": [
+                        "number",
+                        "boolean"
+                    ],
+                    "exclusiveMinimum": 0,
+                    "errorMessage": "must be a positive number of Gb, or given without a value for 1 Gb",
+                    "description": "Align against genome chunks of about this many Gb, in parallel, instead of one whole-genome index; without a value, 1 Gb.",
+                    "help_text": "Caps miniprot's peak RAM (about 10 GB per Gb of genome; with chunks, about 11 GB per Gb of chunk plus 4 GB) for genomes whose whole-genome index won't fit. Whole sequences are never split, so a chunk is never smaller than its longest sequence. NOT identical to a whole-genome run: miniprot filters seeds and ranks hits within each chunk, so about 2% of proteins get a different best hit, and weak or secondary hits, tied best hits and small blocks can differ (large blocks don't). More chunks drift further and cost more CPU, so leave it unset when the genome fits, otherwise use the largest size that does, and compare runs only at the same setting. Unset: one whole-genome alignment.",
+                    "fa_icon": "fas fa-th-large"
+                },
+                "miniprot_gb_per_gb": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "default": 11,
+                    "description": "RAM (GB) to request per Gb of chunk with --miniprot_chunk_gb, plus a fixed 4 GB.",
+                    "help_text": "Multiplied by 1.5 per retry after an out-of-memory (137/140) exit. Only used with --miniprot_chunk_gb.",
+                    "fa_icon": "fas fa-memory"
+                }
+            }
+        },
+        "slurm": {
+            "title": "SLURM execution",
+            "type": "object",
+            "description": "Only used with -profile slurm.",
+            "properties": {
+                "slurm_queue": {
+                    "type": "string",
+                    "default": "normal",
+                    "description": "SLURM queue (partition) to submit to.",
+                    "fa_icon": "fas fa-server"
+                },
+                "singularity_cache_dir": {
+                    "type": "string",
+                    "format": "directory-path",
+                    "description": "Shared Apptainer/Singularity image cache directory; <pipeline>/.singularity when unset.",
+                    "fa_icon": "fas fa-hdd"
+                }
+            }
+        },
+        "generic": {
+            "title": "Generic options",
+            "type": "object",
+            "properties": {
+                "help": {
+                    "type": [
+                        "boolean",
+                        "string"
+                    ],
+                    "description": "Show this help; --help <parameter> shows that parameter's details.",
+                    "hidden": true,
+                    "fa_icon": "fas fa-question-circle"
+                }
+            }
+        }
+    },
+    "allOf": [
+        {
+            "$ref": "#/$defs/input_output"
+        },
+        {
+            "$ref": "#/$defs/discovery"
+        },
+        {
+            "$ref": "#/$defs/sequences"
+        },
+        {
+            "$ref": "#/$defs/chaining"
+        },
+        {
+            "$ref": "#/$defs/resources"
+        },
+        {
+            "$ref": "#/$defs/slurm"
+        },
+        {
+            "$ref": "#/$defs/generic"
+        }
+    ]
+}
