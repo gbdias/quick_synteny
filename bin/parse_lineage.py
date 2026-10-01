@@ -60,6 +60,15 @@ def main():
     reports = data.get('reports') or []
     if not reports:
         sys.exit(f"ERROR: no taxonomy report returned (input: {sys.argv[1]})")
+    # an unknown taxid isn't a datasets failure: it exits 0 with a report
+    # carrying only `errors` (reason: "... is not a recognized NCBI Taxonomy
+    # name.") and no `taxonomy` block
+    if not any('taxonomy' in r for r in reports):
+        unknown = sorted({i for r in reports for e in r.get('errors') or [] for i in e.get('invalid_identifiers') or []})
+        reasons = sorted({e['reason'] for r in reports for e in r.get('errors') or [] if e.get('reason')})
+        if unknown:
+            sys.exit(f"ERROR: --taxid {', '.join(unknown)} is not a known NCBI taxid")
+        sys.exit(f"ERROR: NCBI returned no taxonomy for this taxid: {'; '.join(reasons) or 'no reason given'}")
 
     # --parents returns the ancestors (and immediate children) in no
     # particular order, every report echoing the same `query`: the queried
