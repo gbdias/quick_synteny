@@ -11,6 +11,7 @@ from, so the stats panel shows the same "identity" number that drives
 those defaults.
 """
 import argparse
+import gzip
 import json
 import re
 import sys
@@ -19,10 +20,14 @@ MRNA_ATTR_RE = re.compile(r'(\w+)=([^;]+)')
 
 
 def count_proteome(path):
+    """Its sequences: '>' lines, plain or gzipped (told apart by the gzip
+    magic bytes, so a gzipped file under any name works, as for miniprot)."""
+    with open(path, 'rb') as f:
+        gzipped = f.read(2) == b'\x1f\x8b'
     n = 0
-    with open(path) as f:
+    with (gzip.open if gzipped else open)(path, 'rb') as f:
         for line in f:
-            if line.startswith('>'):
+            if line.startswith(b'>'):
                 n += 1
     return n
 
