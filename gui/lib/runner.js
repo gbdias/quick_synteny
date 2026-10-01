@@ -74,6 +74,20 @@ function findResults(outdir) {
     }
 }
 
+// What discovery picked, from main.nf's own log lines:
+//   quick_synteny: reference accession=GCA_056824455.1 (Saccharomyces pastorianus) rank=genus (Saccharomyces) from 47 candidate(s)
+//   quick_synteny: proteome accession=GCA_011022315.1 (Saccharomyces pastorianus) rank=genus (Saccharomyces) annotated=true [REFERENCE SPECIES] from 20 candidate(s)
+// A rank can be several words ("species group (virilis group)", "no rank").
+// -> { kind, accession, species, rank, rankName, candidates, sameSpecies }
+// When a run finishes, record.js also reads the selections pipeline_info/
+// holds, so a line this misses doesn't leave the run without them.
+function parseFound(line) {
+    const m = line.match(/^quick_synteny: (reference|proteome) accession=(\S+) \((.*?)\) rank=(.+?) \((.*?)\)(.*?) from (\d+) candidate/);
+    if (!m) return null;
+    return { kind: m[1], accession: m[2], species: m[3], rank: m[4], rankName: m[5], candidates: Number(m[7]),
+        sameSpecies: /SAME SPECIES AS TARGET/.test(m[6]) };
+}
+
 class Run {
     constructor({ pipelineDir, launch, form, send }) {
         Object.assign(this, { pipelineDir, launch, form, send });
@@ -115,8 +129,10 @@ class Run {
         const m = line.match(/^\[(\w+\/\w+)\] Cached process > (.+)$/);
         if (m) this.send('run:task', { id: `cached:${m[1]}`, name: m[2], status: 'CACHED' });
         const env = line.match(/^Creating env using \w+: (\S+)/);
-        if (env) this.send('run:note', `Building the ${path.basename(env[1])} environment (first run only)…`);
+        if (env) this.send('run:note', `Setting up its tools (${path.basename(env[1], '.yml')}), only the first time…`);
         else if (/ Submitted process > /.test(line)) this.send('run:note', '');
+        const found = parseFound(line);
+        if (found) this.send('run:found', found);
     }
 
     onWeblog(ev) {
@@ -150,4 +166,4 @@ class Run {
     }
 }
 
-module.exports = { Run, buildArgs, findResults, guiConfigText, PARAMS };
+module.exports = { Run, buildArgs, findResults, guiConfigText, parseFound, PARAMS };

@@ -140,7 +140,8 @@ in it.
 
 A packaged app uses its bundled micromamba instead of `bin/micromamba`.
 `QS_HOME` moves the whole folder somewhere else, which is useful for
-testing a first launch.
+testing a first launch. `QS_USER_DATA` does the same for the app's
+settings and run history.
 
 Nextflow runs with the runtime's `bin/` and micromamba first on PATH, and
 with `MAMBA_ROOT_PREFIX` pointing into this folder. `MAMBA_NO_RC=true` is
@@ -224,68 +225,126 @@ The app's version is `package.json`'s `version`. A release tagged
 
 ## What it does
 
-- **First launch.** Setup starts by itself. A **Retry setup** button
-  appears if it fails.
-- **Environment check.** The header shows the runtime's Nextflow. Docker
-  is only checked while the Docker engine is selected: once each time it's
-  picked, and again when a Docker run starts, both on the page (for its
-  status pill) and in the main process, which refuses the run if Docker
-  isn't up. With Conda, Docker never comes up.
-- **Form.** Target FASTA; either NCBI discovery (a species-name search that
-  resolves to a taxid through NCBI Datasets' `taxon_suggest`, plus max rank
-  and exclude-target) or your own reference and proteome; advanced chaining
-  and miniprot options; **Tools** (Conda or Docker); output folder;
-  `-resume`. The advanced options, the rank and the same-species switch
-  each have a "?" like the result page's. Its text is the parameter's
-  `description`, then its `help_text`, then its default, all from the
-  bundled `nextflow_schema.json`: the same text as `--help <parameter>`.
-  The tip itself is CSS only. Defaults and the rank list come from the
-  schema too.
+The window is a sidebar of runs beside one view at a time. The layout is
+direction B of the design mockups, and a run's screen is direction A's
+progress screen.
+
+- **Sidebar.** At the top, **New run**. Below it, every run, newest first:
+  running ones with a spinner, finished ones with when they finished,
+  failed ones with why they stopped. At the bottom, the tools' status
+  (Tools ready / Setting up… / Setup failed: retry), **Open a result…**
+  and **Settings**. The history lives in the app's userData, as
+  `runs.json` with one thumbnail per finished run (`lib/history.js`).
+  Removing a run takes it off the list and leaves its folder alone. A run
+  cut off by the app quitting comes back as "Interrupted".
+- **New run** (`renderer/form.js`):
+  - **Your genome:** a drop zone, or **Choose a file…**. Once it's added,
+    a card shows its name, size and format.
+  - **Compare it with:** **My own files** is the default, with drop slots
+    for the reference genome and the proteome. **A relative on NCBI** has
+    a species search, plus how far to look and the same-species switch.
+    The search (`lib/taxa.js`) asks NCBI Datasets three ways at once:
+    `taxon_suggest`; `taxon_suggest` limited to taxa with genomes; and an
+    exact-name lookup. `taxon_suggest` alone misses some species even by
+    their exact name (*Babesia ovis* got only other *Babesia*). The
+    results are merged, closest matches first: the exact name, then names
+    starting with what you typed, species before strains and hybrids.
+    NCBI's "too many requests" is retried once.
+  - **Save to:** `~/Documents/quick_synteny/<target>_vs_<taxid or
+    reference>` by default, with `-2`, `-3`… when that's taken, so each run
+    gets a folder of its own. **Change…** picks another; a folder holding
+    an earlier run offers to resume it.
+  - **Options,** collapsed: the tools (Conda or Docker), then the chaining
+    and memory parameters.
+
+  The rank, the same-species switch and every option have a "?" like the
+  result page's. Its text is the parameter's `description`, then its
+  `help_text`, then its default, all from the bundled
+  `nextflow_schema.json`: the same text as `--help <parameter>`. Defaults
+  and the rank list come from the schema too. The footer says what's still
+  missing, and **Start run** stays disabled until nothing is.
 - **Input checks.** These run before a run starts (`lib/inputs.js`, and
   the `taxon:lookup` handler in `main.js`), so a bad input fails here and
   not minutes into a run:
   - The taxid is looked up at NCBI as it's typed. The field then shows the
     taxon's name and rank, "not a taxid" (e.g. `000000`), or "NCBI has no
-    taxon"; the last two block **Run**. If NCBI can't be reached, the run
+    taxon"; the last two block the run. If NCBI can't be reached, the run
     isn't blocked, since the pipeline checks the taxid again.
-  - Each picked file has to start with a `>` line, possibly gzipped.
+  - Each file has to start with a `>` line, possibly gzipped.
   - Typed numbers are checked against the schema's types and limits, e.g.
     "Min block (anchors) must be at least 2". These are the rules the
-    pipeline applies, so a bad value fails before the run starts rather
-    than as Nextflow's error. If one does reach the pipeline, nf-schema's
-    message goes in the error box.
-  - An output folder that can't be read (macOS privacy settings) or
-    written blocks the run. A folder that isn't empty and isn't a previous
-    run gets a warning and a **Use a new subfolder instead** button. It
-    suggests `<target>_vs_<taxid>`, so a run into `~/Downloads` doesn't
-    scatter `work/` and `.nextflow/` there.
+    pipeline applies. If a bad value reaches the pipeline anyway,
+    nf-schema's message goes in the error box.
+  - A folder that can't be read (macOS privacy settings) or written blocks
+    the run. A chosen folder that isn't empty and isn't an earlier run
+    gets a warning and a **Use a new subfolder instead** button.
+  - Docker is only checked while the Docker engine is selected: each time
+    it's picked, and again when a Docker run starts, in the main process
+    too, which refuses the run if Docker isn't up.
 - **Memory preflight.** From the FASTA sizes, and README's ~10 GB of RAM per
   Gb of genome, it warns when miniprot won't fit and suggests a
   `--miniprot_chunk_gb` that will. The limit is this computer's RAM for
   Conda and Docker's VM memory for Docker.
-- **Progress.** Nextflow's weblog POSTs one JSON event per task state
-  change to a localhost port. The weblog doesn't report two things, so
-  those come from the log instead:
-  - tasks that `-resume` skips (`Cached process` lines);
-  - conda environment builds (`Creating env using micromamba`), shown as a
-    note above the task list.
-- **Errors.** When a run fails, a box above the task list says why. Its
-  text comes from Nextflow's own `ERROR ~` report in the console
-  (`lib/nferror.js`):
-  - the pipeline's message when it rejects its parameters;
-  - for a failed step, the step's name and the last line of its
-    `Command error:` output, with the full error when there's more than one
-    line and a button to show its work folder.
-
-  It also has a button to open `.nextflow.log`. When no report was printed,
-  the box shows the log's last lines.
-- **Cancel.** It sends SIGINT, like Ctrl-C: Nextflow stops its tasks (and
-  containers) itself. Quitting the app cancels a run too.
-- **Results.** It opens the page in a sandboxed window. The page's
-  SVG/PNG/TSV exports open a save dialog that starts in Downloads. **Open
-  result…** takes a page, or any earlier run's outdir.
+- **A run** (`renderer/app.js`). The main process turns the runner's events
+  into a record (`lib/record.js`), keeps it in the history, and sends it to
+  the page, which draws it:
+  - **Steps:** a checklist in plain language ("Found a reference genome",
+    "Aligning the proteins to both genomes"…). `lib/stages.js` maps
+    Nextflow's processes onto the steps and works out each one's state.
+    Discovery runs start with three NCBI steps of their own. Steps can
+    overlap: the target genome is prepared while NCBI is being searched.
+  - **Where progress comes from:** Nextflow's weblog POSTs one JSON event
+    per task state change to a localhost port. Tasks that `-resume` skips
+    come from the log's `Cached process` lines, and conda environment
+    builds from its `Creating env using micromamba` lines; those show
+    under the running step.
+  - **What we found:** what discovery picked (species, accession, the rank
+    it was found at, out of how many candidates), parsed from `main.nf`'s
+    `quick_synteny: reference accession=…` lines. With your own files, it's
+    the files. Also where the run is saved.
+  - **When it finishes:** the result page opens by itself. The run screen
+    gains a thumbnail of it, captured from a hidden window, plus four
+    numbers from `stats.json` and `links.tsv`: blocks, the share of
+    proteins aligned to each genome, and the rank where the reference was
+    found (or the proteome's size). Its buttons are **Open plot**, **Show
+    folder**, **Run again…** (the same form, in a new folder) and
+    **Remove**.
+  - **Errors:** when a run fails, a box says why. Its text comes from
+    Nextflow's own `ERROR ~` report in the console (`lib/nferror.js`), and
+    a failed step is named as the checklist names it ("Couldn't look up
+    your organism"). It shows the pipeline's message when the pipeline
+    rejects its parameters; for a failed step, the last line of its
+    `Command error:` output, the full error when there's more, and a
+    button to its work folder. A button opens `.nextflow.log`.
+  - **Cancel** sends SIGINT, like Ctrl-C: Nextflow stops its tasks (and
+    containers) itself. Quitting the app cancels a run too.
+  - **The technical log,** collapsed, holds this session's Nextflow output.
+- **Setup and settings.** A first launch shows **Getting quick_synteny
+  ready** while setup runs, with **Retry setup** if it fails. **Settings**
+  shows the Nextflow in use, the runtime folder, your own Nextflow and Java
+  if you want them, and the update check.
+- **Results** open in a sandboxed window of their own. The page's
+  SVG/PNG/TSV exports open a save dialog that starts in Downloads.
+- **Dark mode** follows the system: every colour is a token in
+  `renderer/style.css`, with a dark set.
 
 ## Tested
+
+The workspace interface, from source on macOS (Apple Silicon):
+- A run with your own files and a discovery run, both started from the
+  form: each went through its steps live and finished with the
+  thumbnail, the numbers (36 blocks, 99.4% and 99.8% aligned) and the
+  result page opened. What discovery found showed while it ran.
+- The history survived a restart.
+- A run forced to fail (taxid 999999999) showed "Couldn't look up your
+  organism" and its reason, in the run screen and the sidebar.
+- **Run again…** refilled the form, NCBI check included. **Remove** took a
+  run off the list and left its folder alone.
+- An offline first launch showed **Getting quick_synteny ready** with
+  "Setup needs an internet connection".
+- Dark mode, and the Settings view.
+
+Earlier:
 
 With the parameter schema (nf-schema), on macOS (Apple Silicon):
 - The smoke test on an empty runtime folder installed both plugins and
@@ -408,10 +467,18 @@ would close that gap.
   box's title, message, and detail.
 - `lib/inputs.js`: FASTA sniffing, output-folder inspection, and subfolder
   names.
+- `lib/taxa.js`: the species search.
 - `test/schema.test.js`: checks that the schema, `nextflow.config`'s
   params, the form and the runner name the same parameters with the same
   defaults, and that the run config pins every plugin.
 - `lib/updates.js`: the new-version check against GitHub Releases.
 - `lib/network.js`: whether NCBI and conda-forge can be reached.
 - `preload.js`: the IPC bridge exposed to the form as `window.qs`.
-- `renderer/`: the form and progress UI (plain HTML/CSS/JS).
+- `lib/stages.js`: Nextflow processes and task states to the run screen's
+  steps.
+- `lib/record.js`: a run's record (title, status, steps, what was found,
+  summary), built from the runner's events.
+- `lib/history.js`: the run history (`runs.json`, thumbnails).
+- `renderer/`: the window (plain HTML/CSS/JS, no build step). `ui.js` has
+  the helpers and shared state, `form.js` the New run view, `app.js` the
+  sidebar, the run screen, setup and settings.
