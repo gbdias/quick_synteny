@@ -1,0 +1,40 @@
+N E X T F L O W  ~  version 25.10.4
+Launching `/opt/quick_synteny/main.nf` [sharp_hugle] DSL2 - revision: 365b49c9fd
+quick_synteny: assembly=/opt/quick_synteny/scratch/yeast/ncbi_dataset/data/GCF_000146045.2/GCF_000146045.2_R64_genomic.fna taxid=(skipped, using overrides) outdir=/tmp/run/off_env/out
+Creating env using micromamba: /opt/quick_synteny/envs/python.yml [cache /tmp/run/off_env/conda_envs/env-85079c7ee8548d6b41aae2157665c092]
+Creating env using micromamba: /opt/quick_synteny/envs/miniprot.yml [cache /tmp/run/off_env/conda_envs/env-c4500b0eff7e337b271bb3de1cc34ccd]
+ERROR ~ Error executing process > 'RENAME_SEQUENCES (2)'
+
+Caused by:
+  Failed to create Conda environment
+    command: micromamba env create --yes --prefix /tmp/run/off_env/conda_envs/env-85079c7ee8548d6b41aae2157665c092 --file /opt/quick_synteny/envs/python.yml
+    status : 1
+    message:
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      warning  libmamba Retrying in 2 seconds
+      critical libmamba Multiple errors occurred:
+          Download error (6) Could not resolve hostname [https://conda.anaconda.org/bioconda/noarch/repodata.json]
+          Could not resolve host: conda.anaconda.org
+          Subdir conda-forge/noarch not loaded!
+          Subdir bioconda/noarch not loaded!
+          If you run into this error repeatedly, your package cache may be corrupted.
+          Please try running `mamba clean -a` to remove this cache before retrying the operation.
+          
+          If you still are having issues, please report the error on `mamba-org/mamba`'s issue tracker:
+          https://github.com/mamba-org/mamba/issues/new?assignees=&labels=&projects=&template=bug.yml
+
+
+
+ -- Check '.nextflow.log' file for details

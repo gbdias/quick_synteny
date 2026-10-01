@@ -2,17 +2,23 @@
   "name": "quick-synteny-gui",
   "version": "0.0.1",
   "private": true,
-  "description": "Feasibility prototype: a desktop launcher for the quick_synteny Nextflow pipeline",
+  "productName": "quick_synteny",
+  "desktopName": "quick_synteny.desktop",
+  "description": "A desktop app for the quick_synteny Nextflow pipeline (prototype)",
+  "author": "Guilherme Dias",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist:mac": "node scripts/fetch-micromamba.js darwin-arm64 && electron-builder --mac dmg --arm64"
+    "test": "node --test \"test/*.test.js\"",
+    "dist:mac-arm64": "node scripts/fetch-micromamba.js darwin-arm64 && electron-builder --mac dmg --arm64 --publish never",
+    "dist:mac-x64": "node scripts/fetch-micromamba.js darwin-x64 && electron-builder --mac dmg --x64 --publish never",
+    "dist:linux-x64": "node scripts/fetch-micromamba.js linux-x64 && electron-builder --linux AppImage --x64 --publish never",
+    "dist:linux-arm64": "node scripts/fetch-micromamba.js linux-arm64 && electron-builder --linux AppImage --arm64 --publish never"
   },
   "devDependencies": {
     "electron": "^44.5.1",
     "electron-builder": "^26.15.3"
   },
-  "productName": "quick_synteny",
   "build": {
     "appId": "se.nbis.quick-synteny",
     "directories": {
@@ -73,7 +79,10 @@
       "icon": "build/icon-macos.png"
     },
     "linux": {
-      "icon": "build/icons"
+      "target": "AppImage",
+      "icon": "build/icons",
+      "category": "Science",
+      "syncDesktopName": true
     },
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}"
   }

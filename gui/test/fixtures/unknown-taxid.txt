@@ -1,0 +1,34 @@
+N E X T F L O W  ~  version 25.10.4
+Launching `/opt/quick_synteny/main.nf` [stupefied_kay] DSL2 - revision: 365b49c9fd
+quick_synteny: assembly=/opt/quick_synteny/scratch/yeast/ncbi_dataset/data/GCF_000146045.2/GCF_000146045.2_R64_genomic.fna taxid=999999999 outdir=/tmp/run/badtax
+WARN: Task runtime metrics are not reported when using macOS without a container engine
+[2f/24704d] Submitted process > RESOLVE_TAXONOMY:FETCH_TAXONOMY_JSON (999999999)
+[38/2a29b4] Submitted process > MINIPROT_INDEX (target)
+[d9/27c370] Submitted process > RENAME_SEQUENCES (target)
+[c5/47d4a6] Submitted process > RESOLVE_TAXONOMY:PARSE_LINEAGE (taxonomy.json)
+ERROR ~ Error executing process > 'RESOLVE_TAXONOMY:PARSE_LINEAGE (taxonomy.json)'
+
+Caused by:
+  Process `RESOLVE_TAXONOMY:PARSE_LINEAGE (taxonomy.json)` terminated with an error exit status (1)
+
+
+Command executed:
+
+  parse_lineage.py taxonomy.json > lineage.tsv
+
+Command exit status:
+  1
+
+Command output:
+  (empty)
+
+Command error:
+  ERROR: --taxid 999999999 is not a known NCBI taxid
+
+Work dir:
+  /tmp/run/badtax/work/c5/47d4a6cb1eed22736c9e5d0cf003fb
+
+Tip: you can replicate the issue by changing to the process work dir and entering the command `bash .command.run`
+
+ -- Check '.nextflow.log' file for details
+WARN: Got an interrupted exception while taking agent result | java.lang.InterruptedException

@@ -5,7 +5,9 @@
 // Only a release carrying an app file for this platform and architecture
 // counts. The repo also has pipeline-only releases (v0.1.0-alpha), which
 // have nothing to download. App files are named by package.json's
-// build.artifactName: quick_synteny-<version>-<mac|linux>-<arch>.<ext>
+// build.artifactName: quick_synteny-<version>-<mac|linux>-<arch>.<ext>,
+// where electron-builder spells an AppImage's arch the AppImage way
+// (x86_64, not Node's x64).
 
 const REPO = 'gbdias/quick_synteny';
 const RELEASES = `https://api.github.com/repos/${REPO}/releases?per_page=30`;
@@ -13,6 +15,7 @@ const RELEASES = `https://api.github.com/repos/${REPO}/releases?per_page=30`;
 // the file to offer, best first, per platform
 const EXTENSIONS = { darwin: ['dmg'], linux: ['AppImage', 'deb', 'rpm'] };
 const OS_NAMES = { darwin: 'mac', linux: 'linux' };
+const ARCH_NAMES = { x64: ['x64', 'x86_64'], arm64: ['arm64', 'aarch64'] };
 
 // semver order, enough for tags like 0.2.0 and 0.1.0-alpha: numbers first,
 // then a release sorts after its own pre-releases
@@ -65,8 +68,8 @@ async function checkForUpdate({ current, platform = process.platform, arch = pro
     for (const rel of Array.isArray(releases) ? releases : []) {
         if (rel.draft || rel.prerelease || compare(rel.tag_name, current) <= 0) continue;
         if (best && compare(rel.tag_name, best.version) <= 0) continue;
-        const asset = exts.map((ext) => (rel.assets || []).find((a) => a.name.endsWith(`-${OS_NAMES[platform]}-${arch}.${ext}`)))
-            .find(Boolean);
+        const suffixes = exts.flatMap((ext) => (ARCH_NAMES[arch] || [arch]).map((a) => `-${OS_NAMES[platform]}-${a}.${ext}`));
+        const asset = suffixes.map((sfx) => (rel.assets || []).find((a) => a.name.endsWith(sfx))).find(Boolean);
         if (!asset || !isRepoUrl(asset.browser_download_url) || !isRepoUrl(rel.html_url)) continue;
         best = {
             version: rel.tag_name.replace(/^v/, ''),
