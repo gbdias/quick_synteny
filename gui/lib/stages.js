@@ -1,14 +1,17 @@
 // A run as the plain-language steps the progress screen lists, worked out
-// from Nextflow's tasks (their process names and states). Discovery runs
-// start with three steps of their own; a run with your own reference and
-// proteome begins at "prepare".
+// from Nextflow's tasks (their process names and states). Up to three steps
+// come before "prepare", each only when the run does it: looking up your
+// genome's organism (when --taxid is given), getting the reference (unless
+// it's your file: discovered, or the one you chose on NCBI), and finding
+// the proteome (unless it's your file).
 //
 // Steps can overlap: the target genome is prepared while NCBI is still
 // being searched for a reference, so two steps may be running at once.
 
 const STEPS = [
     { id: 'lookup', discovery: true, match: /^RESOLVE_TAXONOMY:/ },
-    { id: 'reference', discovery: true, match: /^(FIND_REFERENCE_ASSEMBLY:.*|DOWNLOAD_GENOME)$/ },
+    { id: 'reference', discovery: true,
+        match: /^(FIND_REFERENCE_ASSEMBLY:.*|DOWNLOAD_GENOME|RESOLVE_REFERENCE_TAXONOMY:.*|FETCH_ACCESSION_SUMMARY|DESCRIBE_REFERENCE_ACCESSION)$/ },
     { id: 'proteome', discovery: true, match: /^(FIND_PROTEOME_ASSEMBLY:.*|DOWNLOAD_PROTEIN)$/ },
     { id: 'prepare', match: /^(RENAME_SEQUENCES|MINIPROT_INDEX|SPLIT_GENOME)$/ },
     { id: 'align', match: /^(MINIPROT_ALIGN|MINIPROT_ALIGN_CHUNK|MERGE_MINIPROT_GFF|RENAME_GFF)$/ },
@@ -27,11 +30,19 @@ function stepOf(task) {
     return s ? s.id : null;
 }
 
-// tasks: iterable of { process|name, status }; discovery: whether the run
-// searches NCBI; outcome: null while running, else 'finished'|'failed'|'cancelled'.
+// Which of the first three steps a run has, from its form: { lookup,
+// reference, proteome } (see above)
+function planOf(form) {
+    return { lookup: !!form.taxid, reference: !form.reference, proteome: !form.proteome };
+}
+
+// tasks: iterable of { process|name, status }; plan: planOf(form), or for
+// records from before it existed `discovery` (all three steps, or none);
+// outcome: null while running, else 'finished'|'failed'|'cancelled'.
 // Returns [{ id, state }], state one of pending|running|done|failed|stopped.
-function computeSteps(tasks, { discovery, outcome = null }) {
-    const steps = STEPS.filter((s) => discovery || !s.discovery);
+function computeSteps(tasks, { plan, discovery, outcome = null }) {
+    const has = plan || { lookup: !!discovery, reference: !!discovery, proteome: !!discovery };
+    const steps = STEPS.filter((s) => !s.discovery || has[s.id]);
     const byStep = new Map(steps.map((s) => [s.id, []]));
     for (const t of tasks) {
         const id = stepOf(t);
@@ -54,4 +65,4 @@ function computeSteps(tasks, { discovery, outcome = null }) {
     });
 }
 
-module.exports = { STEPS, stepOf, computeSteps };
+module.exports = { STEPS, stepOf, computeSteps, planOf };

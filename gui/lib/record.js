@@ -3,13 +3,15 @@
 // and keeps it in the history (lib/history.js); the page only renders it.
 //
 //   { id, status: running|finished|failed|cancelled, startedAt, finishedAt,
-//     discovery, form, outdir, title, inputs: { assembly, reference, proteome },
-//     targetSpecies, found: { reference, proteome }, steps: [{ id, state }],
+//     sources: { reference: file|accession|taxid|discovered, proteome: file|discovered },
+//     discovery (anything from NCBI), form, outdir, title,
+//     inputs: { assembly, reference, proteome }, targetSpecies,
+//     found: { reference, proteome }, steps: [{ id, state }],
 //     note, error, results: [html], summary, hasThumbnail }
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { computeSteps } = require('./stages');
+const { computeSteps, planOf } = require('./stages');
 
 // "Saccharomyces cerevisiae" -> "S. cerevisiae"; anything else unchanged
 function shortSpecies(name) {
@@ -22,20 +24,36 @@ function fileStem(p) {
     return p ? path.basename(p).replace(/\.gz$/, '').replace(/\.(fa|fasta|fna|fas|faa|fsa)$/i, '') : '';
 }
 
+// where a run's reference and proteome come from; records from before
+// sources existed have only `discovery` (both from NCBI, or both files)
+function sourcesOf(r) {
+    if (r.sources) return r.sources;
+    const f = r.form || {};
+    if (f.reference || f.reference_accession || f.reference_taxid || f.proteome) {
+        return {
+            reference: f.reference ? 'file' : f.reference_accession ? 'accession' : f.reference_taxid ? 'taxid' : 'discovered',
+            proteome: f.proteome ? 'file' : 'discovered',
+        };
+    }
+    return r.discovery === false ? { reference: 'file', proteome: 'file' } : { reference: 'discovered', proteome: 'discovered' };
+}
+
 function titleOf(r) {
     const target = shortSpecies(r.targetSpecies) || fileStem(r.form.assembly);
-    const reference = r.discovery ? shortSpecies(r.found.reference?.species) || 'a relative' : fileStem(r.form.reference);
+    const reference = sourcesOf(r).reference === 'file' ? fileStem(r.form.reference)
+        : shortSpecies(r.found.reference?.species) || (sourcesOf(r).reference === 'discovered' ? 'a relative' : 'your chosen reference');
     return `${target} vs ${reference}`;
 }
 
 function newRecord(form, { targetSpecies = '' } = {}) {
-    const discovery = !(form.reference && form.proteome);
+    const sources = sourcesOf({ form });
+    const discovery = sources.reference !== 'file' || sources.proteome !== 'file';
     const r = {
         id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         status: 'running', startedAt: new Date().toISOString(), finishedAt: null,
-        discovery, form, outdir: form.outdir, targetSpecies,
+        sources, discovery, form, outdir: form.outdir, targetSpecies,
         inputs: { assembly: form.assembly, reference: form.reference || null, proteome: form.proteome || null },
-        found: {}, steps: computeSteps([], { discovery }), note: '', error: null, results: [], summary: null,
+        found: {}, steps: computeSteps([], { plan: planOf(form) }), note: '', error: null, results: [], summary: null,
         hasThumbnail: false,
     };
     r.title = titleOf(r);
@@ -49,7 +67,7 @@ function applyEvent(r, tasks, channel, payload) {
     switch (channel) {
     case 'run:task':
         tasks.set(payload.id, { process: payload.process, name: payload.name, status: payload.status });
-        r.steps = computeSteps(tasks.values(), { discovery: r.discovery });
+        r.steps = computeSteps(tasks.values(), { plan: planOf(r.form) });
         return true;
     case 'run:found':
         r.found[payload.kind] = payload;
@@ -71,7 +89,7 @@ function finishRecord(r, tasks, { code, cancelled, results }) {
     r.finishedAt = new Date().toISOString();
     r.results = results || [];
     r.note = '';
-    r.steps = computeSteps(tasks.values(), { discovery: r.discovery, outcome: r.status });
+    r.steps = computeSteps(tasks.values(), { plan: planOf(r.form), outcome: r.status });
     if (r.status === 'finished') r.summary = readSummary(r.outdir);
     fillFound(r);
     r.title = titleOf(r);
@@ -83,14 +101,24 @@ function finishRecord(r, tasks, { code, cancelled, results }) {
 // any of those it missed. Returns whether anything was added.
 function fillFound(r) {
     if (!r.discovery) return false;
+    const sources = sourcesOf(r);
     let added = false;
     for (const kind of ['reference', 'proteome']) {
-        if (r.found[kind]) continue;
+        if (sources[kind] === 'file' || r.found[kind]?.level) continue;
         let sel;
         try { sel = JSON.parse(fs.readFileSync(path.join(r.outdir, 'pipeline_info', `${kind}_selection.json`), 'utf8')); } catch { continue; }
         if (!sel.accession) continue;
+        // from the log line: only the level is missing (the line doesn't say it)
+        if (r.found[kind]) {
+            if (sel.assembly_level && sel.accession === r.found[kind].accession) {
+                r.found[kind].level = sel.assembly_level;
+                added = true;
+            }
+            continue;
+        }
         r.found[kind] = { kind, accession: sel.accession, species: sel.organism_name || '', rank: sel.rank || '', rankName: sel.name || '',
-            candidates: Number(sel.candidate_count) || 0, sameSpecies: !!sel.same_species_as_target };
+            candidates: Number(sel.candidate_count) || 0, sameSpecies: !!sel.same_species_as_target,
+            ...(sel.assembly_level ? { level: sel.assembly_level } : {}) };
         added = true;
     }
     if (added) r.title = titleOf(r);
@@ -116,4 +144,4 @@ function readSummary(outdir) {
     return summary;
 }
 
-module.exports = { newRecord, applyEvent, finishRecord, fillFound, readSummary, shortSpecies, fileStem, titleOf };
+module.exports = { newRecord, applyEvent, finishRecord, fillFound, readSummary, shortSpecies, fileStem, titleOf, sourcesOf };

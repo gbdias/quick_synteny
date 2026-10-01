@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { newRecord, applyEvent, finishRecord, fillFound, shortSpecies, fileStem } = require('../lib/record');
+const { newRecord, applyEvent, finishRecord, fillFound, shortSpecies, fileStem, sourcesOf } = require('../lib/record');
 const { parseFound } = require('../lib/runner');
 const { History } = require('../lib/history');
 
@@ -32,6 +32,22 @@ test('a run with your own files is titled by its files, and has no discovery ste
     assert.equal(r.discovery, false);
     assert.equal(r.title, 'R64 vs pastorianus');
     assert.deepEqual(r.steps.map((s) => s.id), ['prepare', 'align', 'synteny', 'plot']);
+});
+
+test('each run knows where its reference and proteome come from', () => {
+    const own = newRecord({ assembly: '/x/R64.fna', reference: '/x/pastorianus.fa', taxid: '4932', outdir: tmp }, { targetSpecies: 'Saccharomyces cerevisiae' });
+    assert.deepEqual(own.sources, { reference: 'file', proteome: 'discovered' });
+    assert.equal(own.discovery, true);
+    assert.equal(own.title, 'S. cerevisiae vs pastorianus');
+    const exact = newRecord({ assembly: '/x/R64.fna', reference_accession: 'GCA_056824455.1', proteome: '/x/p.faa', outdir: tmp });
+    assert.deepEqual(exact.sources, { reference: 'accession', proteome: 'file' });
+    assert.equal(exact.title, 'R64 vs your chosen reference');
+    assert.deepEqual(exact.steps.map((s) => s.id)[0], 'reference');
+    const taxon = newRecord({ assembly: '/x/R64.fna', reference_taxid: '27291', taxid: '4932', outdir: tmp });
+    assert.deepEqual(taxon.sources, { reference: 'taxid', proteome: 'discovered' });
+    // runs saved before sources were kept
+    assert.deepEqual(sourcesOf({ discovery: false, form: {} }), { reference: 'file', proteome: 'file' });
+    assert.deepEqual(sourcesOf({ discovery: true, form: { taxid: '4932' } }), { reference: 'discovered', proteome: 'discovered' });
 });
 
 test('finishing reads the summary from the run folder', () => {
@@ -75,6 +91,10 @@ test('the discovery log lines parse, including ranks of several words', () => {
     assert.equal(group.rank, 'species group');
     assert.equal(group.rankName, 'virilis group');
     assert.equal(group.candidates, 2);
+    // an exact assembly you chose
+    const exact = parseFound('quick_synteny: reference accession=GCA_056824455.1 (Saccharomyces pastorianus) rank=assembly (GCA_056824455.1) from 1 candidate(s)');
+    assert.equal(exact.rank, 'assembly');
+    assert.equal(exact.candidates, 1);
     assert.equal(parseFound('quick_synteny: reference accession=GCA_1 (A b) rank=species (A b) [SAME SPECIES AS TARGET] from 3 candidate(s)').sameSpecies, true);
 });
 
@@ -82,7 +102,7 @@ test('a finished run fills in what was found from pipeline_info/, when the log l
     const out = fs.mkdtempSync(path.join(tmp, 'found-'));
     fs.mkdirSync(path.join(out, 'pipeline_info'));
     const sel = (accession, organism) => JSON.stringify({ accession, rank: 'species group', name: 'virilis group', organism_name: organism,
-        candidate_count: 4, same_species_as_target: false });
+        candidate_count: 4, same_species_as_target: false, assembly_level: 'Chromosome' });
     fs.writeFileSync(path.join(out, 'pipeline_info', 'reference_selection.json'), sel('GCA_030788265.1', 'Drosophila americana'));
     fs.writeFileSync(path.join(out, 'pipeline_info', 'proteome_selection.json'), sel('GCF_003285875.2', 'Drosophila novamexicana'));
     const r = newRecord({ assembly: '/x/virilis.fna.gz', taxid: '7244', outdir: out }, { targetSpecies: 'Drosophila virilis' });
@@ -92,10 +112,17 @@ test('a finished run fills in what was found from pipeline_info/, when the log l
     assert.equal(r.found.reference.rankName, 'virilis group');
     assert.equal(r.found.proteome.accession, 'GCF_003285875.2');
     assert.equal(r.title, 'D. virilis vs D. americana');
+    assert.equal(r.found.reference.level, 'Chromosome');
+    // the log line had it all but the level: that's added
+    const r3 = newRecord({ assembly: '/x/v.fna', taxid: '7244', outdir: out });
+    applyEvent(r3, new Map(), 'run:found', { kind: 'reference', species: 'Drosophila americana', accession: 'GCA_030788265.1' });
+    fillFound(r3);
+    assert.equal(r3.found.reference.level, 'Chromosome');
     // what the log lines did give is kept
     const r2 = newRecord({ assembly: '/x/v.fna', taxid: '7244', outdir: out });
     applyEvent(r2, new Map(), 'run:found', { kind: 'reference', species: 'From the log', accession: 'X' });
     assert.equal(fillFound(r2), true);
     assert.equal(r2.found.reference.species, 'From the log');
+    assert.equal(r2.found.reference.level, undefined, 'a different assembly than the selection');
     assert.equal(r2.found.proteome.species, 'Drosophila novamexicana');
 });

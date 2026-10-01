@@ -1,5 +1,6 @@
 // The New run view: files (dropped or chosen), what to compare with (your
-// own reference and proteome by default, or discovery on NCBI), where to
+// own reference and proteome by default, a reference you choose on NCBI,
+// or discovery there), where to
 // save, and options; checked before a run starts so a bad input fails here,
 // not minutes into a run.
 
@@ -76,99 +77,175 @@ document.querySelectorAll('[data-drop]').forEach((zone) => {
 
 // ---------- compare with ----------
 
-document.querySelectorAll('input[name=mode]').forEach((r) => {
-    r.addEventListener('change', () => {
-        const manual = mode() === 'manual';
-        $('#mode-auto').hidden = manual;
-        $('#mode-manual').hidden = !manual;
-        updatePreflight();
-        suggestOutdir();
+// What the choices ask of NCBI: My own files can still take the proteome
+// from NCBI; A species I choose gets that reference (and a proteome); Its
+// closest relative discovers both. Anything taken from NCBI is found
+// outward from your genome's organism, so that's asked for then.
+let proteomeFromNcbi = false;
+const needsOrganism = () => mode() !== 'manual' || proteomeFromNcbi;
+
+function showMode() {
+    const m = mode();
+    $('#mode-manual').hidden = m !== 'manual';
+    $('#mode-chosen').hidden = m !== 'chosen';
+    $('#mode-auto').hidden = m !== 'auto';
+    $('#slot-proteome').hidden = proteomeFromNcbi;
+    $('#slot-proteome-ncbi').hidden = !proteomeFromNcbi;
+    $('#btn-proteome-ncbi').hidden = proteomeFromNcbi;
+    $('#organism').hidden = !needsOrganism();
+    $('#organism-hint').hidden = m === 'auto';
+    updatePreflight();
+    suggestOutdir();
+    refreshForm();
+}
+document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener('change', showMode));
+$('#btn-proteome-ncbi').addEventListener('click', () => { proteomeFromNcbi = true; showMode(); });
+$('#btn-proteome-own').addEventListener('click', () => { proteomeFromNcbi = false; showMode(); });
+
+// A species search: a name box with suggestions (lib/taxa.js, once typing
+// pauses; an answer for text that has changed since is dropped), and the
+// taxid field it fills, which is checked against NCBI as it's typed, so a
+// mistyped or unknown taxid is caught here rather than a minute into a run.
+// NCBI being unreachable doesn't block a run: the pipeline checks it again.
+// Used twice: your genome's organism, and the reference species you choose.
+function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
+    const p = { state: { status: 'empty' }, pending: Promise.resolve() };
+    let suggestTimer = null;
+    let checkTimer = null;
+
+    const show = (t) => {
+        p.state = t;
+        const text = {
+            invalid: ['bad', 'Not a taxid: NCBI taxids are positive whole numbers (e.g. 4932).'],
+            checking: ['', 'Checking with NCBI…'],
+            found: ['ok', `✓ ${t.name}${t.rank ? ` · ${t.rank}` : ''}${t.common ? ` · ${t.common}` : ''}`],
+            unknown: ['bad', `NCBI has no taxon ${t.taxid}.`],
+            unchecked: ['', 'Couldn\'t reach NCBI to check this taxid; the run will check it.'],
+        }[t.status];
+        if (text) setStatus(taxidStatus, ...text);
+        else setStatus(taxidStatus, null);
+        if (t.status === 'found') suggestOutdir();
         refreshForm();
-    });
-});
+    };
 
-// taxon name -> taxid lookup (lib/taxa.js), once typing pauses; an answer
-// for text that has changed since is dropped
-let suggestTimer = null;
-$('#taxon-search').addEventListener('input', () => {
-    clearTimeout(suggestTimer);
-    const q = $('#taxon-search').value.trim();
-    if (/^\d+$/.test(q)) {
-        $('#taxid').value = q;
-        $('#taxon-results').hidden = true;
-        checkTaxid();
-        return;
-    }
-    if (q.length < 3) { $('#taxon-results').hidden = true; return; }
-    suggestTimer = setTimeout(async () => {
-        let hits = [];
-        try {
-            hits = await window.qs.suggestTaxon(q);
-            if ($('#taxon-search').value.trim() !== q) return;
-            setStatus('#search-status', hits.length ? null : '', `NCBI knows no taxon called "${q}". Check the spelling, or type a taxid.`);
-        } catch (e) {
-            if ($('#taxon-search').value.trim() !== q) return;
-            setStatus('#search-status', 'warn', /busy/.test(String(e.message))
-                ? 'NCBI is busy right now: try again in a moment, or type a taxid.'
-                : 'Can\'t reach NCBI to search by name. Check the internet connection, type a taxid instead, or use your own files.');
+    p.check = () => {
+        clearTimeout(checkTimer);
+        const v = $(taxid).value.trim();
+        if (!v) return show({ status: 'empty' });
+        if (!/^[1-9]\d*$/.test(v)) return show({ status: 'invalid', taxid: v });
+        if (p.state.taxid === v && ['found', 'unknown'].includes(p.state.status)) return;
+        show({ status: 'checking', taxid: v });
+        p.pending = new Promise((resolve) => {
+            checkTimer = setTimeout(async () => {
+                let t;
+                try {
+                    const r = await window.qs.lookupTaxon(v);
+                    t = r.found ? { status: 'found', ...r } : { status: 'unknown', taxid: v };
+                } catch {
+                    t = { status: 'unchecked', taxid: v };
+                }
+                // typed on since: a newer check owns the status
+                if ($(taxid).value.trim() === v) show(t);
+                resolve();
+            }, 400);
+        });
+    };
+
+    // a taxid and its name, as a past run had them
+    p.set = (id, name) => {
+        $(taxid).value = id || '';
+        $(search).value = name || id || '';
+        p.check();
+    };
+
+    $(search).addEventListener('input', () => {
+        clearTimeout(suggestTimer);
+        const q = $(search).value.trim();
+        if (/^\d+$/.test(q)) {
+            $(taxid).value = q;
+            $(results).hidden = true;
+            p.check();
+            return;
         }
-        $('#taxon-results').replaceChildren(...hits.slice(0, 12).map((t) => h('li', {
-            onclick: () => {
-                $('#taxid').value = t.tax_id;
-                $('#taxon-search').value = t.sci_name;
-                $('#taxon-results').hidden = true;
-                showTaxon({ status: 'found', taxid: t.tax_id, name: t.sci_name, rank: t.rank?.toLowerCase(), common: t.common_name });
-            },
-        }, `${t.sci_name} `, h('small', { text: [t.rank?.toLowerCase(), t.common_name, `taxid ${t.tax_id}`].filter(Boolean).join(' · ') }))));
-        $('#taxon-results').hidden = hits.length === 0;
-    }, 450);
-});
-
-// The taxid, checked against NCBI as it's typed, so a mistyped or unknown
-// one is caught here rather than a minute into a run. NCBI being
-// unreachable doesn't block a run -- the pipeline checks it again.
-let taxon = { status: 'empty' };
-let taxonCheck = Promise.resolve();
-let taxidTimer = null;
-
-function showTaxon(t) {
-    taxon = t;
-    const text = {
-        empty: null,
-        invalid: ['bad', 'Not a taxid: NCBI taxids are positive whole numbers (e.g. 4932).'],
-        checking: ['', 'Checking with NCBI…'],
-        found: ['ok', `✓ ${t.name}${t.rank ? ` · ${t.rank}` : ''}${t.common ? ` · ${t.common}` : ''}`],
-        unknown: ['bad', `NCBI has no taxon ${t.taxid}.`],
-        unchecked: ['', 'Couldn\'t reach NCBI to check this taxid; the run will check it.'],
-    }[t.status];
-    if (text) setStatus('#taxid-status', ...text);
-    else setStatus('#taxid-status', null);
-    if (t.status === 'found') suggestOutdir();
+        if (q.length < 3) { $(results).hidden = true; return; }
+        suggestTimer = setTimeout(async () => {
+            let hits = [];
+            try {
+                hits = await window.qs.suggestTaxon(q);
+                if ($(search).value.trim() !== q) return;
+                setStatus(searchStatus, hits.length ? null : '', `NCBI knows no taxon called "${q}". Check the spelling, or type a taxid.`);
+            } catch (e) {
+                if ($(search).value.trim() !== q) return;
+                setStatus(searchStatus, 'warn', /busy/.test(String(e.message))
+                    ? 'NCBI is busy right now: try again in a moment, or type a taxid.'
+                    : 'Can\'t reach NCBI to search by name. Check the internet connection, type a taxid instead, or use your own files.');
+            }
+            $(results).replaceChildren(...hits.slice(0, 12).map((t) => h('li', {
+                onclick: () => {
+                    $(taxid).value = t.tax_id;
+                    $(search).value = t.sci_name;
+                    $(results).hidden = true;
+                    show({ status: 'found', taxid: t.tax_id, name: t.sci_name, rank: t.rank?.toLowerCase(), common: t.common_name });
+                },
+            }, `${t.sci_name} `, h('small', { text: [t.rank?.toLowerCase(), t.common_name, `taxid ${t.tax_id}`].filter(Boolean).join(' · ') }))));
+            $(results).hidden = hits.length === 0;
+        }, 450);
+    });
+    $(taxid).addEventListener('input', p.check);
+    return p;
 }
 
-function checkTaxid() {
-    clearTimeout(taxidTimer);
-    const v = $('#taxid').value.trim();
-    if (!v) return showTaxon({ status: 'empty' });
-    if (!/^[1-9]\d*$/.test(v)) return showTaxon({ status: 'invalid', taxid: v });
-    if (taxon.taxid === v && ['found', 'unknown'].includes(taxon.status)) return;
-    showTaxon({ status: 'checking', taxid: v });
-    taxonCheck = new Promise((resolve) => {
-        taxidTimer = setTimeout(async () => {
-            let t;
+const organism = taxonPicker({ search: '#taxon-search', results: '#taxon-results', searchStatus: '#search-status',
+    taxid: '#taxid', taxidStatus: '#taxid-status' });
+const referenceTaxon = taxonPicker({ search: '#ref-search', results: '#ref-results', searchStatus: '#ref-search-status',
+    taxid: '#ref-taxid', taxidStatus: '#ref-taxid-status' });
+
+// An exact assembly, checked against NCBI as it's typed: the schema's
+// pattern first, then whether NCBI has it. When given, it's used instead of
+// the reference species.
+let assembly = { status: 'empty' };
+let assemblyCheck = Promise.resolve();
+let assemblyTimer = null;
+
+function showAssembly(a) {
+    assembly = a;
+    const instead = $('#ref-taxid').value.trim() ? ', used instead of the species above' : '';
+    const text = {
+        invalid: ['bad', 'Not an assembly accession: those look like GCA_000001405.29 or GCF_000001215.4.'],
+        checking: ['', 'Checking with NCBI…'],
+        found: ['ok', `✓ ${a.organism}${a.level ? ` · ${a.level}` : ''}${instead}`],
+        unknown: ['bad', `NCBI has no assembly ${a.accession}.`],
+        unchecked: ['', 'Couldn\'t reach NCBI to check this assembly; the run will check it.'],
+    }[a.status];
+    if (text) setStatus('#ref-accession-status', ...text);
+    else setStatus('#ref-accession-status', null);
+    suggestOutdir();
+    refreshForm();
+}
+
+function checkAccession() {
+    clearTimeout(assemblyTimer);
+    const v = $('#ref-accession').value.trim();
+    const pattern = new RegExp(schema.reference_accession?.pattern || '^GC[AF]_[0-9]{9}\\.[0-9]+$');
+    if (!v) return showAssembly({ status: 'empty' });
+    if (!pattern.test(v)) return showAssembly({ status: 'invalid', accession: v });
+    if (assembly.accession === v && ['found', 'unknown'].includes(assembly.status)) return;
+    showAssembly({ status: 'checking', accession: v });
+    assemblyCheck = new Promise((resolve) => {
+        assemblyTimer = setTimeout(async () => {
+            let a;
             try {
-                const r = await window.qs.lookupTaxon(v);
-                t = r.found ? { status: 'found', ...r } : { status: 'unknown', taxid: v };
+                const r = await window.qs.lookupAssembly(v);
+                a = r.found ? { status: 'found', ...r, accession: v } : { status: 'unknown', accession: v };
             } catch {
-                t = { status: 'unchecked', taxid: v };
+                a = { status: 'unchecked', accession: v };
             }
-            // typed on since: a newer check owns the status
-            if ($('#taxid').value.trim() === v) showTaxon(t);
+            if ($('#ref-accession').value.trim() === v) showAssembly(a);
             resolve();
         }, 400);
     });
 }
-$('#taxid').addEventListener('input', checkTaxid);
+$('#ref-accession').addEventListener('input', checkAccession);
 
 // ---------- where to save ----------
 
@@ -180,9 +257,12 @@ function suggestOutdir(force = false) {
     clearTimeout(suggestTimerOut);
     suggestTimerOut = setTimeout(async () => {
         if (!files.assembly) return;
+        // named after what it's compared with: the taxid it climbs from,
+        // the chosen reference, or the reference file
+        const chosen = $('#ref-accession').value.trim() || $('#ref-taxid').value.trim();
         const d = await window.qs.defaultOutdir({
             assembly: files.assembly.path,
-            taxid: mode() === 'auto' ? $('#taxid').value.trim() : '',
+            taxid: mode() === 'auto' ? $('#taxid').value.trim() : mode() === 'chosen' ? chosen : '',
             reference: mode() === 'manual' ? files.reference?.path : '',
         });
         applyOutdir(d);
@@ -340,13 +420,26 @@ function collectForm() {
     }
     if (mode() === 'manual') {
         form.reference = files.reference?.path;
-        form.proteome = files.proteome?.path;
-    } else {
+        if (!proteomeFromNcbi) form.proteome = files.proteome?.path;
+    }
+    if (mode() === 'chosen') {
+        const accession = String(fd.get('reference_accession') || '').trim();
+        if (accession) form.reference_accession = accession;
+        else form.reference_taxid = String(fd.get('reference_taxid') || '').trim();
+    }
+    if (needsOrganism()) {
         form.taxid = String(fd.get('taxid') || '').trim();
         form.max_rank = fd.get('max_rank');
         form.exclude_target = fd.get('exclude_target') === 'on';
     }
     return form;
+}
+
+// "is not a taxid" / "NCBI has no taxon", from a picker's last check
+function taxonProblem(picker, taxid) {
+    if (picker.state.status === 'invalid') return `"${taxid}" is not a taxid: NCBI taxids are positive whole numbers.`;
+    if (picker.state.status === 'unknown') return `NCBI has no taxon ${taxid}. Search by name to find the right one.`;
+    return null;
 }
 
 // what stops a run before it starts, as one sentence, or null
@@ -356,14 +449,25 @@ function validate(form) {
     if (form.engine === 'docker' && !state.docker?.ok) return `${state.docker?.message || 'Docker is not available'}: start it, or use Conda.`;
     if (!form.assembly) return 'Add your genome to start.';
     if (mode() === 'manual' && !form.reference) return 'Add a reference genome to compare with.';
-    if (mode() === 'manual' && !form.proteome) return 'Add a proteome.';
+    if (mode() === 'manual' && !proteomeFromNcbi && !form.proteome) return 'Add a proteome, or find one on NCBI.';
     const LABELS = { assembly: 'Your genome', reference: 'The reference genome', proteome: 'The proteome' };
-    const notFasta = ['assembly', ...(mode() === 'manual' ? ['reference', 'proteome'] : [])].filter((k) => files[k]?.kind === 'other');
+    const given = ['assembly', ...(mode() === 'manual' ? ['reference', ...(proteomeFromNcbi ? [] : ['proteome'])] : [])];
+    const notFasta = given.filter((k) => files[k]?.kind === 'other');
     if (notFasta.length) return `${LABELS[notFasta[0]]} doesn't look like a FASTA file.`;
-    if (mode() === 'auto') {
+    if (mode() === 'chosen') {
+        if (form.reference_accession) {
+            if (assembly.status === 'invalid') return 'The exact assembly isn\'t an assembly accession (GCA_… or GCF_…).';
+            if (assembly.status === 'unknown') return `NCBI has no assembly ${form.reference_accession}.`;
+        } else {
+            if (!form.reference_taxid) return 'Pick the species to compare with, or give an exact assembly.';
+            const bad = taxonProblem(referenceTaxon, form.reference_taxid);
+            if (bad) return `Reference: ${bad}`;
+        }
+    }
+    if (needsOrganism()) {
         if (!form.taxid) return 'Pick the organism your genome is from.';
-        if (taxon.status === 'invalid') return `"${form.taxid}" is not a taxid: NCBI taxids are positive whole numbers.`;
-        if (taxon.status === 'unknown') return `NCBI has no taxon ${form.taxid}. Search by name to find the right one.`;
+        const bad = taxonProblem(organism, form.taxid);
+        if (bad) return bad;
     }
     for (const k of ADVANCED) {
         const bad = form[k] !== undefined && checkNumber(k, form[k]);
@@ -388,20 +492,30 @@ $('#form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const form = collectForm();
     if (form.engine === 'docker') await refreshDocker();
-    if (mode() === 'auto') {
-        checkTaxid();
-        await taxonCheck;
+    if (needsOrganism()) {
+        organism.check();
+        await organism.pending;
+    }
+    if (mode() === 'chosen') {
+        if (form.reference_accession) {
+            checkAccession();
+            await assemblyCheck;
+        } else {
+            referenceTaxon.check();
+            await referenceTaxon.pending;
+        }
     }
     const err = validate(form);
     if (err) return refreshForm(err);
-    // discovery fails minutes in without NCBI (datasets retries 11 times
-    // first); say so now instead
-    if (mode() === 'auto' && !(await window.qs.checkNetwork()).ncbi) {
-        return refreshForm('Can\'t reach NCBI: finding a relative needs an internet connection. Connect, or compare with your own files.');
+    // anything from NCBI fails minutes in without it (datasets retries 11
+    // times first); say so now instead
+    if (needsOrganism() && !(await window.qs.checkNetwork()).ncbi) {
+        return refreshForm('Can\'t reach NCBI, which this run needs: connect, or compare with your own files.');
     }
     $('#btn-run').disabled = true;
     try {
-        const id = await window.qs.startRun(form, { targetSpecies: mode() === 'auto' && taxon.status === 'found' ? taxon.name : '' });
+        const targetSpecies = needsOrganism() && organism.state.status === 'found' ? organism.state.name : '';
+        const id = await window.qs.startRun(form, { targetSpecies });
         // the next run gets a folder of its own
         outdirChosen = false;
         suggestOutdir(true);
@@ -414,7 +528,10 @@ $('#form').addEventListener('submit', async (e) => {
 // "Run again": the form as that run had it, in a new folder
 async function prefillForm(r) {
     const f = r.form;
-    document.querySelector(`input[name=mode][value=${f.reference && f.proteome ? 'manual' : 'auto'}]`).click();
+    const m = f.reference ? 'manual' : f.reference_taxid || f.reference_accession ? 'chosen' : 'auto';
+    proteomeFromNcbi = m === 'manual' && !f.proteome;
+    document.querySelector(`input[name=mode][value=${m}]`).checked = true;
+    showMode();
     for (const key of ['assembly', 'reference', 'proteome']) {
         if (!f[key]) continue;
         try {
@@ -423,11 +540,10 @@ async function prefillForm(r) {
             setStatus(`#status-${key}`, 'bad', `${baseName(f[key])} isn't where it was any more: choose it again.`);
         }
     }
-    if (f.taxid) {
-        $('#taxid').value = f.taxid;
-        $('#taxon-search').value = r.targetSpecies || f.taxid;
-        checkTaxid();
-    }
+    if (f.taxid) organism.set(f.taxid, r.targetSpecies);
+    if (f.reference_taxid) referenceTaxon.set(f.reference_taxid, r.found?.reference?.species);
+    $('#ref-accession').value = f.reference_accession || '';
+    checkAccession();
     if (f.max_rank) document.querySelector('[name=max_rank]').value = f.max_rank;
     document.querySelector('[name=exclude_target]').checked = !!f.exclude_target;
     for (const k of ADVANCED) document.querySelector(`[name=${k}]`).value = f[k] || '';

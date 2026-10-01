@@ -119,6 +119,12 @@ def main():
                               "genome's species, so the proteome comes from the reference species "
                               "whenever it has an annotated assembly -- the ranking below knows "
                               "assembly quality, not relatedness.")
+    parser.add_argument('--chosen', action='store_true',
+                         help="the lineage is --reference_taxid's, cut to that taxon's own row "
+                              "(find_reference_assembly.nf): its best assembly is the pick. The "
+                              "lineage's species is then the chosen one, not the target's, so "
+                              "nothing is reported as the target's own species, and finding no "
+                              "assembly is the chosen taxon's problem, not the ladder's.")
     parser.add_argument('--prefer_rank_taxid', default='',
                          help="the lineage taxon --prefer_taxid's species joins the target's "
                               "lineage at (the reference selection's own taxid), reported as the "
@@ -190,8 +196,13 @@ def main():
                  if keep(r) and str(r.get('organism', {}).get('tax_id', '')) == str(args.prefer_taxid)]
         if match:
             match = sorted(match, key=sort_key, reverse=True)
+            # where the preferred species joins the target's lineage; a
+            # chosen reference (--reference_taxid/--reference_accession) can
+            # come from outside it, and is then reported as itself: the
+            # proteome is that species' own
             chosen_rank, chosen_taxid, chosen_name = next(
-                (row for row in lineage if row[1] == str(args.prefer_rank_taxid)), ('', '', ''))
+                (row for row in lineage if row[1] == str(args.prefer_rank_taxid)),
+                ('species', str(args.prefer_taxid), match[0].get('organism', {}).get('organism_name', '')))
             match_ids = {r['accession'] for r in match}
             rest = next((records for taxid, records in kept_by_rank if taxid == chosen_taxid), [])
             rest = [r for r in sorted(rest, key=sort_key, reverse=True) if r['accession'] not in match_ids]
@@ -203,6 +214,12 @@ def main():
         for rank, taxid, name, hits, mode in search_log:
             f.write(f"{rank}\t{taxid}\t{name}\t{hits}\t{mode}\n")
 
+    if not candidates and args.chosen:
+        rank, taxid, name, *_ = search_log[0] if search_log else ('', '', '', 0, '')
+        sys.exit(
+            f"ERROR: --reference_taxid {taxid}: NCBI has no chromosome-level genome assembly of {name or 'that taxon'}. "
+            f"Choose another taxon, or an exact assembly with --reference_accession."
+        )
     if not candidates:
         sys.exit(
             f"ERROR: no genome assembly found for {args.outprefix} up to "
@@ -225,7 +242,7 @@ def main():
                 f"{is_same_species(c)}\n"
             )
 
-    same_species = is_same_species(best)
+    same_species = is_same_species(best) and not args.chosen
     selection = {
         'accession': best['accession'],
         'rank': chosen_rank,
@@ -245,6 +262,9 @@ def main():
         # a meaningfully different kind of comparison worth surfacing
         # rather than leaving indistinguishable from a cross-species pick
         'same_species_as_target': same_species,
+        # how the reference was decided: 'taxid' for --reference_taxid,
+        # absent for discovery (and 'accession' from describe_assembly.py)
+        **({'chosen': 'taxid'} if args.chosen else {}),
     }
     with open(f"{args.outprefix}_selection.json", 'w') as f:
         json.dump(selection, f, indent=2)

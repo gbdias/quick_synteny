@@ -26,7 +26,7 @@
                     "minimum": 1,
                     "errorMessage": "must be an NCBI taxid, a positive whole number",
                     "description": "NCBI taxid of the target organism; drives reference genome and proteome discovery.",
-                    "help_text": "Not needed when both --reference and --proteome are given. Find a taxid by name at https://www.ncbi.nlm.nih.gov/taxonomy.",
+                    "help_text": "Not needed when --proteome is given along with a reference genome (--reference, --reference_accession or --reference_taxid). Find a taxid by name at https://www.ncbi.nlm.nih.gov/taxonomy.",
                     "fa_icon": "fas fa-sitemap"
                 },
                 "reference": {
@@ -57,8 +57,24 @@
         "discovery": {
             "title": "Reference discovery",
             "type": "object",
-            "description": "How a reference genome and proteome are found on NCBI.",
+            "description": "How the reference genome and proteome are found on NCBI: discovered outward from --taxid, or a reference you choose.",
             "properties": {
+                "reference_taxid": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "errorMessage": "must be an NCBI taxid, a positive whole number",
+                    "description": "Use the best chromosome-level assembly of this taxon as the reference, instead of the closest relative.",
+                    "help_text": "A species, or a wider taxon (a genus, say) to pick from. Its assemblies are ranked by quality, as discovery ranks them, and the proteome is then preferably that species' own. Give at most one of --reference, --reference_accession and --reference_taxid.",
+                    "fa_icon": "fas fa-crosshairs"
+                },
+                "reference_accession": {
+                    "type": "string",
+                    "pattern": "^GC[AF]_[0-9]{9}\\.[0-9]+$",
+                    "errorMessage": "must be an NCBI assembly accession, like GCF_000001215.4",
+                    "description": "Use exactly this NCBI assembly as the reference (GCA_ or GCF_ accession).",
+                    "help_text": "Any assembly level: it's your pick. The proteome is then preferably that assembly's species' own. Give at most one of --reference, --reference_accession and --reference_taxid.",
+                    "fa_icon": "fas fa-fingerprint"
+                },
                 "max_rank": {
                     "type": "string",
                     "enum": [

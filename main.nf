@@ -3,7 +3,8 @@ nextflow.enable.dsl = 2
 include { validateParameters } from 'plugin/nf-schema'
 
 include { RESOLVE_TAXONOMY }        from './modules/local/resolve_taxonomy.nf'
-include { FIND_REFERENCE_ASSEMBLY } from './modules/local/find_reference_assembly.nf'
+include { RESOLVE_TAXONOMY as RESOLVE_REFERENCE_TAXONOMY } from './modules/local/resolve_taxonomy.nf'
+include { FIND_REFERENCE_ASSEMBLY; FETCH_ACCESSION_SUMMARY; DESCRIBE_REFERENCE_ACCESSION } from './modules/local/find_reference_assembly.nf'
 include { FIND_PROTEOME_ASSEMBLY }  from './modules/local/find_proteome_assembly.nf'
 include { DOWNLOAD_GENOME }         from './modules/local/download_assembly.nf'
 include { DOWNLOAD_PROTEIN }        from './modules/local/download_assembly.nf'
@@ -26,15 +27,32 @@ def chunkGb() {
     return v as double
 }
 
-// What nextflow_schema.json can't say: --taxid is needed unless both
-// overrides are given. Everything else about each parameter -- types,
-// ranges, allowed values, files that must exist, unknown parameters -- is
-// checked by validateParameters() against the schema, which is also where
-// --help comes from.
+// The reference genome comes from one of four places: --reference (a
+// file), --reference_accession (one exact NCBI assembly), --reference_taxid
+// (the best assembly of a taxon you choose), or else discovery outward
+// from --taxid. The proteome is --proteome, or else discovered from
+// --taxid's relatives. So --taxid -- the target's organism -- is needed
+// whenever something is discovered from it.
+def referenceGiven() {
+    return params.reference || params.reference_accession || params.reference_taxid
+}
+
+def needsTargetTaxid() {
+    return !referenceGiven() || !params.proteome
+}
+
+// What nextflow_schema.json can't say: which parameters go together.
+// Everything else about each parameter -- types, ranges, allowed values,
+// files that must exist, unknown parameters -- is checked by
+// validateParameters() against the schema, which is also where --help
+// comes from.
 def validateParams() {
-    def skipDiscovery = params.reference && params.proteome
-    if (params.taxid == null && !skipDiscovery) {
-        exit 1, "ERROR: --taxid is required unless both --reference and --proteome are given. Run with --help for usage."
+    def references = ['reference', 'reference_accession', 'reference_taxid'].findAll { params[it] }
+    if (references.size() > 1) {
+        exit 1, "ERROR: give only one of --reference, --reference_accession and --reference_taxid, got ${references.collect { '--' + it }.join(' and ')}."
+    }
+    if (params.taxid == null && needsTargetTaxid()) {
+        exit 1, "ERROR: --taxid is required unless --proteome is given along with a reference genome (--reference, --reference_accession or --reference_taxid). Run with --help for usage."
     }
 }
 
@@ -55,7 +73,6 @@ workflow {
 
     log.info "quick_synteny: assembly=${params.assembly} taxid=${params.taxid ?: '(skipped, using overrides)'} outdir=${params.outdir}"
 
-    def skipDiscovery = params.reference && params.proteome
 
     // target is always user-supplied (no auto-discovery for it), so its
     // display name -- shown as a plot subtitle so a viewer can tell which
@@ -97,41 +114,55 @@ workflow {
         proteome_display_name = Channel.value(file(params.proteome).name)
     }
 
-    if (!skipDiscovery) {
-        lineage_ch = RESOLVE_TAXONOMY(Channel.value(params.taxid))
+    lineage_ch = null
+    if (needsTargetTaxid()) {
+        lineage_ch = RESOLVE_TAXONOMY(Channel.value(params.taxid), '')
         target_species = lineage_ch.map { f ->
             def row = f.readLines().collect { it.split('\t') }.find { it[0] == 'species' }
             row && row.size() > 2 ? row[2] : ''
         }
+    }
 
-        if (!params.reference) {
-            reference_selection = FIND_REFERENCE_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target).selection
-            reference_selection.map { f ->
-                def sel = readSelection(f)
-                def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
-                log.info "quick_synteny: reference accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name})${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
-                sel
-            }.view()
-            reference_fasta = DOWNLOAD_GENOME(reference_selection.map { readSelection(it).accession })
-            reference_display_name = reference_selection.map { readSelection(it).accession }
-            reference_species = reference_selection.map { readSelection(it).organism_name ?: '' }
-            proteome_prefer_taxid = reference_selection.map { readSelection(it).organism_taxid ?: '' }
-            proteome_prefer_rank_taxid = reference_selection.map { readSelection(it).taxid ?: '' }
-        }
+    // ---- the reference: an exact assembly, the best of a chosen taxon, or
+    // discovered outward from the target (--reference, a file, is above) ----
+    reference_selection = null
+    if (params.reference_accession) {
+        summary = FETCH_ACCESSION_SUMMARY(Channel.value(params.reference_accession))
+        reference_selection = DESCRIBE_REFERENCE_ACCESSION(Channel.value(params.reference_accession), summary).selection
+    } else if (params.reference_taxid) {
+        reference_lineage = RESOLVE_REFERENCE_TAXONOMY(Channel.value(params.reference_taxid), 'reference_')
+        reference_selection = FIND_REFERENCE_ASSEMBLY(reference_lineage, params.max_rank, false, true).selection
+    } else if (!params.reference) {
+        reference_selection = FIND_REFERENCE_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target, false).selection
+    }
+    if (reference_selection) {
+        reference_selection.map { f ->
+            def sel = readSelection(f)
+            def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
+            log.info "quick_synteny: reference accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name})${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
+            sel
+        }.view()
+        reference_fasta = DOWNLOAD_GENOME(reference_selection.map { readSelection(it).accession })
+        reference_display_name = reference_selection.map { readSelection(it).accession }
+        reference_species = reference_selection.map { readSelection(it).organism_name ?: '' }
+        proteome_prefer_taxid = reference_selection.map { readSelection(it).organism_taxid ?: '' }
+        proteome_prefer_rank_taxid = reference_selection.map { readSelection(it).taxid ?: '' }
+    }
 
-        if (!params.proteome) {
-            prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target,
-                                                    proteome_prefer_taxid, proteome_prefer_rank_taxid).selection
-            prot_selection.map { f ->
-                def sel = readSelection(f)
-                def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
-                log.info "quick_synteny: proteome accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name}) annotated=${sel.annotated}${sel.preferred_species ? ' [REFERENCE SPECIES]' : ''}${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
-                sel
-            }.view()
-            proteome_fasta = DOWNLOAD_PROTEIN(prot_selection.map { readSelection(it).accession })
-            proteome_display_name = prot_selection.map { readSelection(it).accession }
-            proteome_species = prot_selection.map { readSelection(it).organism_name ?: '' }
-        }
+    // ---- the proteome: discovered from the target's relatives, preferring
+    // the reference species' own proteins when NCBI has them annotated ----
+    if (!params.proteome) {
+        prot_selection = FIND_PROTEOME_ASSEMBLY(lineage_ch, params.max_rank, params.exclude_target,
+                                                proteome_prefer_taxid, proteome_prefer_rank_taxid).selection
+        prot_selection.map { f ->
+            def sel = readSelection(f)
+            def sameSpeciesNote = sel.same_species_as_target ? ' [SAME SPECIES AS TARGET]' : ''
+            log.info "quick_synteny: proteome accession=${sel.accession} (${sel.organism_name}) rank=${sel.rank} (${sel.name}) annotated=${sel.annotated}${sel.preferred_species ? ' [REFERENCE SPECIES]' : ''}${sameSpeciesNote} from ${sel.candidate_count} candidate(s)"
+            sel
+        }.view()
+        proteome_fasta = DOWNLOAD_PROTEIN(prot_selection.map { readSelection(it).accession })
+        proteome_display_name = prot_selection.map { readSelection(it).accession }
+        proteome_species = prot_selection.map { readSelection(it).organism_name ?: '' }
     }
 
     // Each per-genome step below (rename+sizes+gaps, align, rename the

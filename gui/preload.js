@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('qs', {
     defaultOutdir: (opts) => ipcRenderer.invoke('outdir:default', opts),
     suggestTaxon: (q) => ipcRenderer.invoke('taxon:suggest', q),
     lookupTaxon: (taxid) => ipcRenderer.invoke('taxon:lookup', taxid),
+    lookupAssembly: (accession) => ipcRenderer.invoke('assembly:lookup', accession),
     suggestRunName: (opts) => ipcRenderer.invoke('outdir:suggest', opts),
     startRun: (form, meta) => ipcRenderer.invoke('run:start', form, meta),
     cancelRun: () => ipcRenderer.invoke('run:cancel'),
