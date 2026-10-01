@@ -70,7 +70,8 @@
         <h2>Compare it with</h2>
         <div class="segmented" role="radiogroup" aria-label="Compare it with">
           <label><input type="radio" name="mode" value="manual" checked><span>My own files</span></label>
-          <label><input type="radio" name="mode" value="auto"><span>A relative on NCBI</span></label>
+          <label><input type="radio" name="mode" value="chosen"><span>A species I choose</span></label>
+          <label><input type="radio" name="mode" value="auto"><span>Its closest relative</span></label>
         </div>
 
         <div id="mode-manual" class="mode-body">
@@ -85,11 +86,41 @@
             <div class="file-text"><div class="slot-label">Proteome</div><div class="file-name">Drop or choose a protein FASTA</div><div class="file-meta"></div></div>
             <button type="button" class="btn" data-pick="proteome" data-title="Proteome (protein FASTA)">Choose…</button>
           </div>
+          <div class="slot filled" id="slot-proteome-ncbi" hidden>
+            <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"></path></svg></div>
+            <div class="file-text"><div class="slot-label">Proteome</div><div class="file-name">From NCBI</div>
+              <div class="file-meta">The annotated proteins of your organism's closest relative</div></div>
+            <button type="button" class="btn" id="btn-proteome-own">Use my own file</button>
+          </div>
           <p class="field-status" id="status-proteome" hidden></p>
-          <p class="hint">The proteins are aligned to both genomes, and their matches are what the synteny is built from. Works offline.</p>
+          <p class="hint" id="proteome-hint">The proteins are aligned to both genomes, and their matches are what the synteny is built from.
+            <button type="button" class="link" id="btn-proteome-ncbi">No proteome? Find one on NCBI</button></p>
+        </div>
+
+        <div id="mode-chosen" class="mode-body" hidden>
+          <label for="ref-search" class="field-label">Which species should it be compared with?</label>
+          <div class="search">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+            <input id="ref-search" placeholder="Species name, or an NCBI taxid" autocomplete="off">
+          </div>
+          <ul id="ref-results" class="suggest" hidden></ul>
+          <p class="field-status" id="ref-search-status" hidden></p>
+          <div class="grid">
+            <label>Reference taxid <button type="button" class="help" data-param="reference_taxid">?</button>
+              <input id="ref-taxid" name="reference_taxid" inputmode="numeric" autocomplete="off"></label>
+            <label>Or an exact assembly <button type="button" class="help" data-param="reference_accession">?</button>
+              <input id="ref-accession" name="reference_accession" placeholder="GCA_… or GCF_…" autocomplete="off"></label>
+          </div>
+          <p class="field-status" id="ref-taxid-status" hidden></p>
+          <p class="field-status" id="ref-accession-status" hidden></p>
+          <p class="hint">Its best chromosome-level assembly is used, unless you give an exact one. The proteome comes from that species too, when NCBI has its proteins.</p>
         </div>
 
         <div id="mode-auto" class="mode-body" hidden>
+          <p class="hint">quick_synteny looks for the closest well-assembled genome and an annotated proteome on NCBI, starting from your genome's species and moving outwards.</p>
+        </div>
+
+        <div id="organism" class="organism" hidden>
           <label for="taxon-search" class="field-label">Which organism is your genome from?</label>
           <div class="search">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
@@ -104,8 +135,9 @@
             </label>
           </div>
           <p class="field-status" id="taxid-status" hidden></p>
-          <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference
+          <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference or proteome
             <button type="button" class="help" data-param="exclude_target">?</button></label>
+          <p class="hint" id="organism-hint" hidden>Used to find a proteome close to your genome.</p>
         </div>
       </section>
 

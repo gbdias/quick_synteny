@@ -178,6 +178,16 @@ ipcMain.handle('thumb:get', (_e, id) => {
     }
 });
 
+// an NCBI assembly accession -> its organism and level, or { found: false }
+ipcMain.handle('assembly:lookup', async (_e, accession) => {
+    const url = `https://api.ncbi.nlm.nih.gov/datasets/v2/genome/accession/${encodeURIComponent(accession)}/dataset_report`;
+    const r = await fetch(url, { signal: AbortSignal.timeout(10000) });
+    if (!r.ok) throw new Error(`NCBI returned ${r.status}`);
+    const rep = (await r.json()).reports?.[0];
+    if (!rep) return { found: false };
+    return { found: true, accession: rep.accession, organism: rep.organism?.organism_name, level: rep.assembly_info?.assembly_level };
+});
+
 ipcMain.handle('run:start', async (_e, form, meta = {}) => {
     if (currentRun && !currentRun.done) throw new Error('a run is already in progress');
     if (!lastEnv?.nextflow?.ok) throw new Error('Nextflow is not available');

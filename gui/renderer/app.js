@@ -84,8 +84,26 @@ const STEP_TEXT = {
     plot: ['Draw the interactive plot', 'Drawing the interactive plot', 'Drew the interactive plot'],
 };
 
+// the reference step, when it isn't a search from your species outwards
+const REFERENCE_TEXT = {
+    accession: ['Get the assembly you chose', 'Getting the assembly you chose', 'Got the assembly you chose'],
+    taxid: ['Find the best genome of your choice', 'Finding the best genome of your choice', 'Found the best genome of your choice'],
+};
+
+// where the reference and proteome come from: a file, an exact assembly, a
+// taxid, or discovery (as lib/record.js; runs from before it say less)
+function sourcesOf(r) {
+    if (r.sources) return r.sources;
+    return r.discovery === false ? { reference: 'file', proteome: 'file' } : { reference: 'discovered', proteome: 'discovered' };
+}
+
 // "virilis group (species group)", "Saccharomyces (genus)"
 const foundAt = (f) => (f.rankName ? `${f.rankName} (${f.rank})` : f.rank);
+// ", chromosome level" or ", complete genome", when the selection says
+const levelOf = (f) => {
+    const level = (f?.level || '').toLowerCase();
+    return !level ? '' : level === 'complete genome' ? ', complete genome' : `, ${level} level`;
+};
 
 function stepDetail(r, step, showNote) {
     if (showNote && r.note) return r.note;
@@ -93,12 +111,19 @@ function stepDetail(r, step, showNote) {
     const s = r.summary || {};
     const ref = r.found.reference;
     const prot = r.found.proteome;
+    const sources = sourcesOf(r);
     switch (step.id) {
     case 'lookup': return r.targetSpecies || `NCBI taxid ${r.form.taxid}`;
-    case 'reference': return ref ? `${ref.species} (${ref.accession}), found at ${foundAt(ref)}: the best of ${ref.candidates}`
-        + `${ref.sameSpecies ? ', of your own species' : ''}` : 'Searching NCBI, from your species outwards';
+    case 'reference':
+        if (sources.reference === 'accession') return ref ? `${ref.species} (${ref.accession})${levelOf(ref)}` : `${r.form.reference_accession}, from NCBI`;
+        if (sources.reference === 'taxid') {
+            return ref ? `${ref.species} (${ref.accession}): the best of ${ref.candidates}${levelOf(ref)}`
+                : `The best chromosome-level assembly of NCBI taxid ${r.form.reference_taxid}`;
+        }
+        return ref ? `${ref.species} (${ref.accession}), found at ${foundAt(ref)}: the best of ${ref.candidates}`
+            + `${ref.sameSpecies ? ', of your own species' : ''}` : 'Searching NCBI, from your species outwards';
     case 'proteome': return prot ? `${prot.species} (${prot.accession})${s.proteome_total ? `, ${num(s.proteome_total)} proteins` : ''}`
-        : 'An annotated assembly, preferably of the reference species';
+        : sources.reference === 'file' ? 'An annotated assembly, from your species outwards' : 'An annotated assembly, preferably of the reference species';
     case 'prepare': return 'Naming the sequences and indexing both genomes';
     case 'align': return 'Where each protein sits in both genomes: these matches are the synteny anchors';
     case 'synteny': return s.blocks !== undefined ? `${num(s.blocks)} blocks` : 'Runs of anchors in the same order on both genomes';
@@ -110,7 +135,7 @@ function stepDetail(r, step, showNote) {
 function renderSteps(r) {
     const firstRunning = r.steps.findIndex((s) => s.state === 'running');
     $('#run-steps').replaceChildren(...r.steps.map((step, i) => {
-        const [todo, doing, done] = STEP_TEXT[step.id];
+        const [todo, doing, done] = (step.id === 'reference' && REFERENCE_TEXT[sourcesOf(r).reference]) || STEP_TEXT[step.id];
         const title = step.state === 'running' ? doing : step.state === 'done' ? done : todo;
         const ic = { done: icon('check'), running: icon('spinner', 'spin'), failed: icon('bang') }[step.state] || null;
         return h('li', { class: `step ${step.state}` },
@@ -139,18 +164,22 @@ function renderFound(r) {
         if (r.status === 'running') return [st === 'running' ? 'Searching…' : 'Not yet', null];
         return ['—', 'The run stopped before this'];
     };
-    const [refMain, refSub] = ref ? [ref.species, `${ref.accession} · found at ${foundAt(ref)}, the best of ${ref.candidates}`] : pending('reference');
-    const [protMain, protSub] = prot || proteins ? [proteins || prot.species, prot ? `${prot.accession}${proteins ? ` · ${prot.species}` : ''}` : null]
-        : pending('proteome');
-    const items = r.discovery ? [
-        foundItem('Reference genome', refMain, refSub, !!ref),
-        foundItem('Proteome', protMain, protSub, !proteins && !!prot),
-        foundItem('Your genome', r.targetSpecies || fileStem(r.inputs.assembly), baseName(r.inputs.assembly), !!r.targetSpecies),
-    ] : [
-        foundItem('Your genome', fileStem(r.inputs.assembly), baseName(r.inputs.assembly)),
-        foundItem('Reference genome', fileStem(r.inputs.reference), baseName(r.inputs.reference)),
-        foundItem('Proteome', proteins || fileStem(r.inputs.proteome), baseName(r.inputs.proteome)),
-    ];
+    const sources = sourcesOf(r);
+    const refHow = {
+        discovered: (f) => `found at ${foundAt(f)}, the best of ${f.candidates}`,
+        taxid: (f) => `the best of ${f.candidates} for your choice${levelOf(f)}`,
+        accession: (f) => `your choice${levelOf(f)}`,
+    }[sources.reference];
+    const reference = sources.reference === 'file'
+        ? foundItem('Reference genome', fileStem(r.inputs.reference), baseName(r.inputs.reference))
+        : foundItem('Reference genome', ...(ref ? [ref.species, `${ref.accession} · ${refHow(ref)}`] : pending('reference')), !!ref);
+    const proteome = sources.proteome === 'file'
+        ? foundItem('Proteome', proteins || fileStem(r.inputs.proteome), baseName(r.inputs.proteome))
+        : foundItem('Proteome', ...(prot || proteins ? [proteins || prot.species, prot ? `${prot.accession}${proteins ? ` · ${prot.species}` : ''}` : null]
+            : pending('proteome')), !proteins && !!prot);
+    const genome = foundItem('Your genome', r.targetSpecies || fileStem(r.inputs.assembly), baseName(r.inputs.assembly), !!r.targetSpecies);
+    // what came from NCBI first
+    const items = r.discovery ? [reference, proteome, genome] : [genome, reference, proteome];
     items.push(foundItem('Saved in', baseName(r.outdir), tildify(r.outdir)));
     $('#run-found').replaceChildren(...items);
 }
@@ -163,7 +192,11 @@ function renderHead(r) {
     else if (r.status === 'failed') chips.push(h('span', { class: 'chip bad', text: 'Stopped with an error' }));
     else chips.push(h('span', { class: 'chip', text: r.interrupted ? 'Interrupted: the app was closed' : 'Cancelled' }));
     if (r.finishedAt) chips.push(h('span', { class: 'chip', text: fmtDuration(new Date(r.finishedAt) - new Date(r.startedAt)) }));
-    chips.push(h('span', { class: 'chip', text: r.discovery ? 'Reference from NCBI' : 'Your own reference and proteome' }));
+    const sources = sourcesOf(r);
+    const origin = sources.reference === 'file'
+        ? sources.proteome === 'file' ? 'Your own reference and proteome' : 'Your reference, proteome from NCBI'
+        : sources.reference === 'discovered' ? 'Reference found on NCBI' : 'Reference you chose on NCBI';
+    chips.push(h('span', { class: 'chip', text: origin }));
     $('#run-chips').replaceChildren(...chips);
 
     const btn = (text, ic, onclick, cls = '') => h('button', { type: 'button', class: `btn ${cls}`, onclick }, ic ? icon(ic) : null, text);
@@ -229,14 +262,15 @@ function renderStats(r) {
     box.hidden = !(r.status === 'finished' && s);
     if (box.hidden) return;
     const target = shortSpecies(r.targetSpecies) || fileStem(r.inputs.assembly);
-    const reference = r.discovery ? shortSpecies(r.found.reference?.species) : fileStem(r.inputs.reference);
+    const sources = sourcesOf(r);
+    const reference = sources.reference === 'file' ? fileStem(r.inputs.reference) : shortSpecies(r.found.reference?.species);
     const pct = (n) => (s.proteome_total ? `${((100 * n) / s.proteome_total).toFixed(1)}%` : '–');
     const stat = (value, label) => h('div', { class: 'stat' }, h('div', { class: 'stat-value', text: value }), h('div', { class: 'stat-label', text: label }));
     box.replaceChildren(
         stat(s.blocks !== undefined ? num(s.blocks) : '–', 'synteny blocks'),
         stat(pct(s.query_aligned), `of the proteins aligned to ${target}`),
         stat(pct(s.subject_aligned), `aligned to ${reference}`),
-        r.discovery && r.found.reference
+        sources.reference === 'discovered' && r.found.reference
             ? stat(r.found.reference.rank.replace(/^./, (c) => c.toUpperCase()), 'rank where the reference was found')
             : stat(s.proteome_total ? num(s.proteome_total) : '–', 'proteins in the proteome'));
 }

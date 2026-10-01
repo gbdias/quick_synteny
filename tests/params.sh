@@ -63,8 +63,12 @@ fails "--assembly that doesn't exist"    "--assembly \(nope.fa\): the file or di
 fails "--taxid 000000 (arrives as 0)"    '--taxid .*must be an NCBI taxid' --assembly genome.fa --taxid 000000
 fails "--taxid abc"                      '--taxid \(abc\).*must be an NCBI taxid' --assembly genome.fa --taxid abc
 fails "bare --taxid"                     '--taxid \(true\).*must be an NCBI taxid' --assembly genome.fa --taxid
-fails "no --taxid and no overrides"      '--taxid is required unless both --reference and --proteome' --assembly genome.fa
-fails "--reference without --proteome"   '--taxid is required unless both --reference and --proteome' --assembly genome.fa --reference genome.fa
+fails "no --taxid and no overrides"      '--taxid is required unless --proteome is given along with a reference genome' --assembly genome.fa
+fails "--reference without --proteome"   '--taxid is required unless --proteome is given along with a reference genome' --assembly genome.fa --reference genome.fa
+fails "--reference_taxid, no --proteome"  '--taxid is required unless --proteome is given' --assembly genome.fa --reference_taxid 4932
+fails "--reference_taxid abc"            '--reference_taxid \(abc\).*must be an NCBI taxid' --assembly genome.fa --taxid 4932 --reference_taxid abc
+fails "--reference_accession not one"    '--reference_accession \(GCA_1\).*must be an NCBI assembly accession' --assembly genome.fa --taxid 4932 --reference_accession GCA_1
+fails "two references at once"           'give only one of --reference, --reference_accession and --reference_taxid, got --reference and --reference_taxid' --assembly genome.fa --taxid 4932 --reference genome.fa --reference_taxid 4932
 fails "--max_rank kingdom"               '--max_rank \(kingdom\): Expected any of \[species, genus, family, order, class, phylum\]' --assembly genome.fa --taxid 4932 --max_rank kingdom
 fails "--min_identity 1.5"               '--min_identity \(1.5\): 1.5 is greater than 1' --assembly genome.fa --taxid 4932 --min_identity 1.5
 fails "--min_block 1"                    '--min_block \(1\): 1 is less than 2' --assembly genome.fa --taxid 4932 --min_block 1
@@ -76,6 +80,10 @@ fails "unknown --colour"                 '--colour: red' --assembly genome.fa --
 echo "== valid parameters"
 passes "--taxid"                                --assembly genome.fa --taxid 4932
 passes "--reference and --proteome, no taxid"   --assembly genome.fa --reference genome.fa --proteome proteome.faa
+passes "--reference, proteome from NCBI"        --assembly genome.fa --reference genome.fa --taxid 4932
+passes "--reference_taxid"                      --assembly genome.fa --taxid 4932 --reference_taxid 27291
+passes "--reference_accession"                  --assembly genome.fa --taxid 4932 --reference_accession GCA_056824455.1
+passes "a chosen reference and --proteome, no taxid" --assembly genome.fa --reference_accession GCF_000146045.2 --proteome proteome.faa
 passes "every discovery and chaining option"    --assembly genome.fa --taxid 4932 --max_rank genus --exclude_target \
     --min_seq_size 0 --min_asm_gap 10 --min_identity 0.5 --max_gap 10 --min_block 3
 passes "bare --miniprot_chunk_gb"               --assembly genome.fa --taxid 4932 --miniprot_chunk_gb

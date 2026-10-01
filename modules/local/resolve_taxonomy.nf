@@ -31,23 +31,27 @@ process PARSE_LINEAGE {
 
     input:
     path taxonomy_json
+    val prefix      // '' for the target's lineage, 'reference_' for --reference_taxid's
 
     output:
-    path 'lineage.tsv'
+    path "${prefix}lineage.tsv"
 
     script:
     """
-    parse_lineage.py ${taxonomy_json} > lineage.tsv
+    parse_lineage.py ${taxonomy_json} > ${prefix}lineage.tsv
     """
 }
 
+// called twice with --reference_taxid (main.nf includes it a second time as
+// RESOLVE_REFERENCE_TAXONOMY): `prefix` keeps the two published lineages apart
 workflow RESOLVE_TAXONOMY {
     take:
     taxid
+    prefix
 
     main:
     taxonomy_json = FETCH_TAXONOMY_JSON(taxid)
-    lineage       = PARSE_LINEAGE(taxonomy_json)
+    lineage       = PARSE_LINEAGE(taxonomy_json, prefix)
 
     emit:
     lineage

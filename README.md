@@ -25,6 +25,15 @@ nextflow run main.nf -profile standard \
   --reference reference_genome.fa --proteome proteome.faa \
   --outdir results
 
+# with a reference you choose on NCBI: a taxon (its best chromosome-level
+# assembly) or an exact assembly; the proteome is still discovered
+nextflow run main.nf -profile standard \
+  --taxid 4932 --assembly target_genome.fa \
+  --reference_taxid 27291 --outdir results
+nextflow run main.nf -profile standard \
+  --taxid 4932 --assembly target_genome.fa \
+  --reference_accession GCA_056824455.1 --outdir results
+
 # on a SLURM cluster (Apptainer/Singularity)
 nextflow run main.nf -profile slurm \
   --taxid 562 --assembly target_genome.fa --outdir results
@@ -43,8 +52,10 @@ allowed values, default, and help. Three things read it:
   before anything starts. That covers types and ranges, allowed values,
   input files that must exist, and unknown parameters: a misspelled
   `--max-rank` is an error, not silently ignored. `validateParams()` in
-  `main.nf` adds the one rule the schema can't express: `--taxid` is
-  needed unless both `--reference` and `--proteome` are given.
+  `main.nf` adds the rules the schema can't express: give at most one of
+  `--reference`, `--reference_taxid` and `--reference_accession`, and
+  `--taxid` is needed unless `--proteome` is given along with one of
+  them.
 - **The desktop app** takes its tips, defaults and limits from the schema.
 
 Validation and help come from the

@@ -159,7 +159,8 @@ The app needs a connection for three things:
 - **First launch:** setup downloads Nextflow, Java and the plugins
   (`nf-weblog`, `nf-schema`).
 - **The first run of each step:** it builds that step's tool environment.
-- **Finding a reference on NCBI:** needed on every run that uses it.
+- **Anything from NCBI:** a discovered or chosen reference, or a proteome
+  found there, needs it on every run.
 
 Everything else works offline. With your own reference genome and
 proteome, and the tools already downloaded, a whole run needs no
@@ -171,7 +172,7 @@ What happens without one:
 |---|---|
 | first launch | setup fails with "Setup needs an internet connection" and a **Retry setup** button, instead of micromamba's own message, which blames a corrupted package cache |
 | name search, taxid check | "Can't reach NCBI to search by name" under the search box; the taxid check says it couldn't check, without blocking |
-| **Run** with NCBI discovery | refused before starting: "Can't reach NCBI…", with the own-files alternative. Without that check, the run would fail only after about 3 minutes of `datasets` retrying |
+| **Run** with anything from NCBI | refused before starting: "Can't reach NCBI…", with the own-files alternative. Without that check, the run would fail only after about 3 minutes of `datasets` retrying |
 | a step whose tools aren't downloaded yet | the error box says "Couldn't set up the tools for <step>", and that the download failed because the computer seems to be offline |
 | any other failure while offline | the error box adds a hint that it looks like a network problem |
 | update check | silent |
@@ -240,10 +241,20 @@ progress screen.
 - **New run** (`renderer/form.js`):
   - **Your genome:** a drop zone, or **Choose a file…**. Once it's added,
     a card shows its name, size and format.
-  - **Compare it with:** **My own files** is the default, with drop slots
-    for the reference genome and the proteome. **A relative on NCBI** has
-    a species search, plus how far to look and the same-species switch.
-    The search (`lib/taxa.js`) asks NCBI Datasets three ways at once:
+  - **Compare it with,** three ways:
+    - **My own files,** the default: drop slots for the reference genome
+      and the proteome. **No proteome? Find one on NCBI** swaps the
+      proteome slot for one found on NCBI (`--reference` without
+      `--proteome`), from the organism your genome is from.
+    - **A species I choose:** a species search for the reference
+      (`--reference_taxid`: its best chromosome-level assembly), or **an
+      exact assembly** (`--reference_accession`), which wins when both are
+      given. The proteome comes from NCBI, preferably of that species.
+    - **Its closest relative:** discovery, climbing from your species.
+
+    Whenever anything comes from NCBI, the form also asks which organism
+    your genome is from (`--taxid`), how far to look and the same-species
+    switch. The species searches (`lib/taxa.js`) asks NCBI Datasets three ways at once:
     `taxon_suggest`; `taxon_suggest` limited to taxa with genomes; and an
     exact-name lookup. `taxon_suggest` alone misses some species even by
     their exact name (*Babesia ovis* got only other *Babesia*). The
@@ -266,10 +277,15 @@ progress screen.
 - **Input checks.** These run before a run starts (`lib/inputs.js`, and
   the `taxon:lookup` handler in `main.js`), so a bad input fails here and
   not minutes into a run:
-  - The taxid is looked up at NCBI as it's typed. The field then shows the
-    taxon's name and rank, "not a taxid" (e.g. `000000`), or "NCBI has no
-    taxon"; the last two block the run. If NCBI can't be reached, the run
-    isn't blocked, since the pipeline checks the taxid again.
+  - Both taxids (your organism's, the chosen reference's) are looked up at
+    NCBI as they're typed. The field then shows the taxon's name and rank,
+    "not a taxid" (e.g. `000000`), or "NCBI has no taxon"; the last two
+    block the run. If NCBI can't be reached, the run isn't blocked, since
+    the pipeline checks the taxid again.
+  - An exact assembly is checked against the schema's accession pattern,
+    then looked up (`assembly:lookup` in `main.js`, NCBI Datasets'
+    `dataset_report`): the field shows its organism and level, or "NCBI
+    has no assembly", which blocks the run.
   - Each file has to start with a `>` line, possibly gzipped.
   - Typed numbers are checked against the schema's types and limits, e.g.
     "Min block (anchors) must be at least 2". These are the rules the
@@ -291,22 +307,28 @@ progress screen.
   - **Steps:** a checklist in plain language ("Found a reference genome",
     "Aligning the proteins to both genomes"…). `lib/stages.js` maps
     Nextflow's processes onto the steps and works out each one's state.
-    Discovery runs start with three NCBI steps of their own. Steps can
+    Up to three NCBI steps come first, each only when the run needs it:
+    looking up your organism, getting the reference ("Get the assembly you
+    chose", "Find the best genome of your choice", or "Find a reference
+    genome"), and finding the proteome. Steps can
     overlap: the target genome is prepared while NCBI is being searched.
   - **Where progress comes from:** Nextflow's weblog POSTs one JSON event
     per task state change to a localhost port. Tasks that `-resume` skips
     come from the log's `Cached process` lines, and conda environment
     builds from its `Creating env using micromamba` lines; those show
     under the running step.
-  - **What we found:** what discovery picked (species, accession, the rank
-    it was found at, out of how many candidates), parsed from `main.nf`'s
-    `quick_synteny: reference accession=…` lines. With your own files, it's
-    the files. Also where the run is saved.
+  - **What we found:** what came from NCBI (species, accession, the rank
+    it was found at, out of how many candidates; for a chosen reference,
+    "your choice" and its level), parsed from `main.nf`'s
+    `quick_synteny: reference accession=…` lines, and the selections in
+    `pipeline_info/` for what the log didn't say. Your own files are listed
+    as files. Also where the run is saved. A chip says where the reference
+    and proteome came from.
   - **When it finishes:** the result page opens by itself. The run screen
     gains a thumbnail of it, captured from a hidden window, plus four
     numbers from `stats.json` and `links.tsv`: blocks, the share of
     proteins aligned to each genome, and the rank where the reference was
-    found (or the proteome's size). Its buttons are **Open plot**, **Show
+    found (when discovered; otherwise the proteome's size). Its buttons are **Open plot**, **Show
     folder**, **Run again…** (the same form, in a new folder) and
     **Remove**.
   - **Errors:** when a run fails, a box says why. Its text comes from
@@ -338,7 +360,15 @@ The workspace interface, from source on macOS (Apple Silicon):
 - The history survived a restart.
 - A run forced to fail (taxid 999999999) showed "Couldn't look up your
   organism" and its reason, in the run screen and the sidebar.
-- **Run again…** refilled the form, NCBI check included. **Remove** took a
+- Choosing the reference, three runs of *S. cerevisiae* R64 from the
+  form: *S. paradoxus* by name (GCA_030035175.1, the best of 17, with the
+  *S. paradoxus* proteome), the exact assembly GCA_056824455.1 (*S.
+  pastorianus*, complete genome, proteome GCA_011022315.1), and an own
+  reference with the proteome from NCBI (GCA_903819175.2). Each showed its
+  own steps, chip and findings. A malformed accession (`GCA_12`) and an
+  unknown one (`GCA_999999999.9`) were flagged before starting.
+- **Run again…** refilled the form, NCBI check included; for a chosen
+  reference, the mode and both species too. **Remove** took a
   run off the list and left its folder alone.
 - An offline first launch showed **Getting quick_synteny ready** with
   "Setup needs an internet connection".

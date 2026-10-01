@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { stepOf, computeSteps } = require('../lib/stages');
+const { stepOf, computeSteps, planOf } = require('../lib/stages');
 
 const states = (steps) => Object.fromEntries(steps.map((s) => [s.id, s.state]));
 
@@ -13,6 +13,8 @@ test('every process the pipeline runs belongs to a step', () => {
         'FIND_PROTEOME_ASSEMBLY:SELECT_PROTEOME_ASSEMBLY': 'proteome', DOWNLOAD_PROTEIN: 'proteome',
         RENAME_SEQUENCES: 'prepare', MINIPROT_INDEX: 'prepare', SPLIT_GENOME: 'prepare',
         MINIPROT_ALIGN: 'align', MINIPROT_ALIGN_CHUNK: 'align', MERGE_MINIPROT_GFF: 'align', RENAME_GFF: 'align',
+        'RESOLVE_REFERENCE_TAXONOMY:FETCH_TAXONOMY_JSON': 'reference', FETCH_ACCESSION_SUMMARY: 'reference',
+        DESCRIBE_REFERENCE_ACCESSION: 'reference',
         'BUILD_SYNTENY:CHAIN_CROSS': 'synteny', 'PYGENOMEVIZ_PLOT:RENDER_SYNTENY_INTERACTIVE': 'plot',
     };
     for (const [p, step] of Object.entries(processes)) assert.equal(stepOf({ process: p }), step, p);
@@ -23,6 +25,17 @@ test('every process the pipeline runs belongs to a step', () => {
 test('a run with your own files has no discovery steps', () => {
     assert.deepEqual(computeSteps([], { discovery: false }).map((s) => s.id), ['prepare', 'align', 'synteny', 'plot']);
     assert.equal(computeSteps([], { discovery: true }).length, 7);
+});
+
+test('the steps before "prepare" follow what the form leaves to NCBI', () => {
+    const ids = (form) => computeSteps([], { plan: planOf(form) }).map((s) => s.id).slice(0, -4);
+    assert.deepEqual(ids({ taxid: '4932' }), ['lookup', 'reference', 'proteome']);
+    assert.deepEqual(ids({ reference: '/r.fa', proteome: '/p.faa' }), []);
+    // your reference, the proteome found from your organism
+    assert.deepEqual(ids({ reference: '/r.fa', taxid: '4932' }), ['lookup', 'proteome']);
+    // a chosen reference with your proteome: no organism to look up
+    assert.deepEqual(ids({ reference_accession: 'GCA_1.1', proteome: '/p.faa' }), ['reference']);
+    assert.deepEqual(ids({ reference_taxid: '27291', taxid: '4932' }), ['lookup', 'reference', 'proteome']);
 });
 
 test('mid-run: finished steps the run has moved past are done, running ones running, the rest pending', () => {

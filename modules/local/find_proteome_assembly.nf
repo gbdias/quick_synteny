@@ -47,7 +47,9 @@ process SELECT_PROTEOME_ASSEMBLY {
 
     script:
     def excludeFlag = exclude_target ? '--exclude_target' : ''
-    def preferFlag = prefer_taxid ? "--prefer_taxid ${prefer_taxid} --prefer_rank_taxid ${prefer_rank_taxid}" : ''
+    // a chosen reference (--reference_accession) joins no taxon of the
+    // target's lineage: no --prefer_rank_taxid then
+    def preferFlag = prefer_taxid ? "--prefer_taxid ${prefer_taxid}${prefer_rank_taxid ? " --prefer_rank_taxid ${prefer_rank_taxid}" : ''}" : ''
     """
     find_closest_assembly.py --lineage ${lineage} --max_rank ${max_rank} --ladder_dir ${ladder} --outprefix proteome ${excludeFlag} ${preferFlag}
     """
