@@ -133,9 +133,16 @@ def validateParams() {
         exit 1, "ERROR: --assembly file not found: ${params.assembly}"
     }
 
+    // Nextflow turns a numeric value into a number (--taxid 000000 arrives
+    // as 0) and a bare flag into true, so test for presence first and
+    // validity separately -- a falsy 0 isn't a missing taxid
     def skipDiscovery = params.reference && params.proteome
-    if (!params.taxid && !skipDiscovery) {
+    def hasTaxid = params.taxid != null && params.taxid != false
+    if (!hasTaxid && !skipDiscovery) {
         exit 1, "ERROR: --taxid is required unless both --reference and --proteome are given. Run with --help for usage."
+    }
+    if (hasTaxid && !(params.taxid.toString() ==~ /[1-9][0-9]*/)) {
+        exit 1, "ERROR: --taxid must be an NCBI taxid (a positive whole number), got '${params.taxid}'"
     }
 
     if (params.reference && !file(params.reference).exists()) {
