@@ -106,8 +106,8 @@ Guardrails: min identity ignores weak hits, using miniprot's Positive=
 "similar-or-identical residue" score rather than its stricter Identity=.
 It starts at 0.7; the page's alignment summary shows each genome's average
 best-hit identity, a guide for where to move it. Min block size drops
-short chains; it starts auto-tuned off the weaker genome's average identity
-(15 for a close-relative pair, 0.8 or more, and 5 for a divergent one).
+short chains; it starts at 15 anchors. Lower it (to 5, say) to see short
+blocks, such as those of an ancient duplication.
 
 **Chaining is tuned after the run, on the page.** The interactive page
 embeds both genomes' hit tables and re-chains in the browser (a Web Worker
@@ -302,7 +302,7 @@ In the container profiles, every process runs a Seqera Containers image
 for the host's architecture (linux/arm64 on Apple Silicon, linux/amd64
 otherwise) -- no `--platform` is forced and nothing runs emulated. That
 matters beyond speed: node's Maglev compiler miscompiles the chainer under
-x86-64 emulation, silently skewing its auto-tuned parameters.
+x86-64 emulation, silently skewing its results.
 `bin/chain_blocks.mjs` also disables Maglev and fails (exit 3, retried) on
 an impossible result, in case it ever does run emulated.
 
