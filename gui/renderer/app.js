@@ -30,7 +30,12 @@ function showRun(id) {
     renderSidebar();
 }
 
-$('#btn-new').addEventListener('click', () => showView('new'));
+// a form "Run again" filled and that wasn't started is that run's, not a
+// new one: New run clears it (a form filled by hand is kept)
+$('#btn-new').addEventListener('click', () => {
+    if (prefilled) resetForm();
+    showView('new');
+});
 $('#btn-settings').addEventListener('click', () => showView('settings'));
 $('#btn-open-result').addEventListener('click', () => window.qs.pickResult().catch((e) => alert(cleanIpcError(e))));
 $('#tools-status').addEventListener('click', () => showView(state.setup === 'idle' ? 'settings' : 'setup'));
@@ -205,15 +210,16 @@ function renderHead(r) {
         await window.qs.removeRun(r.id).catch((e) => alert(cleanIpcError(e)));
         showView('new');
     }, 'ghost');
-    const again = (cls) => btn('Run again…', 'again', async () => {
-        showView('new');
-        await prefillForm(r);
-    }, cls);
+    // the same form either way: a finished run is run again, a stopped one
+    // is mended first
+    const again = (cls) => btn('Run again…', 'again', () => editRun(r), cls);
+    const edit = (cls) => btn('Edit run…', 'edit', () => editRun(r), cls);
     const folder = btn('Show folder', 'folder', () => window.qs.reveal(r.outdir));
     let actions;
     if (r.status === 'running') actions = [btn('Cancel run', 'stop', () => window.qs.cancelRun())];
     else if (r.status === 'finished') actions = [remove, again(''), folder, btn('Open plot', 'open', () => r.results.forEach((f) => window.qs.openResult(f)), 'primary')];
-    else actions = [remove, folder, again('primary')];
+    // with an error, its box has the primary Edit run… (renderError)
+    else actions = [remove, folder, edit(r.error ? '' : 'primary')];
     $('#run-actions').replaceChildren(...actions);
 }
 
@@ -242,6 +248,13 @@ function renderError(err, r) {
     $('#err-workdir').onclick = () => window.qs.reveal(err.workdir);
     $('#err-log').hidden = !err.log;
     $('#err-log').onclick = () => window.qs.reveal(err.log);
+    $('#err-edit').onclick = () => editRun(r);
+}
+
+// the New run form, filled as that run had it (form.js, prefillForm)
+async function editRun(r) {
+    showView('new');
+    await prefillForm(r);
 }
 
 const thumbnails = new Map();
