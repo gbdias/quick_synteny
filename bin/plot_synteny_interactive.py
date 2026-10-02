@@ -77,8 +77,8 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, Label, Range1d, Select, Spinner, Switch, TextInput,
-                           Tooltip)
+                           Button, Div, InlineStyleSheet, Label, Range1d, Select, Spinner, Switch,
+                           TextInput, Tooltip, UIElement)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
@@ -138,12 +138,13 @@ TARGET_SELF_GREY = '#666666'
 
 # How the unselected rest of each panel looks while something is selected
 # (see SYN.select): Bokeh's own non-selection glyph, set per renderer in
-# build_page(). Ribbons and segments dim hard -- low enough to read as "not
-# what you clicked", not so low they vanish and lose the context of where
-# the selection sits among them; wedges and ruler bands only half as much,
-# so the ring and axes stay readable around the selection.
-RIBBON_DIM_ALPHA = 0.08
-WEDGE_DIM_ALPHA = 0.35
+# build_page(). Ribbons and segments dim enough to read as "not what you
+# clicked" while staying visible as the context the selection sits in --
+# a single block selected leaves nearly everything dimmed, so too low and
+# the panel goes blank around it; wedges and ruler bands less, so the ring
+# and axes stay readable around the selection.
+RIBBON_DIM_ALPHA = 0.2
+WEDGE_DIM_ALPHA = 0.5
 
 OUTER_R = 1.0
 RING_WIDTH = 0.045
@@ -219,6 +220,42 @@ TOOLBAR_CONTROL_HEIGHT = 32
 # their old 220px, which was much wider than any of their labels or values
 # actually need
 TOP_CONTROL_WIDTH = 150
+
+# The desktop app's look (gui/renderer/style.css, its light tokens): its
+# font, warm greys and green accent. The figures themselves stay white, so
+# what's exported is unchanged; the page doesn't follow dark mode for the
+# same reason. Bokeh draws every widget and layout in a shadow root of its
+# own, which page CSS can't reach, and each root redefines Bokeh's CSS
+# variables on its :host -- so THEME_CSS goes on every element (see
+# build_page()), redefining them after Bokeh's own.
+UI_FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif"
+THEME = {
+    'ground': '#F4F5F1', 'card': '#FFFFFF', 'line': '#E2E4DC', 'field_line': '#C9CCC0',
+    'fg': '#1C1E19', 'fg2': '#5A5F55', 'fg3': '#6C7166',
+    'accent': '#95B540', 'accent_ink': '#46600F', 'accent_tint': '#EEF4DE', 'accent_tint_fg': '#3A500C',
+}
+THEME_CSS = f""":host {{
+    --bokeh-base-font: {UI_FONT}; --base-font: {UI_FONT};
+    --color: {THEME['fg']}; --background-color: {THEME['card']}; --hover-color: {THEME['ground']};
+    --border-color: {THEME['field_line']}; --divider-color: {THEME['line']}; --border-radius: 8px;
+    --highlight-color: {THEME['accent']}; --active-border: {THEME['accent']};
+    --active-bg: #C5DB8C; --active-fg: {THEME['accent_ink']};
+    --inactive-bg: {THEME['line']}; --inactive-fg: #9EA393;
+    --input-focus-border-color: {THEME['accent']}; --input-focus-halo-color: rgba(149, 181, 64, 0.35);
+    --icon-color: {THEME['fg3']}; --shortcut-color: {THEME['fg3']}; --placeholder-color: #8E9386;
+    --surface-background-color: #F1F2EC;
+    --default: {THEME['card']}; --default-border: {THEME['line']};
+    --default-hover: {THEME['ground']}; --default-hover-border: {THEME['field_line']};
+    --default-active: {THEME['accent_tint']}; --default-active-border: {THEME['accent']};
+}}
+label {{ color: {THEME['fg2']}; }}"""
+# a panel or the controls, as the app draws a card
+CARD_CSS = (f":host{{background:{THEME['card']};border:1px solid {THEME['line']};border-radius:14px;"
+            f"padding:8px 10px;box-shadow:0 1px 3px rgba(30,40,10,0.08);}}")
+# the page around the cards; `html body` outranks the `html, body` reset
+# file_html puts after it
+PAGE_CSS = (f"<style>:root{{color-scheme:light;}}html body{{margin:0;padding:20px 16px 32px;"
+            f"background:{THEME['ground']};color:{THEME['fg']};font-family:{UI_FONT};}}</style>")
 
 # the "Chromosome order" menu's options -> (order by size, order by
 # similarity), embedded as SYN.data.orderModes for its callback. Similarity
@@ -634,6 +671,18 @@ SYN.escapeHtml = function(s) {
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
+// A block's look in every panel: its reference chromosome's palette colour,
+// lightened this much towards white, at an opacity rising with its anchor
+// count from LINK_ALPHA_MIN (the smallest) to LINK_ALPHA_MAX (the largest
+// block on the page, or in the detail panel)
+SYN.LINK_LIGHTEN = 0.2;
+SYN.LINK_ALPHA_MIN = 0.35;
+SYN.LINK_ALPHA_MAX = 0.9;
+SYN.linkAlpha = function(score, maxScore) {
+    return SYN.LINK_ALPHA_MIN + (SYN.LINK_ALPHA_MAX - SYN.LINK_ALPHA_MIN) * Math.min(1, score / maxScore);
+};
+SYN.linkColor = function(hex) { return SYN.lighten(hex, SYN.LINK_LIGHTEN); };
+
 SYN.lighten = function(hex, amount) {
     amount = amount === undefined ? 0.35 : amount;
     const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
@@ -711,7 +760,7 @@ SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
         cross: {
             xs: cross.map((r) => r.xs),
             ys: cross.map((r) => r.ys),
-            fill_color: cross.map((r) => SYN.lighten(SYN.paletteColor(r.palette_index, k))),
+            fill_color: cross.map((r) => SYN.linkColor(SYN.paletteColor(r.palette_index, k))),
             alpha: cross.map((r) => r.alpha),
             label: cross.map((r) => r.label),
             palette_index: cross.map((r) => r.palette_index),
@@ -720,7 +769,7 @@ SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
         self: {
             xs: self.map((r) => r.xs),
             ys: self.map((r) => r.ys),
-            fill_color: self.map((r) => SYN.lighten(selfColor(r))),
+            fill_color: self.map((r) => SYN.linkColor(selfColor(r))),
             line_color: self.map((r) => SYN.darken(selfColor(r), 0.2)),
             alpha: self.map((r) => r.alpha * SYN.SELF_LINK_ALPHA_SCALE),
             label: self.map((r) => r.label),
@@ -921,7 +970,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.s_chrom],
-            alpha: 0.25 + 0.55 * (l.score / SYN.data.maxScore), label: SYN.formatLinkLabel(l),
+            alpha: SYN.linkAlpha(l.score, SYN.data.maxScore), label: SYN.formatLinkLabel(l),
             score: l.score, is_homeolog: false, q_chrom: l.q_chrom, s_chrom: l.s_chrom, key: SYN.linkKey(l),
         });
     }
@@ -935,7 +984,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: null, genome: 'target',
-            alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
+            alpha: SYN.linkAlpha(l.score, SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Target', 'Target') + ' (homeolog)',
             score: l.score, is_homeolog: true, q_chrom: l.q_chrom, s_chrom: l.s_chrom, key: SYN.linkKey(l),
         });
@@ -950,7 +999,7 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
         const poly = SYN.ribbonPolygonJS(aq1, aq2, ...SYN.orientEnds(as1, as2, l), SYN.data.linkR);
         ribbons.push({
             xs: poly.xs, ys: poly.ys, palette_index: SYN.data.subjectColorIndex[l.q_chrom], genome: 'reference',
-            alpha: 0.25 + 0.55 * Math.min(1, l.score / SYN.data.maxScore),
+            alpha: SYN.linkAlpha(l.score, SYN.data.maxScore),
             label: SYN.formatLinkLabel(l, 'Reference', 'Reference') + ' (homeolog)',
             score: l.score, is_homeolog: true, q_chrom: l.q_chrom, s_chrom: l.s_chrom, key: SYN.linkKey(l),
         });
@@ -1136,8 +1185,8 @@ SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minSc
             const [y0, y1] = l.orientation !== '-' ? [yLo, yHi] : [yHi, yLo];
             xs.push([x0, x1]); ys.push([y0, y1]);
             const pIdx = SYN.data.subjectColorIndex[l.s_chrom];
-            lineColor.push(SYN.lighten(SYN.paletteColor(pIdx, k)));
-            alpha.push(0.25 + 0.55 * (l.score / maxScore));
+            lineColor.push(SYN.linkColor(SYN.paletteColor(pIdx, k)));
+            alpha.push(SYN.linkAlpha(l.score, maxScore));
             label.push(SYN.formatLinkLabel(l));
             paletteIndex.push(pIdx);
             qChrom.push(l.q_chrom); sChrom.push(l.s_chrom); key.push(SYN.linkKey(l));
@@ -1649,8 +1698,8 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         ribXs.push([ox0, ox1, ...SYN.orientEnds(px1, px0, l)]);
         ribYs.push([otherEdge, otherEdge, pivotEdge, pivotEdge]);
         const refColor = isPivotSubject ? pivotColor : SYN.paletteColor(SYN.data.subjectColorIndex[oName], k);
-        ribFill.push(SYN.lighten(refColor));
-        ribAlpha.push(0.25 + 0.55 * (l.score / maxScore));
+        ribFill.push(SYN.linkColor(refColor));
+        ribAlpha.push(SYN.linkAlpha(l.score, maxScore));
         ribLabel.push(SYN.formatLinkLabel(l));
         ribKey.push(SYN.linkKey(l));
     }
@@ -1735,8 +1784,8 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     for (const l of sorted) {
         ribXs.push([l.q_start, l.q_end, ...SYN.orientEnds(l.s_end, l.s_start, l)]);
         ribYs.push([botY + barH, botY + barH, topY, topY]);
-        ribFill.push(SYN.lighten(subjectColor));
-        ribAlpha.push(0.25 + 0.55 * (l.score / maxScore));
+        ribFill.push(SYN.linkColor(subjectColor));
+        ribAlpha.push(SYN.linkAlpha(l.score, maxScore));
         ribLabel.push(SYN.formatLinkLabel(l));
         ribKey.push(SYN.linkKey(l));
     }
@@ -2277,21 +2326,22 @@ SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     // an input is named by its file name if the user supplied it, else the
     // NCBI accession it was discovered from (compute_alignment_stats.py's
     // *_source), with its species underneath in italics when known. The cell
-    // has a capped width (table-layout:fixed below) and scrolls horizontally
-    // instead of pushing the number columns out of the box; the full name is
-    // also the cell's tooltip. Stats files from before *_source existed fall
+    // has a capped width (table-layout:fixed below) and cuts a long name
+    // off with an ellipsis instead of pushing the number columns out of the
+    // box; the full name is the cell's tooltip. Stats files from before *_source existed fall
     // back to the editable labels / proteome_origin.
-    const scroll = 'overflow-x:auto;white-space:nowrap';
+    const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
+    const fg2 = SYN.data.theme.fg2;
     const nameCell = (source, species) => {
-        const src = source ? `<div style="${scroll}" title="${esc(source)}">${esc(source)}</div>` : '';
+        const src = source ? `<div style="${clip}" title="${esc(source)}">${esc(source)}</div>` : '';
         const sp = species
-            ? `<div style="${scroll};color:#666;font-size:12px" title="${esc(species)}"><i>${esc(species)}</i></div>` : '';
+            ? `<div style="${clip};color:${fg2};font-size:12px" title="${esc(species)}"><i>${esc(species)}</i></div>` : '';
         return src + sp || '&mdash;';
     };
     const td = 'padding:2px 6px 2px 0;vertical-align:top';
     const num = `${td};text-align:right;white-space:nowrap`;
     const row = (role, source, species, aligned, identity) => `
-        <tr><td style="${td};color:#666">${role}</td>
+        <tr><td style="${td};color:${fg2}">${role}</td>
             <td style="${td}">${nameCell(source, species)}</td>
             <td style="${num}">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
             <td style="${num};padding-right:0">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
@@ -2300,16 +2350,17 @@ SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     // spans the zoom panel's drawn frame (not its full nominal width, which
     // includes the toolbar strip -- see PLOT_TOOLBAR_WIDTH)
     return `
-        <div style="font-size:13px;color:#333;border:1px solid #ddd;border-radius:6px;
-                    padding:8px 12px;display:block;box-sizing:border-box;
-                    width:${SYN.data.statsPanelWidth}px;margin:4px 0 8px 0">
-            <b>Alignment summary</b>
+        <div style="font-size:13px;color:${SYN.data.theme.fg};border:1px solid ${SYN.data.theme.line};
+                    border-radius:12px;padding:10px 14px;display:block;box-sizing:border-box;
+                    width:${SYN.data.statsPanelWidth}px;margin:6px 0 4px 0">
+            <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+                        color:${fg2}">Alignment summary</div>
             <table style="border-collapse:collapse;margin-top:4px;width:100%;table-layout:fixed">
                 <colgroup><col style="width:66px"><col><col style="width:100px"><col style="width:74px"></colgroup>
-                <tr><td style="${td};color:#666">Proteome</td>
+                <tr><td style="${td};color:${fg2}">Proteome</td>
                     <td style="${td}">${nameCell(s.proteome_source || s.proteome_origin, s.proteome_species)}</td>
                     <td colspan="2" style="${num};padding-right:0">${s.proteome_total.toLocaleString()} proteins</td></tr>
-                <tr style="color:#666"><td></td><td></td>
+                <tr style="color:${fg2}"><td></td><td></td>
                     <td style="${num}">aligned</td><td style="${num};padding-right:0">avg identity</td></tr>
                 ${row('Target', s.query_source || targetLabel, s.query_species, s.query_aligned, s.query_mean_identity)}
                 ${row('Reference', s.subject_source || referenceLabel, s.subject_species,
@@ -2668,8 +2719,8 @@ SYN.buildBlocksExportFilename = function() {
 // "initial render" code path, the way Python's direct geometry construction
 // used to be -- see module docstring), then kicks off the actual chaining:
 // decode the embedded hit tables, seed the min-identity/min-block controls
-// from --min_identity/--min_block if given or SYNCHAIN.autoParams otherwise
-// (a fixed 70 % identity, a min block size tuned from the hits)
+// from --min_identity/--min_block if given or SYNCHAIN.DEFAULTS otherwise
+// (70 % identity, min block size 15)
 // (again, before a viewer could possibly have touched either), and request
 // the first real chain.
 SYN.init = function(s) {
@@ -2683,10 +2734,9 @@ SYN.init = function(s) {
     SYN.applyOrder();
 
     SYN.startChainer(SYN.hitsPayload).then(function() {
-        const auto = SYNCHAIN.autoParams(SYN.chain.tables.target, SYN.chain.tables.reference);
         const init = SYN.data.initialParams;
-        const minPositive = init.minPositive != null ? init.minPositive : auto.minPositive;
-        const minBlock = init.minBlock != null ? init.minBlock : auto.minBlock;
+        const minPositive = init.minPositive != null ? init.minPositive : SYNCHAIN.DEFAULTS.minPositive;
+        const minBlock = init.minBlock != null ? init.minBlock : SYNCHAIN.DEFAULTS.minBlock;
         // setting these fires min_identity_spinner/min_block_spinner's own
         // change callbacks (see build_page()) -- harmless here: SYN.data
         // still holds the empty placeholders the ring/dotplot render above
@@ -3074,16 +3124,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # Chain parameters (bin/chain.js's PARAMETERS header) -- min identity,
     # max gap, and hit rank each trigger a fresh client-side re-chain
     # (SYN.requestChain); min block size is a pure post-filter (see
-    # SYN.data.ribbons' own comment above) and never re-chains. min_block's
-    # real initial value depends on the actual hit tables
-    # (SYNCHAIN.autoParams), which Python never sees -- SYN.init sets it and
-    # min_identity from --min_identity/--min_block if given, else from
-    # autoParams (min identity's is a fixed 0.7), the
-    # moment the embedded hit tables are decoded (before a viewer could
-    # touch either control, same "no separate initial render" reasoning as
-    # every other control on this page). The placeholder values below are
-    # only ever visible for the instant between DOM construction and that
-    # first SYN.init pass.
+    # SYN.data.ribbons' own comment above) and never re-chains. SYN.init
+    # sets min_identity/min_block from --min_identity/--min_block if given,
+    # else from SYNCHAIN.DEFAULTS (0.7, 15), the moment the embedded hit
+    # tables are decoded (before a viewer could touch either control, same
+    # "no separate initial render" reasoning as every other control on this
+    # page). The values below are placeholders until then, equal to those
+    # defaults so nothing visibly changes.
     # the "?" icon Bokeh draws next to a titled input's label; opens below the
     # icon, as a wrapped box (a plain-text tooltip renders as one unwrapped
     # line that runs off the page)
@@ -3121,14 +3168,17 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # largest block on every result, same "don't cap at an arbitrary round
     # number" reasoning min_seq_size_spinner's high uses below.
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
-                                 step=1, value=min_block or 5, width=TOP_CONTROL_WIDTH,
+                                 step=1, value=min_block or 15, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
                                      "The minimum number of anchors for a syntenic block to be drawn."))
     # One-line status ("N blocks", plus self-link blocks while Show
     # self-links is on -- see SYN.updateChainStatus), refreshed by every
     # chain request and result -- lets a viewer tell a slow re-chain (a large
     # genome, a loose max-gap) apart from "nothing matched".
-    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5))
+    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5),
+                           stylesheets=[f"span{{display:inline-block;padding:3px 10px;border-radius:999px;"
+                                        f"background:{THEME['accent_tint']};color:{THEME['accent_tint_fg']};"
+                                        f"font-size:12.5px;font-weight:600;white-space:nowrap;}}"])
     # Post-hoc chromosome-length filter for the ring + dotplot, independent
     # of --min_seq_size: that pipeline flag already dropped anything shorter
     # than its own threshold before this script ever saw the data (see
@@ -3491,8 +3541,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # static -- the tool's own name/tagline, not this run's target/reference
     # (that's the target/reference label inputs' job) -- unlike those, never
     # rewritten by label_callback
-    header_title_div = Div(text="<h2>quick_synteny - fast and annotation-free synteny "
-                                 "visualisation using spliced protein alignments</h2>")
+    header_title_div = Div(text="<h1>quick_synteny</h1><p>Fast and annotation-free synteny "
+                                 "visualisation using spliced protein alignments</p>",
+                           margin=(0, 0, 14, 2),
+                           stylesheets=[f"h1{{margin:0;font-size:24px;font-weight:650;letter-spacing:-0.01em;"
+                                        f"color:{THEME['fg']};}}"
+                                        f"p{{margin:4px 0 0;font-size:14px;color:{THEME['fg2']};}}"])
 
     # No separate "target: <file>" / "reference: <file>" line here any more --
     # target_label_input/reference_label_input above default to exactly that
@@ -3553,27 +3607,41 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     def control_group(title, *children, divider=True):
         css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:14px;}'
                if divider else '')
-        header = Div(text=f"<span style='font-size:11px;font-weight:600;letter-spacing:.06em;"
-                          f"text-transform:uppercase;color:#777'>{title}</span>",
+        header = Div(text=f"<span style='font-size:11px;font-weight:700;letter-spacing:.06em;"
+                          f"text-transform:uppercase;color:{THEME['fg2']}'>{title}</span>",
                      margin=(4, 5, 0, 5))
         return column(header, row(*children), stylesheets=[css] if css else [])
 
-    layout = column(
-        header_title_div,
+    controls = column(
         row(control_group("Genomes", reference_label_input, target_label_input, divider=False),
             control_group("Synteny detection (recomputes)", min_identity_spinner, max_gap_spinner,
                           hit_rank_select, chain_status_div)),
         row(control_group("Filters", min_block_spinner, min_seq_size_spinner, divider=False),
             control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle,
                           original_names_toggle)),
-        # spacing=5 -- row()'s default is 0, so without this the three
+        stylesheets=[CARD_CSS])
+    for col in (left_col, mid_col, right_col):
+        col.stylesheets = [*col.stylesheets, CARD_CSS]
+    layout = column(
+        header_title_div,
+        controls,
+        # spacing -- row()'s default is 0, so without this the three
         # panels would sit flush against each other (or worse, apart by
         # whatever a child happens to overflow to, see left_col's own
         # comment above) rather than by a deliberate, equal gap
-        row(left_col, mid_col, right_col, spacing=5),
-        # a little breathing room between the page's left edge and everything on it
-        margin=(0, 0, 0, 10),
+        row(left_col, mid_col, right_col, spacing=10),
+        spacing=12,
     )
+    # the app's look on every element (see THEME_CSS): first, so a
+    # widget's own stylesheets still override it
+    theme = InlineStyleSheet(css=THEME_CSS)
+    for m in layout.references():
+        if isinstance(m, UIElement):
+            m.stylesheets = [theme, *m.stylesheets]
+    for fig in (overview, detail_fig, dotplot_fig):
+        fig.title.text_font = UI_FONT
+        fig.title.text_color = THEME['fg']
+        fig.outline_line_color = THEME['line']
 
     # The page is built as an explicit Document (rather than handing `layout`
     # straight to file_html) so SYN.init can be wired to fire once, from the
@@ -3632,8 +3700,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # page uses) so the page renders with no network -- offline laptops, HPC
     # nodes without internet access -- rather than opening blank
     page_html = file_html(doc, INLINE, title=f"{query_name} vs {subject_name} -- interactive synteny")
+    # right after the opening <head>, which comes before any script: the
+    # inlined BokehJS contains the literal text "</head>" too
+    head, sep, tail = page_html.partition("<head>")
+    page_html = head + sep + "\n" + PAGE_CSS + tail
 
     syn_data = {
+        'theme': THEME,
         'palette': PALETTES[DEFAULT_PALETTE_NAME],
         'palettes': PALETTES,
         'targetGrey': TARGET_GREY,
@@ -3697,8 +3770,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # panel to show"
         'alignmentStats': alignment_stats,
         # --min_identity/--min_block as given on the CLI, or None (-> JSON
-        # null) meaning "use SYNCHAIN.autoParams" (identity: a fixed 0.7;
-        # min block: tuned from the hits) -- read once, by SYN.init,
+        # null) meaning "use SYNCHAIN.DEFAULTS" (identity 0.7, min block
+        # 15) -- read once, by SYN.init,
         # the moment the embedded hit tables are decoded (see that
         # function's own comment). --max_gap always has a concrete value
         # (nextflow.config itself defaults it to 25), so max_gap_spinner's
@@ -3746,7 +3819,7 @@ def main():
                               "header)")
     parser.add_argument('--min_block', type=int, default=None,
                          help='initial Min block size control value -- default (unset): '
-                              'SYNCHAIN.autoParams picks it client-side from the actual hit tables')
+                              "SYNCHAIN.DEFAULTS' 15")
     parser.add_argument('--stats', default=None,
                          help='optional compute_alignment_stats.py JSON -- shown as a small '
                               'always-visible summary panel on the page (proteome size, each '

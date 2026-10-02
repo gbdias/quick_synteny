@@ -151,6 +151,9 @@ a { color: var(--accent-ink); }
 .update .hint { flex-basis: 100%; margin: 0; }
 
 /* ---------- new run ---------- */
+/* with Options open, room below them for the last fields' tips (Chunk
+   size's runs ~370px), which open downwards inside the scrolling area */
+.view-new .scroll:has(.options[open]) { padding-bottom: 320px; }
 .block { margin-bottom: 24px; max-width: 760px; }
 .drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 150px;
     border: 2px dashed var(--field-line); border-radius: 14px; background: var(--subtle); text-align: center; }

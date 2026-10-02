@@ -35,7 +35,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     path reference_chrom_sizes
     val min_identity        // '' starts the page at chain.js's default (0.7); otherwise an explicit 0-1 floor
     val max_gap
-    val min_block           // '' auto-tunes client-side; otherwise the initial Min block size control value
+    val min_block           // '' starts the page at chain.js's default (15); otherwise the initial Min block size control value
     path stats               // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
     val target_subtitle      // input file name/accession, shown under the target label
     val reference_subtitle  // ditto, for the reference label
@@ -72,7 +72,7 @@ workflow PYGENOMEVIZ_PLOT {
     reference_chrom_sizes
     min_identity           // '' means 0.7; otherwise an explicit 0-1 floor (the page's initial control value)
     max_gap                // max rank step between consecutive chain members (the page's initial control value)
-    min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
+    min_block              // '' means 15; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output
     target_subtitle        // val -- target's input file name, for the page's subtitle
     reference_subtitle    // val -- reference genome's input file name/accession, ditto

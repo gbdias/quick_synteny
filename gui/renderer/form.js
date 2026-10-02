@@ -8,6 +8,7 @@ const files = { assembly: null, reference: null, proteome: null };
 let outdir = null;
 let outdirInfo = null;
 let outdirChosen = false;       // picked by the user: stop suggesting one
+let prefilled = false;          // holds a past run's form ("Run again", "Edit run")
 
 const mode = () => document.querySelector('input[name=mode]:checked').value;
 const engine = () => document.querySelector('input[name=engine]:checked').value;
@@ -39,6 +40,25 @@ function setFile(key, f) {
     updatePreflight();
     suggestOutdir();
     refreshForm();
+}
+
+// a reference/proteome slot's empty text, as index.html has it
+const SLOT_EMPTY = Object.fromEntries(['reference', 'proteome'].map((key) => [key, $(`#slot-${key} .file-name`).textContent]));
+
+function clearFile(key) {
+    files[key] = null;
+    if (key === 'assembly') {
+        $('#drop-assembly').hidden = false;
+        $('#card-assembly').hidden = true;
+    } else {
+        const slot = $(`#slot-${key}`);
+        slot.classList.remove('filled');
+        slot.querySelector('.file-name').textContent = SLOT_EMPTY[key];
+        slot.querySelector('.file-name').title = '';
+        slot.querySelector('.file-meta').textContent = '';
+        slot.querySelector('button').textContent = 'Choose…';
+    }
+    setStatus(`#status-${key}`, null);
 }
 
 document.querySelectorAll('[data-pick]').forEach((btn) => {
@@ -124,6 +144,9 @@ function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
         }[t.status];
         if (text) setStatus(taxidStatus, ...text);
         else setStatus(taxidStatus, null);
+        // a bare taxid in the search box (typed, or a past run's without
+        // its name) gets the name NCBI gave it
+        if (t.status === 'found' && t.name && $(search).value.trim() === String(t.taxid)) $(search).value = t.name;
         if (t.status === 'found') suggestOutdir();
         refreshForm();
     };
@@ -252,6 +275,7 @@ $('#ref-accession').addEventListener('input', checkAccession);
 // Documents/quick_synteny/<target>_vs_<taxid or reference>, unless the user
 // has picked a folder; a new one per run
 let suggestTimerOut = null;
+const PATH_EMPTY = $('#path-outdir').textContent;
 function suggestOutdir(force = false) {
     if (outdirChosen && !force) return;
     clearTimeout(suggestTimerOut);
@@ -517,17 +541,52 @@ $('#form').addEventListener('submit', async (e) => {
     try {
         const targetSpecies = needsOrganism() && organism.state.status === 'found' ? organism.state.name : '';
         const id = await window.qs.startRun(form, { targetSpecies });
-        // the next run gets a folder of its own
-        outdirChosen = false;
-        suggestOutdir(true);
+        // the next run starts from a blank form, in a folder of its own
+        resetForm();
         showRun(id);
     } catch (ex) {
         refreshForm(String(ex.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
     }
 });
 
-// "Run again": the form as that run had it, in a new folder
+// the heading of a blank form, as index.html has it
+const FORM_HEAD = [$('#form-title').textContent, $('#form-sub').textContent];
+
+// A blank form for the next run: no files, organism or reference, and no
+// folder until a genome is added. How runs are made stays as it was: the
+// comparison mode, the engine and the options.
+function resetForm() {
+    for (const key of Object.keys(files)) clearFile(key);
+    organism.set('', '');
+    referenceTaxon.set('', '');
+    $('#ref-accession').value = '';
+    checkAccession();
+    for (const sel of ['#taxon-results', '#ref-results']) $(sel).hidden = true;
+    for (const sel of ['#search-status', '#ref-search-status']) setStatus(sel, null);
+    clearTimeout(suggestTimerOut);
+    outdir = null;
+    outdirInfo = null;
+    outdirChosen = false;
+    $('#path-outdir').textContent = PATH_EMPTY;
+    $('#path-outdir').title = '';
+    $('#btn-subfolder').hidden = true;
+    $('#resume-row').hidden = true;
+    document.querySelector('[name=resume]').checked = false;
+    setStatus('#outdir-status', null);
+    prefilled = false;
+    $('#form-title').textContent = FORM_HEAD[0];
+    $('#form-sub').textContent = FORM_HEAD[1];
+    updatePreflight();
+    refreshForm();
+}
+
+// "Run again" (a finished run) or "Edit run" (one that stopped): the form
+// as that run had it, in a new folder, its heading naming the run
 async function prefillForm(r) {
+    resetForm();
+    prefilled = true;
+    $('#form-title').textContent = r.status === 'finished' ? 'Run again' : 'Edit run';
+    $('#form-sub').textContent = `As “${r.title}” had it. Change what you need, then start it: it runs in a new folder.`;
     const f = r.form;
     const m = f.reference ? 'manual' : f.reference_taxid || f.reference_accession ? 'chosen' : 'auto';
     proteomeFromNcbi = m === 'manual' && !f.proteome;
@@ -537,8 +596,11 @@ async function prefillForm(r) {
         if (!f[key]) continue;
         try {
             setFile(key, await window.qs.inspectFile(f[key]));
-        } catch {
-            setStatus(`#status-${key}`, 'bad', `${baseName(f[key])} isn't where it was any more: choose it again.`);
+        } catch (e) {
+            // EPERM: there, but macOS's privacy settings keep the app out
+            setStatus(`#status-${key}`, 'bad', /EPERM|EACCES/.test(String(e.message))
+                ? `macOS didn't let the app open ${baseName(f[key])}: choose it again.`
+                : `${baseName(f[key])} isn't where it was any more: choose it again.`);
         }
     }
     if (f.taxid) organism.set(f.taxid, r.targetSpecies);

@@ -47,8 +47,8 @@
   <form id="form" class="view view-new" novalidate>
     <div class="scroll">
       <header class="view-head">
-        <h1>New run</h1>
-        <p>Plot a genome against a related one, or against files of your own.</p>
+        <h1 id="form-title">New run</h1>
+        <p id="form-sub">Plot a genome against a related one, or against files of your own.</p>
       </header>
 
       <section class="block">
@@ -218,6 +218,10 @@
         <p class="err-hint" hidden></p>
         <pre class="detail"></pre>
         <div class="row">
+          <button type="button" class="btn primary" id="err-edit">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13.5 6.5l4 4"></path></svg>
+            Edit run…
+          </button>
           <button type="button" class="btn" id="err-workdir">Show the step's work folder</button>
           <button type="button" class="btn" id="err-log">Open .nextflow.log</button>
         </div>

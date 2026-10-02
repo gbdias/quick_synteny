@@ -331,7 +331,10 @@ progress screen.
     proteins aligned to each genome, and the rank where the reference was
     found (when discovered; otherwise the proteome's size). Its buttons are **Open plot**, **Show
     folder**, **Run again…** (the same form, in a new folder) and
-    **Remove**.
+    **Remove**. A run that stopped has **Edit run…** instead, the same
+    form refilled, also in the box with its error, so a wrong choice is
+    fixed without filling the form again. The form's heading names the
+    run it came from; **New run** clears it.
   - **Errors:** when a run fails, a box says why. Its text comes from
     Nextflow's own `ERROR ~` report in the console (`lib/nferror.js`), and
     a failed step is named as the checklist names it ("Couldn't look up

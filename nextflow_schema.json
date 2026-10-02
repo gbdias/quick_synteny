@@ -147,8 +147,8 @@
                 "min_block": {
                     "type": "integer",
                     "minimum": 2,
-                    "description": "Minimum anchors per synteny block in links.tsv; automatic by default.",
-                    "help_text": "An anchor is one locus matched on both genomes. Applies to links.tsv and to the result page's starting view. Automatic: 15 for close relatives (the weaker genome's average identity is 0.8 or more), 5 otherwise. The result page can change it afterwards.",
+                    "description": "Minimum anchors per synteny block in links.tsv; 15 when unset.",
+                    "help_text": "An anchor is one locus matched on both genomes. Applies to links.tsv and to the result page's starting view. Lower it (to 5, say) to see short blocks, such as an ancient duplication's. The result page can change it afterwards.",
                     "hidden": true,
                     "fa_icon": "fas fa-cubes"
                 }

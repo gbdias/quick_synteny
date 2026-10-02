@@ -269,8 +269,8 @@ workflow {
     reference_gff = gff_by_role.reference
 
     // ---- synteny blocks + final plot ----
-    // params.min_identity defaults to null (chain.js's own 0.7) and
-    // params.min_block to null (auto-tune); Groovy's null is not safe to pass
+    // params.min_identity and params.min_block default to null (chain.js's
+    // own 0.7 and 15); Groovy's null is not safe to pass
     // through a process `val` input the same way every call site expects
     // (falsy-but-interpolatable), so they're normalized to '' here once. A
     // --min_identity 0 stays 0 (the call sites test for '', not falsiness).

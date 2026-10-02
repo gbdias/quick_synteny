@@ -29,22 +29,21 @@
 //   maxLookback  int          max valid predecessors examined per anchor (50)
 //   gapPenalty   float >= 0   score cost per skipped locus (default 0)
 //   minBlock     int (loci)   minimum chain length reported as a block
+//                             (default 15)
 //   selfMode     bool         both sides are the same table (homeolog scan)
-//   Auto defaults (autoParams): meanBest(T) = mean over proteins of their
-//   rank-1 positive (best positive if no rank-1 hit); w = min over the two
-//   genomes (just the one genome in self mode); minBlock = w >= 0.8 ? 15 :
-//   5. minPositive is not tuned: the fixed 0.7 is only where the page's
-//   control starts, and a viewer moves it from there. Checked 2026-09-23:
-//   at minBlock 15, axolotl-vs-itself gives 22 blocks (one per chromosome
-//   arm, 98.5 % coverage) and A. thaliana vs the allotetraploid A. suecica
-//   gives depth 1.99 (its two subgenomes); at 5, Arabidopsis's short
-//   ancient-duplication blocks join in (depth 2.72). The divergent-pair
-//   value (5) is unchecked.
+//   Nothing is tuned to the data: minPositive 0.7 and minBlock 15 are only
+//   where the page's controls start, and a viewer moves them from there.
+//   Checked 2026-09-23: at minBlock 15, axolotl-vs-itself gives 22 blocks
+//   (one per chromosome arm, 98.5 % coverage) and A. thaliana vs the
+//   allotetraploid A. suecica gives depth 1.99 (its two subgenomes); at 5,
+//   Arabidopsis's short ancient-duplication blocks join in (depth 2.72).
+//   meanBestPositive (mean over proteins of their rank-1 positive, the best
+//   positive if no rank-1 hit) only serves chain_blocks.mjs's sanity check.
 //   gapPenalty stays 0 by default: 0.1 removes the end-extension noise of
 //   note (b) below on synthetic data at no recall cost, but on thaliana vs
 //   suecica it also splits real, gappy ancient-duplication blocks (depth
 //   2.72 -> 2.15). The page runs one parameter set for all three of its
-//   chains (cross and both self), initialised from the cross auto values.
+//   chains (cross and both self).
 //
 // CHAINING RULES (normative):
 //   1. A locus passes if any of its hits passes. A passing locus's rank
@@ -117,6 +116,7 @@
 
     const DEFAULTS = {
         minPositive: 0.7,
+        minBlock: 15,
         maxHitRank: 255,
         maxGap: 25,
         maxLookback: 50,
@@ -215,14 +215,6 @@
         return sum / best.size / 10000;
     }
 
-    function autoParams(A, B) {
-        const w = Math.min(meanBestPositive(A), B && B !== A ? meanBestPositive(B) : Infinity);
-        return {
-            ...DEFAULTS,
-            minBlock: w >= 0.8 ? 15 : 5,
-            weakerMeanPositive: w,
-        };
-    }
 
     function resolveParams(p, selfMode) {
         const q = Object.assign({}, DEFAULTS, p || {});
@@ -598,7 +590,7 @@
 
     const api = {
         VERSION, DEFAULTS, MIN_CHAIN_LENGTH,
-        parseHitsTsv, makeTables, prepareTable, meanBestPositive, autoParams,
+        parseHitsTsv, makeTables, prepareTable, meanBestPositive,
         createChainer, chain, blocksToLinks, settingsLine, linksToTsv, blocksToTsv, decodePayload,
     };
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; } else { root.SYNCHAIN = api; }
