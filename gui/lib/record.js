@@ -126,7 +126,8 @@ function fillFound(r) {
 }
 
 // the finished run's numbers: compute_alignment_stats.py's stats.json, and
-// the blocks at the published min_block (links.tsv: a header, then a block a line)
+// the blocks at the published min_block (links.tsv: a `#` settings line,
+// a header, then a block a line)
 function readSummary(outdir) {
     const dir = path.join(outdir, 'synteny');
     let names;
@@ -138,7 +139,7 @@ function readSummary(outdir) {
     }
     const links = names.find((n) => n.endsWith('.links.tsv') && !n.includes('slider'));
     if (links) {
-        const lines = fs.readFileSync(path.join(dir, links), 'utf8').split('\n').filter((l) => l.trim());
+        const lines = fs.readFileSync(path.join(dir, links), 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('#'));
         summary.blocks = Math.max(0, lines.length - 1);
     }
     return summary;

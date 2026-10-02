@@ -15,7 +15,7 @@ const { checkNetwork } = require('./network');
 
 // form field -> --param, in the order they appear in `--help`
 const PARAMS = ['taxid', 'assembly', 'reference', 'proteome', 'reference_taxid', 'reference_accession', 'max_rank', 'min_seq_size', 'exclude_target',
-    'min_asm_gap', 'min_identity', 'max_gap', 'min_block', 'miniprot_m', 'miniprot_chunk_gb'];
+    'min_asm_gap', 'miniprot_m', 'miniprot_chunk_gb'];
 
 // the tools' engine -> pipeline profile
 const PROFILES = { conda: 'conda', docker: 'standard' };

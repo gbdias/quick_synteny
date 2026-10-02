@@ -22,6 +22,7 @@
 //
 // PARAMETERS:
 //   minPositive  0-1          a hit passes only if positive >= minPositive
+//                             (default 0.7)
 //   maxHitRank   int >= 1     ... and rank <= maxHitRank (default 255: all)
 //   maxGap       int (loci)   max rank step between consecutive chain
 //                             members, on both genomes (default 25)
@@ -31,12 +32,14 @@
 //   selfMode     bool         both sides are the same table (homeolog scan)
 //   Auto defaults (autoParams): meanBest(T) = mean over proteins of their
 //   rank-1 positive (best positive if no rank-1 hit); w = min over the two
-//   genomes (just the one genome in self mode); minPositive = clamp(w, 0.3,
-//   0.9); minBlock = w >= 0.8 ? 15 : 5. Checked 2026-09-23: at minBlock 15,
-//   axolotl-vs-itself gives 22 blocks (one per chromosome arm, 98.5 %
-//   coverage) and A. thaliana vs the allotetraploid A. suecica gives depth
-//   1.99 (its two subgenomes); at 5, Arabidopsis's short ancient-duplication
-//   blocks join in (depth 2.72). The divergent-pair value (5) is unchecked.
+//   genomes (just the one genome in self mode); minBlock = w >= 0.8 ? 15 :
+//   5. minPositive is not tuned: the fixed 0.7 is only where the page's
+//   control starts, and a viewer moves it from there. Checked 2026-09-23:
+//   at minBlock 15, axolotl-vs-itself gives 22 blocks (one per chromosome
+//   arm, 98.5 % coverage) and A. thaliana vs the allotetraploid A. suecica
+//   gives depth 1.99 (its two subgenomes); at 5, Arabidopsis's short
+//   ancient-duplication blocks join in (depth 2.72). The divergent-pair
+//   value (5) is unchecked.
 //   gapPenalty stays 0 by default: 0.1 removes the end-extension noise of
 //   note (b) below on synthetic data at no recall cost, but on thaliana vs
 //   suecica it also splits real, gappy ancient-duplication blocks (depth
@@ -88,7 +91,11 @@
 //   target_start, target_end, reference_chrom, reference_start, reference_end,
 //   score, orientation, mean_identity (4 dp), anchor_density (2 dp), rows
 //   ordered by (target chrom index, target start, reference chrom index,
-//   reference start, orientation).
+//   reference start, orientation). Given the parameters, linksToTsv puts them
+//   on a first line ahead of the header, named after chain_blocks.mjs's
+//   flags: `# min_identity=0.7 max_gap=25 min_block=5 max_hit_rank=255
+//   max_lookback=50 gap_penalty=0`, then ` self=true` for a self chain and
+//   any further filters the caller names (the page's min_seq_size, names).
 //
 // EMBEDDED PAYLOAD (SYN.hitsPayload, written by plot_synteny_interactive.py,
 // read by decodePayload):
@@ -109,6 +116,7 @@
     const MIN_CHAIN_LENGTH = 2;   // a single anchor is never a block, whatever minBlock says
 
     const DEFAULTS = {
+        minPositive: 0.7,
         maxHitRank: 255,
         maxGap: 25,
         maxLookback: 50,
@@ -210,10 +218,9 @@
     function autoParams(A, B) {
         const w = Math.min(meanBestPositive(A), B && B !== A ? meanBestPositive(B) : Infinity);
         return {
-            minPositive: Math.max(0.3, Math.min(0.9, w)),
+            ...DEFAULTS,
             minBlock: w >= 0.8 ? 15 : 5,
             weakerMeanPositive: w,
-            ...DEFAULTS,
         };
     }
 
@@ -503,8 +510,18 @@
     const TSV_HEADER = 'target_chrom\ttarget_start\ttarget_end\treference_chrom\treference_start\treference_end\t'
         + 'score\torientation\tmean_identity\tanchor_density\n';
 
-    function linksToTsv(links) {
-        let s = TSV_HEADER;
+    // the `# key=value ...` line naming the parameters a TSV was made with
+    // (OUTPUTS above); extra: further [key, value] pairs, appended as given
+    function settingsLine(params, extra) {
+        const p = Object.assign({}, DEFAULTS, params);
+        const pairs = [['min_identity', +p.minPositive.toFixed(4)], ['max_gap', p.maxGap], ['min_block', p.minBlock],
+            ['max_hit_rank', p.maxHitRank], ['max_lookback', p.maxLookback], ['gap_penalty', p.gapPenalty]];
+        if (p.selfMode) { pairs.push(['self', true]); }
+        return '# ' + pairs.concat(extra || []).map(([k, v]) => `${k}=${v}`).join(' ') + '\n';
+    }
+
+    function linksToTsv(links, params, extra) {
+        let s = (params ? settingsLine(params, extra) : '') + TSV_HEADER;
         for (const l of links) {
             s += `${l.q_chrom}\t${l.q_start}\t${l.q_end}\t${l.s_chrom}\t${l.s_start}\t${l.s_end}\t`
                 + `${l.score}\t${l.orientation}\t${l.mean_identity.toFixed(4)}\t${l.anchor_density.toFixed(2)}\n`;
@@ -512,7 +529,7 @@
         return s;
     }
 
-    function blocksToTsv(result) { return linksToTsv(blocksToLinks(result)); }
+    function blocksToTsv(result) { return linksToTsv(blocksToLinks(result), result.params); }
 
     // ---------------------------------------------------------------- embedded payload (EMBEDDED PAYLOAD above)
 
@@ -582,7 +599,7 @@
     const api = {
         VERSION, DEFAULTS, MIN_CHAIN_LENGTH,
         parseHitsTsv, makeTables, prepareTable, meanBestPositive, autoParams,
-        createChainer, chain, blocksToLinks, linksToTsv, blocksToTsv, decodePayload,
+        createChainer, chain, blocksToLinks, settingsLine, linksToTsv, blocksToTsv, decodePayload,
     };
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; } else { root.SYNCHAIN = api; }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

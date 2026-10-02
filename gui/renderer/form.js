@@ -408,8 +408,9 @@ function checkNumber(name, value) {
 
 // ---------- the run ----------
 
-// the Options section's fields, each named after its pipeline parameter
-const ADVANCED = ['min_seq_size', 'min_asm_gap', 'min_identity', 'max_gap', 'min_block', 'miniprot_m', 'miniprot_chunk_gb'];
+// the Options section's fields, each named after its pipeline parameter.
+// No chaining parameters: the result page re-chains with any values.
+const ADVANCED = ['min_seq_size', 'min_asm_gap', 'miniprot_m', 'miniprot_chunk_gb'];
 
 function collectForm() {
     const fd = new FormData($('#form'));

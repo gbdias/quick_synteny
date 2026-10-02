@@ -2119,6 +2119,12 @@ SYN.exportFigureAsSVG = function(figModel, filename) {
     if (!clone.getAttribute('xmlns')) {
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
     }
+    // the blocks TSV's settings line (bin/chain.js's OUTPUTS header), as the
+    // file's description: vector editors keep it, the drawing ignores it
+    const settings = SYN.currentSettings();
+    const desc = document.createElementNS('http://www.w3.org/2000/svg', 'desc');
+    desc.textContent = SYNCHAIN.settingsLine(settings.params, settings.extra).replace(/^# |\n$/g, '');
+    clone.insertBefore(desc, clone.firstChild);
     const svgText = new XMLSerializer().serializeToString(clone);
     SYN.downloadBlob(new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'}), filename);
 };
@@ -2208,12 +2214,14 @@ SYN.exportFigure = function(figModel, panel, format) {
 // the labels are free-text input and filenames can't contain arbitrary
 // characters (path separators in particular). JPEG gets the conventional
 // .jpg extension, not the literal (also valid, but less common) .jpeg.
+// Ends in the settings the blocks were drawn with (SYN.settingsTag), the
+// one record of them a PNG or JPEG keeps.
 SYN.buildExportFilename = function(panel, format) {
     const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     const t = sanitize(SYN.state.targetLabel) || 'target';
     const r = sanitize(SYN.state.referenceLabel) || 'reference';
     const ext = format === 'JPEG' ? 'jpg' : format.toLowerCase();
-    return `${t}_vs_${r}_${panel}.${ext}`;
+    return `${t}_vs_${r}_${panel}_${SYN.settingsTag()}.${ext}`;
 };
 
 // Every title/bar-label a viewer might export reads SYN.state.targetLabel/
@@ -2604,8 +2612,9 @@ SYN.updateChainStatus = function() {
 // OUTPUTS header specifies (chain.js's own blocksToLinks output, untouched --
 // see SYN.applyChainResult), and filtering preserves that order, so with min
 // sequence length at its 10 kb floor (and the page built with --min_seq_size
-// at least that) this is byte-identical to `node bin/chain_blocks.mjs
-// --min_block <current value>` with the same min-identity/max-gap/hit-rank.
+// at least that, and "Original names" off) this is byte-identical, settings
+// line included, to `node bin/chain_blocks.mjs --min_block <current value>`
+// with the same min-identity/max-gap/hit-rank.
 SYN.exportBlocksTsv = function() {
     const minScore = SYN.ui.minBlockSpinner.value;
     const minLen = SYN.state.minSeqSize;
@@ -2613,20 +2622,41 @@ SYN.exportBlocksTsv = function() {
         && SYN.data.querySizes[l.q_chrom] >= minLen && SYN.data.subjectSizes[l.s_chrom] >= minLen);
     // named the way the page currently shows them -- with "Original names"
     // on, the blocks line up with the input FASTAs directly
-    const tsv = SYNCHAIN.linksToTsv(!SYN.state.originalNames ? filtered : filtered.map((l) => Object.assign({}, l, {
+    const links = !SYN.state.originalNames ? filtered : filtered.map((l) => Object.assign({}, l, {
         q_chrom: SYN.displayName('target', l.q_chrom), s_chrom: SYN.displayName('reference', l.s_chrom),
-    })));
+    }));
+    const settings = SYN.currentSettings();
+    const tsv = SYNCHAIN.linksToTsv(links, settings.params, settings.extra);
     SYN.downloadBlob(new Blob([tsv], {type: 'text/tab-separated-values'}), SYN.buildBlocksExportFilename());
+};
+
+// What the blocks on screen were made with, for an export to record:
+// the chain parameters (min block size at its control's value, not the
+// looser one chain requests run at) and the page's own filters, the latter
+// only once moved off where they start.
+SYN.currentSettings = function() {
+    const params = Object.assign(SYN.currentChainParams(), {minBlock: SYN.ui.minBlockSpinner.value});
+    const extra = [];
+    // the min sequence length spinner's 10 kb floor, where it starts
+    if (SYN.state.minSeqSize > 10000) { extra.push(['min_seq_size', SYN.state.minSeqSize]); }
+    if (SYN.state.originalNames) { extra.push(['names', 'original']); }
+    return {params, extra};
+};
+
+// the same settings, short enough for a filename: id70_gap25_min5, then
+// _rank<N> below "all" and _minlen<X>Mb above the 10 kb floor
+SYN.settingsTag = function() {
+    const p = SYN.currentSettings().params;
+    const rank = p.maxHitRank < SYNCHAIN.DEFAULTS.maxHitRank ? `_rank${p.maxHitRank}` : '';
+    const minLen = SYN.state.minSeqSize > 10000 ? `_minlen${+(SYN.state.minSeqSize / 1e6).toFixed(3)}Mb` : '';
+    return `id${Math.round(p.minPositive * 100)}_gap${p.maxGap}_min${p.minBlock}${rank}${minLen}`;
 };
 
 SYN.buildBlocksExportFilename = function() {
     const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     const t = sanitize(SYN.state.targetLabel) || 'target';
     const r = sanitize(SYN.state.referenceLabel) || 'reference';
-    const id = Math.round(SYN.ui.minIdentitySpinner.value);
-    // named only once raised above the spinner's 10 kb floor, where it starts
-    const minLen = SYN.state.minSeqSize > 10000 ? `_minlen${+(SYN.state.minSeqSize / 1e6).toFixed(3)}Mb` : '';
-    return `${t}_vs_${r}_blocks_id${id}_gap${SYN.ui.maxGapSpinner.value}_min${SYN.ui.minBlockSpinner.value}${minLen}.tsv`;
+    return `${t}_vs_${r}_blocks_${SYN.settingsTag()}.tsv`;
 };
 
 // The page's one entry point, run once from build_page()'s
@@ -2639,6 +2669,7 @@ SYN.buildBlocksExportFilename = function() {
 // used to be -- see module docstring), then kicks off the actual chaining:
 // decode the embedded hit tables, seed the min-identity/min-block controls
 // from --min_identity/--min_block if given or SYNCHAIN.autoParams otherwise
+// (a fixed 70 % identity, a min block size tuned from the hits)
 // (again, before a viewer could possibly have touched either), and request
 // the first real chain.
 SYN.init = function(s) {
@@ -3043,10 +3074,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # Chain parameters (bin/chain.js's PARAMETERS header) -- min identity,
     # max gap, and hit rank each trigger a fresh client-side re-chain
     # (SYN.requestChain); min block size is a pure post-filter (see
-    # SYN.data.ribbons' own comment above) and never re-chains. min_identity/
-    # min_block's real initial values depend on the actual hit tables
-    # (SYNCHAIN.autoParams), which Python never sees -- SYN.init sets both
-    # from --min_identity/--min_block if given, else from autoParams, the
+    # SYN.data.ribbons' own comment above) and never re-chains. min_block's
+    # real initial value depends on the actual hit tables
+    # (SYNCHAIN.autoParams), which Python never sees -- SYN.init sets it and
+    # min_identity from --min_identity/--min_block if given, else from
+    # autoParams (min identity's is a fixed 0.7), the
     # moment the embedded hit tables are decoded (before a viewer could
     # touch either control, same "no separate initial render" reasoning as
     # every other control on this page). The placeholder values below are
@@ -3060,12 +3092,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     f"{text}</div>"), position=position)
 
     min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
-                                    value=round((min_identity or 0.5) * 100), width=TOP_CONTROL_WIDTH,
+                                    value=round((0.7 if min_identity is None else min_identity) * 100),
+                                    width=TOP_CONTROL_WIDTH,
                                     description=help_tip(
                                         "A protein's hit counts only if at least this share of its aligned "
                                         "residues are identical or similar (miniprot's Positive score). Starts "
-                                        "at the weaker genome's average best-hit identity, kept within 30-90%. "
-                                        "Lower it for distant species; raise it to cut noise from paralogs."))
+                                        "at 70%. Lower it for distant species; raise it to cut noise from "
+                                        "paralogs. The alignment summary's avg identity is a guide."))
     max_gap_spinner = Spinner(title="Max gap (anchors)", low=1, high=100, step=1,
                                value=max_gap, width=TOP_CONTROL_WIDTH,
                                description=help_tip(
@@ -3103,25 +3136,25 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # only ever filter what actually made it into the page, never recover
     # what didn't. In Mb, like the ruler size labels elsewhere on this page.
     # Starts at, and never goes below, MIN_SEQ_SIZE_FLOOR_MB (10 kb, the
-    # pipeline's default --min_seq_size); above that it moves in 0.5 Mb
-    # steps -- the arrows go 0.01 -> 0.5 -> 1 -> 1.5, and a typed value is
-    # snapped to the nearest half Mb (11.7 -> 11.5) by min_seq_size_callback
+    # pipeline's default --min_seq_size); above that it moves in 0.1 Mb
+    # steps -- the arrows go 0.01 -> 0.1 -> 0.2 -> 0.3, and a typed value is
+    # snapped to the nearest 0.1 Mb (11.74 -> 11.7) by min_seq_size_callback
     # below, which also caps it at this dataset's own largest chromosome.
     # Both bounds live in that callback, not in Spinner's low/high: Bokeh
-    # refuses an arrow step past `low` rather than clamping it (0.5 - 0.5 = 0
-    # would stick at 0.5 under low=0.01), and silently rejects a typed value
+    # refuses an arrow step past `low` rather than clamping it (0.1 - 0.1 = 0
+    # would stick at 0.1 under low=0.01), and silently rejects a typed value
     # above `high`, leaving the old value in effect under the typed text.
     # low=0 lets the step to 0 through for the callback to lift to the floor.
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
-                                    step=0.5, value=MIN_SEQ_SIZE_FLOOR_MB, width=TOP_CONTROL_WIDTH,
+                                    step=0.1, value=MIN_SEQ_SIZE_FLOOR_MB, width=TOP_CONTROL_WIDTH,
                                     description=help_tip(
                                         "Hides chromosomes and scaffolds shorter than this, in Mb, from "
                                         "every panel and from the blocks TSV download. Typed values "
-                                        "round to the nearest 0.5 Mb. Sequences below the "
+                                        "round to the nearest 0.1 Mb. Sequences below the "
                                         "pipeline's <span style='white-space:nowrap'>--min_seq_size</span> "
                                         "(default 10 kb) were already left out of the page."),
-                                    # at most 3 decimals, no trailing zeros: 0.01, 0.5, 1, 1.5
+                                    # at most 3 decimals, no trailing zeros: 0.01, 0.1, 0.2, 1
                                     format='0[.][000]')
     reset_btn = Button(label="✕ Clear selection", button_type="default", width=150,
                         height=TOOLBAR_CONTROL_HEIGHT)
@@ -3264,14 +3297,15 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # pair zoom is cleared on change, same as reset_btn -- the chromosome it
     # was zoomed into may no longer be visible at all.
     min_seq_size_callback = CustomJS(code=f"""
-        // snap to the nearest half Mb, never below the floor: an arrow step
-        // off the floor (0.01 + 0.5 = 0.51) lands on 0.5, a typed 11.7 on
-        // 11.5. Never above the last half-Mb step that still shows the
-        // largest chromosome, either. Setting the value re-runs this
-        // callback with the snapped one.
+        // snap to the nearest 0.1 Mb, never below the floor: an arrow step
+        // off the floor (0.01 + 0.1 = 0.11) lands on 0.1, a typed 11.74 on
+        // 11.7, and the arrows' float drift (0.30000000000000004) on 0.3.
+        // Never above the last 0.1 Mb step that still shows the largest
+        // chromosome, either. Setting the value re-runs this callback with
+        // the snapped one.
         const floor = {MIN_SEQ_SIZE_FLOOR_MB};
-        const top = Math.max(floor, Math.floor({max_seq_size / 1e6} * 2) / 2);
-        const snapped = Math.min(top, Math.max(floor, Math.round(cb_obj.value * 2) / 2));
+        const top = Math.max(floor, Math.floor({max_seq_size / 1e6} * 10) / 10);
+        const snapped = Math.min(top, Math.max(floor, Math.round(cb_obj.value * 10) / 10));
         if (snapped !== cb_obj.value) {{
             cb_obj.value = snapped;
             return;
@@ -3663,7 +3697,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         # panel to show"
         'alignmentStats': alignment_stats,
         # --min_identity/--min_block as given on the CLI, or None (-> JSON
-        # null) meaning "use SYNCHAIN.autoParams" -- read once, by SYN.init,
+        # null) meaning "use SYNCHAIN.autoParams" (identity: a fixed 0.7;
+        # min block: tuned from the hits) -- read once, by SYN.init,
         # the moment the embedded hit tables are decoded (see that
         # function's own comment). --max_gap always has a concrete value
         # (nextflow.config itself defaults it to 25), so max_gap_spinner's
@@ -3705,14 +3740,13 @@ def main():
     parser.add_argument('--reference_hits', required=True, help='ditto, for the reference genome')
     parser.add_argument('--min_identity', type=float, default=None,
                          help='initial Min identity (%%) control value, as a 0-1 fraction -- '
-                              'default (unset): SYNCHAIN.autoParams picks it client-side from the '
-                              'actual hit tables')
+                              "default (unset): SYNCHAIN.DEFAULTS' 0.7")
     parser.add_argument('--max_gap', type=int, default=25,
                          help="initial Max gap (anchors) control value (bin/chain.js's PARAMETERS "
                               "header)")
     parser.add_argument('--min_block', type=int, default=None,
                          help='initial Min block size control value -- default (unset): '
-                              'SYNCHAIN.autoParams picks it client-side, same as --min_identity')
+                              'SYNCHAIN.autoParams picks it client-side from the actual hit tables')
     parser.add_argument('--stats', default=None,
                          help='optional compute_alignment_stats.py JSON -- shown as a small '
                               'always-visible summary panel on the page (proteome size, each '

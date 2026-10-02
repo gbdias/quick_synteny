@@ -52,8 +52,18 @@ test('every form field and every "?" names a schema parameter', () => {
     assert.ok(fields.length >= 9);
     for (const f of fields) assert.ok(props[f], `form field ${f} isn't in the schema`);
     const tips = [...html.matchAll(/class="help" data-param="(\w+)"/g)].map((m) => m[1]);
-    assert.ok(tips.length >= 9);
+    assert.ok(tips.length >= 8);
     for (const t of tips) assert.ok(props[t] && (props[t].help_text || props[t].description), `tip ${t} has no text`);
+});
+
+test('no hidden parameter is in the form or passed by the runner', () => {
+    // the chaining parameters: the result page re-chains with any values
+    const hidden = Object.keys(props).filter((n) => props[n].hidden && n !== 'help');
+    assert.deepEqual(hidden.sort(), ['max_gap', 'min_block', 'min_identity']);
+    for (const n of hidden) {
+        assert.ok(!html.includes(`name="${n}"`), `${n} is hidden but has a form field`);
+        assert.ok(!PARAMS.includes(n), `${n} is hidden but the runner passes it`);
+    }
 });
 
 test('every parameter the runner passes is in the schema', () => {

@@ -265,8 +265,9 @@ progress screen.
     reference>` by default, with `-2`, `-3`… when that's taken, so each run
     gets a folder of its own. **Change…** picks another; a folder holding
     an earlier run offers to resume it.
-  - **Options,** collapsed: the tools (Conda or Docker), then the chaining
-    and memory parameters.
+  - **Options,** collapsed: the tools (Conda or Docker), then the sequence
+    and memory parameters. The chaining parameters aren't there: the result
+    page re-chains with any values, so they're set after the run instead.
 
   The rank, the same-species switch and every option have a "?" like the
   result page's. Its text is the parameter's `description`, then its

@@ -5,10 +5,10 @@ HTML's stats panel (see plot_synteny_interactive.py --stats).
 Reads the same miniprot GFF Target=/Positive=/Rank= attributes
 extract_hits.py puts in the hit table, but only needs per-protein counts and
 each protein's best-hit score. Uses the same metric as the chainer on
-purpose: Positive= (identical or positively-scoring residues) is what the
-auto-tuned --min_identity/--min_block values in bin/chain.js are computed
-from, so the stats panel shows the same "identity" number that drives
-those defaults.
+purpose: Positive= (identical or positively-scoring residues) is what
+--min_identity filters on and what bin/chain.js auto-tunes --min_block
+from, so the stats panel's "identity" is the number a viewer compares
+the page's Min identity control against.
 """
 import argparse
 import gzip

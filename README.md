@@ -102,18 +102,29 @@ setting work for an anchor-dense 120 Mb genome and an anchor-sparse 30 Gb
 one. A block's score is its number of anchors, i.e. distinct loci on both
 genomes.
 
-Guardrails: `--min_identity` ignores weak hits. By default it's auto-tuned
-to the weaker genome's mean best-hit identity, `max(0.3, min(0.9,
-weaker_mean))`, using miniprot's Positive= "similar-or-identical residue"
-score rather than its stricter Identity=, so a divergent pair isn't forced
-through a threshold tuned for close relatives. `--min_block` drops short
-chains; it's auto-tuned off the same number (15 for a close-relative pair,
-5 for a divergent one). Pass either to pin it yourself. These only set the
-starting point: the interactive page embeds both genomes' hit tables and
-re-chains in the browser (a Web Worker running the same `bin/chain.js`), so
-min identity, max gap, hit rank and min block size can all be changed live,
-and the blocks currently on screen downloaded as a TSV. The exact chaining
-rules are specified in the header of `bin/chain.js`.
+Guardrails: min identity ignores weak hits, using miniprot's Positive=
+"similar-or-identical residue" score rather than its stricter Identity=.
+It starts at 0.7; the page's alignment summary shows each genome's average
+best-hit identity, a guide for where to move it. Min block size drops
+short chains; it starts auto-tuned off the weaker genome's average identity
+(15 for a close-relative pair, 0.8 or more, and 5 for a divergent one).
+
+**Chaining is tuned after the run, on the page.** The interactive page
+embeds both genomes' hit tables and re-chains in the browser (a Web Worker
+running the same `bin/chain.js`), so min identity, max gap, hit rank and
+min block size can all be changed live, and the blocks currently on screen
+downloaded as a TSV. A run needs no chaining decisions, and the desktop
+app doesn't ask for any. Every export records its settings: the TSV's
+first line (`# min_identity=0.7 max_gap=25 min_block=5 ...`, named after
+`bin/chain_blocks.mjs`'s flags, so it reads as the command that reproduces
+the file), an SVG's `<desc>`, and every file name
+(`..._blocks_id70_gap25_min5.tsv`). The pipeline still publishes
+`synteny/*.links.tsv` at the starting values, with the same first line,
+for use without a browser. `--min_identity`, `--max_gap` and `--min_block`
+pin those starting values. They're hidden from `--help` (`--help
+--showHidden` lists them, `--help min_identity` shows one), since the page
+is where they're meant to be set. The exact chaining rules are specified in the header of
+`bin/chain.js`.
 
 This intentionally replaces a separate ortholog-finding aligner (an earlier
 version of this pipeline used jcvi + LAST) with something cruder but much

@@ -33,7 +33,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     tuple val(reference_name), path(reference_hits)
     path target_chrom_sizes
     path reference_chrom_sizes
-    val min_identity        // '' auto-tunes client-side (SYNCHAIN.autoParams); otherwise an explicit 0-1 floor
+    val min_identity        // '' starts the page at chain.js's default (0.7); otherwise an explicit 0-1 floor
     val max_gap
     val min_block           // '' auto-tunes client-side; otherwise the initial Min block size control value
     path stats               // compute_alignment_stats.py output, for the page's stats panel -- always a real file (COMPUTE_ALIGNMENT_STATS is unconditional)
@@ -48,7 +48,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     path "${target_name}.${reference_name}.synteny.interactive.html"
 
     script:
-    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def idFlag = min_identity != '' ? "--min_identity ${min_identity}" : ''
     def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
     plot_synteny_interactive.py \\
@@ -70,7 +70,7 @@ workflow PYGENOMEVIZ_PLOT {
     hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and reference mixed together
     target_chrom_sizes     // tuple(name, path chrom.sizes)
     reference_chrom_sizes
-    min_identity           // '' auto-tunes; otherwise an explicit 0-1 floor (the page's initial control value)
+    min_identity           // '' means 0.7; otherwise an explicit 0-1 floor (the page's initial control value)
     max_gap                // max rank step between consecutive chain members (the page's initial control value)
     min_block              // '' auto-tunes; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output

@@ -54,6 +54,7 @@ echo "== --help"
 run --help
 if [ $status -eq 0 ] && grep -q -- '--max_rank' clean.txt && grep -q 'taxonomy-guided synteny plotting' clean.txt \
     && ! grep -q ERROR clean.txt; then report ok "--help lists the parameters, exits 0"; else report fail "--help"; fi
+if ! grep -qE -- '--(min_identity|max_gap|min_block)\b' clean.txt; then report ok "--help hides the chaining parameters"; else report fail "--help hides the chaining parameters"; fi
 run --help max_rank
 if [ $status -eq 0 ] && grep -q 'help_text' clean.txt; then report ok "--help max_rank shows its details"; else report fail "--help max_rank"; fi
 
