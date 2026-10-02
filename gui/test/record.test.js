@@ -54,7 +54,7 @@ test('finishing reads the summary from the run folder', () => {
     const out = fs.mkdtempSync(path.join(tmp, 'run-'));
     fs.mkdirSync(path.join(out, 'synteny'));
     fs.writeFileSync(path.join(out, 'synteny', 'target.reference.stats.json'), JSON.stringify({ proteome_total: 10760, query_aligned: 10697 }));
-    fs.writeFileSync(path.join(out, 'synteny', 'target.reference.links.tsv'), 'header\na\nb\nc\n');
+    fs.writeFileSync(path.join(out, 'synteny', 'target.reference.links.tsv'), '# min_identity=0.7\nheader\na\nb\nc\n');
     fs.writeFileSync(path.join(out, 'synteny', 'target.reference.slider_links.tsv'), 'header\na\nb\nc\nd\ne\n');
     const r = newRecord({ assembly: '/x/a.fa', reference: '/x/b.fa', proteome: '/x/p.faa', outdir: out });
     const tasks = new Map();

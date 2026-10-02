@@ -124,14 +124,15 @@
         "chaining": {
             "title": "Synteny chaining",
             "type": "object",
-            "description": "How anchors are chained into synteny blocks. These set the result page's starting point and the published links.tsv; the page can re-chain with any values.",
+            "description": "How anchors are chained into synteny blocks. Hidden: the result page re-chains with any values, so these only set where its controls start and what the published links.tsv holds.",
             "properties": {
                 "min_identity": {
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "Per-hit identity (0-1) below which a protein hit is ignored; automatic by default.",
-                    "help_text": "Identity is the share of a hit's aligned residues that are identical or similar (miniprot's Positive score). Automatic: the weaker genome's average best-hit identity, kept within 0.3-0.9, so a divergent pair isn't forced through a threshold tuned for close relatives. Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards.",
+                    "description": "Per-hit identity (0-1) below which a protein hit is ignored; 0.7 when unset.",
+                    "help_text": "Identity is the share of a hit's aligned residues that are identical or similar (miniprot's Positive score). Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards, so set it here only to pin links.tsv and the page's starting value.",
+                    "hidden": true,
                     "fa_icon": "fas fa-percentage"
                 },
                 "max_gap": {
@@ -140,6 +141,7 @@
                     "default": 25,
                     "description": "Most anchors a block may skip between two consecutive anchors, on either genome.",
                     "help_text": "Counted in anchors, not base pairs, so it means the same in a compact genome and a huge one. Larger values join fragmented blocks; smaller values split blocks at small rearrangements. 25 is MCScanX's default. The result page can change it afterwards.",
+                    "hidden": true,
                     "fa_icon": "fas fa-arrows-alt-h"
                 },
                 "min_block": {
@@ -147,6 +149,7 @@
                     "minimum": 2,
                     "description": "Minimum anchors per synteny block in links.tsv; automatic by default.",
                     "help_text": "An anchor is one locus matched on both genomes. Applies to links.tsv and to the result page's starting view. Automatic: 15 for close relatives (the weaker genome's average identity is 0.8 or more), 5 otherwise. The result page can change it afterwards.",
+                    "hidden": true,
                     "fa_icon": "fas fa-cubes"
                 }
             }

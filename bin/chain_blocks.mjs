@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // Pipeline entry point for bin/chain.js: chains one comparison (two genomes'
 // hit tables, or one genome against itself with --self) and writes
-// links.tsv (bin/chain.js's OUTPUTS header). Any parameter left out is
-// auto-tuned by SYNCHAIN.autoParams, the same function the interactive page
-// uses for its initial control values.
+// links.tsv (bin/chain.js's OUTPUTS header), its first line naming the
+// parameters used. Any parameter left out takes SYNCHAIN.autoParams' value,
+// the same function the interactive page uses for its initial control
+// values: --min_block is auto-tuned from the hits, the rest are fixed
+// defaults.
 import fs from 'node:fs';
 import v8 from 'node:v8';
 import zlib from 'node:zlib';
@@ -14,7 +16,7 @@ import {parseArgs} from 'node:util';
 // loops when node runs under x86-64 emulation on an arm64 host (an amd64
 // container on Apple Silicon): SYNCHAIN.meanBestPositive came back 0 instead
 // of 0.95 in about 1 run in 20, and almost always once the function got hot,
-// which silently re-tunes minPositive to its 0.3 floor. TurboFan alone and
+// which silently re-tunes minBlock to its divergent-pair 5. TurboFan alone and
 // the interpreter compute it correctly (160/160 under the same load, flag
 // set here). Off before chain.js is loaded, so none of it is ever
 // Maglev-compiled; the cost natively is nil at these run times.
@@ -59,7 +61,7 @@ const auto = SYNCHAIN.autoParams(A, args.self ? undefined : B);
 // Every hit carries a miniprot Positive= above 0, so with hits on both sides
 // the weaker mean best-hit positive can only be in (0, 1]. Anything else is
 // a miscomputation (see --no-maglev above), not data -- fail loudly rather
-// than chain with auto-tuned parameters derived from it. Exit status 3 is
+// than chain with a min block size tuned from it. Exit status 3 is
 // what the CHAIN_* processes retry on.
 const w = auto.weakerMeanPositive;
 if (A.n > 0 && B.n > 0 && !(w > 0 && w <= 1)) {
@@ -85,7 +87,8 @@ const result = SYNCHAIN.chain(A, B, params);
 fs.writeFileSync(args.out, SYNCHAIN.blocksToTsv(result));
 
 const shown = ['minPositive', 'maxGap', 'minBlock', 'maxHitRank', 'maxLookback', 'gapPenalty']
-    .map((k) => `${k}=${k === 'minPositive' ? params[k].toFixed(4) : params[k]}${given[k] === undefined ? ' (auto)' : ''}`)
+    .map((k) => `${k}=${k === 'minPositive' ? params[k].toFixed(4) : params[k]}`
+        + `${given[k] !== undefined ? '' : k === 'minBlock' ? ' (auto)' : ' (default)'}`)
     .join(' ');
 const s = result.stats;
 console.error(`[chain_blocks] ${args.self ? 'self' : 'cross'}: ${shown}; weaker mean best-hit positive `

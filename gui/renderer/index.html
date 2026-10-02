@@ -158,7 +158,7 @@
       <details class="options" id="options">
         <summary>
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>
-          <span class="sum-text"><span class="sum-title">Options</span><span class="sum-sub">Tools, chaining and memory. The defaults suit most genomes.</span></span>
+          <span class="sum-text"><span class="sum-title">Options</span><span class="sum-sub">Tools, sequences and memory. The defaults suit most genomes.</span></span>
           <svg class="ico chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
         </summary>
         <div class="options-body">
@@ -170,7 +170,7 @@
           <p class="hint" id="engine-hint"></p>
           <p class="field-status" id="docker-status" hidden></p>
 
-          <h3>Sequences and chaining</h3>
+          <h3>Sequences</h3>
           <!-- each "?" shows its parameter's help from the pipeline's
                nextflow_schema.json (form.js, applySchema) -->
           <div class="grid">
@@ -178,12 +178,6 @@
               <input name="min_seq_size"></label>
             <label>Min assembly gap (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
               <input name="min_asm_gap"></label>
-            <label>Min identity (0–1) <button type="button" class="help" data-param="min_identity">?</button>
-              <input name="min_identity" placeholder="automatic"></label>
-            <label>Max gap (anchors) <button type="button" class="help" data-param="max_gap">?</button>
-              <input name="max_gap"></label>
-            <label>Min block (anchors) <button type="button" class="help" data-param="min_block">?</button>
-              <input name="min_block" placeholder="automatic"></label>
           </div>
           <h3>Memory</h3>
           <div class="grid">

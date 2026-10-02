@@ -49,7 +49,7 @@ process CHAIN_CROSS {
     input:
     tuple val(target_name), path(target_hits)
     tuple val(reference_name), path(reference_hits)
-    val min_identity  // '' auto-tunes (see chain.js autoParams); otherwise an explicit 0-1 floor
+    val min_identity  // '' takes chain.js's default (0.7); otherwise an explicit 0-1 floor
     val max_gap
     val min_block     // '' auto-tunes; the slider file always uses 5 (see top of file)
 
@@ -58,7 +58,7 @@ process CHAIN_CROSS {
     tuple val(target_name), val(reference_name), path("${target_name}.${reference_name}.links.tsv"), emit: links
 
     script:
-    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def idFlag = min_identity != '' ? "--min_identity ${min_identity}" : ''
     def blockFlag = min_block ? "--min_block ${min_block}" : ''
     """
     chain_blocks.mjs --query_hits ${target_hits} --subject_hits ${reference_hits} \\
@@ -89,7 +89,7 @@ process CHAIN_SELF {
     tuple val(name), path("${name}.slider_homeolog_links.tsv"), emit: slider
 
     script:
-    def idFlag = min_identity ? "--min_identity ${min_identity}" : ''
+    def idFlag = min_identity != '' ? "--min_identity ${min_identity}" : ''
     """
     chain_blocks.mjs --query_hits ${hits} --self \\
         ${idFlag} --max_gap ${max_gap} --min_block 5 \\
@@ -143,7 +143,7 @@ workflow BUILD_SYNTENY {
     target_chrom_sizes      // tuple(name, path chrom.sizes) -- hits on sequences not listed are dropped
     reference_chrom_sizes
     proteome                // path -- the same proteome fasta MINIPROT_ALIGN aligned against both genomes
-    min_identity            // '' auto-tunes; otherwise an explicit 0-1 floor
+    min_identity            // '' takes chain.js's default (0.7); otherwise an explicit 0-1 floor
     max_gap                 // max rank step between consecutive chain members
     min_block               // '' auto-tunes; minimum block size (distinct loci) for links.tsv
     input_sources           // tuple(query source, query species, subject source, subject species,
