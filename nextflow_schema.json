@@ -173,7 +173,7 @@
                     ],
                     "exclusiveMinimum": 0,
                     "errorMessage": "must be a positive number of Gb, or given without a value for 1 Gb",
-                    "description": "Align against genome chunks of about this many Gb, in parallel, instead of one whole-genome index; without a value, 1 Gb.",
+                    "description": "Align against genome chunks of about this many Gb, in parallel, instead of one whole-genome index; a bare --miniprot_chunk_gb means 1 Gb.",
                     "help_text": "Caps miniprot's peak RAM (about 10 GB per Gb of genome; with chunks, about 11 GB per Gb of chunk plus 4 GB) for genomes whose whole-genome index won't fit. Whole sequences are never split, so a chunk is never smaller than its longest sequence. NOT identical to a whole-genome run: miniprot filters seeds and ranks hits within each chunk, so about 2% of proteins get a different best hit, and weak or secondary hits, tied best hits and small blocks can differ (large blocks don't). More chunks drift further and cost more CPU, so leave it unset when the genome fits, otherwise use the largest size that does, and compare runs only at the same setting. Unset: one whole-genome alignment.",
                     "fa_icon": "fas fa-th-large"
                 },

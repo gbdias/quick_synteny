@@ -247,14 +247,16 @@ progress screen.
       proteome slot for one found on NCBI (`--reference` without
       `--proteome`), from the organism your genome is from.
     - **A species I choose:** a species search for the reference
-      (`--reference_taxid`: its best chromosome-level assembly), or **an
-      exact assembly** (`--reference_accession`), which wins when both are
-      given. The proteome comes from NCBI, preferably of that species.
-    - **Its closest relative:** discovery, climbing from your species.
+      (`--reference_taxid`: its best chromosome-level assembly). **Have an
+      exact assembly? Enter its accession** reveals a field for one
+      (`--reference_accession`), which wins when both are given. The
+      proteome comes from NCBI, preferably of that species.
+    - **Auto-discovery:** discovery, climbing from your species.
 
-    Whenever anything comes from NCBI, the form also asks which organism
-    your genome is from (`--taxid`), how far to look and the same-species
-    switch. The species searches (`lib/taxa.js`) asks NCBI Datasets three ways at once:
+    Whenever anything comes from NCBI, Your genome gains a species search
+    for its organism (`--taxid`), and the form asks how far to look and
+    for the same-species switch. Both species searches take a name or a
+    taxid. They (`lib/taxa.js`) ask NCBI Datasets three ways at once:
     `taxon_suggest`; `taxon_suggest` limited to taxa with genomes; and an
     exact-name lookup. `taxon_suggest` alone misses some species even by
     their exact name (*Babesia ovis* got only other *Babesia*). The
@@ -265,14 +267,18 @@ progress screen.
     reference>` by default, with `-2`, `-3`… when that's taken, so each run
     gets a folder of its own. **Change…** picks another; a folder holding
     an earlier run offers to resume it.
-  - **Options,** collapsed: the tools (Conda or Docker), then the sequence
-    and memory parameters. The chaining parameters aren't there: the result
+  - **Options,** collapsed: what to run the tools with (Conda or Docker),
+    then the sequence and memory parameters, labelled by what they do
+    ("Shortest sequence to plot", "Split the genome into chunks of"), not
+    by their flags. The chaining parameters aren't there: the result
     page re-chains with any values, so they're set after the run instead.
 
   The rank, the same-species switch and every option have a "?" like the
   result page's. Its text is the parameter's `description`, then its
   `help_text`, then its default, all from the bundled
-  `nextflow_schema.json`: the same text as `--help <parameter>`. Defaults
+  `nextflow_schema.json`: the same text as `--help <parameter>`, except
+  for the few whose schema text is about the command line (`--` flags,
+  "the target"), which `GUI_HELP` in `form.js` words for the form. Defaults
   and the rank list come from the schema too. The footer says what's still
   missing, and **Start run** stays disabled until nothing is.
 - **Input checks.** These run before a run starts (`lib/inputs.js`, and
@@ -289,7 +295,7 @@ progress screen.
     has no assembly", which blocks the run.
   - Each file has to start with a `>` line, possibly gzipped.
   - Typed numbers are checked against the schema's types and limits, e.g.
-    "Min block (anchors) must be at least 2". These are the rules the
+    "Shortest sequence to plot (bp) must be a whole number". These are the rules the
     pipeline applies. If a bad value reaches the pipeline anyway,
     nf-schema's message goes in the error box.
   - A folder that can't be read (macOS privacy settings) or written blocks
@@ -310,7 +316,7 @@ progress screen.
     Nextflow's processes onto the steps and works out each one's state.
     Up to three NCBI steps come first, each only when the run needs it:
     looking up your organism, getting the reference ("Get the assembly you
-    chose", "Find the best genome of your choice", or "Find a reference
+    chose", "Find the best assembly of your species", or "Find a reference
     genome"), and finding the proteome. Steps can
     overlap: the target genome is prepared while NCBI is being searched.
   - **Where progress comes from:** Nextflow's weblog POSTs one JSON event
@@ -318,7 +324,7 @@ progress screen.
     come from the log's `Cached process` lines, and conda environment
     builds from its `Creating env using micromamba` lines; those show
     under the running step.
-  - **What we found:** what came from NCBI (species, accession, the rank
+  - **Compared:** what came from NCBI (species, accession, the rank
     it was found at, out of how many candidates; for a chosen reference,
     "your choice" and its level), parsed from `main.nf`'s
     `quick_synteny: reference accession=…` lines, and the selections in
