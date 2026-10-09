@@ -607,6 +607,10 @@ window.SYN = window.SYN || {};
 // the label inputs.
 SYN.state = {
     selection: null,
+    // the min block size the viewer set, and the one SYN.applyChainResult
+    // last fitted it to (a new longest block), until its callback has run
+    minBlockWanted: null,
+    minBlockFitted: null,
     // panel -> what the click being handled hit, if anything (see
     // SYN.onTapHit/SYN.resolveTap)
     pendingTap: {},
@@ -2620,7 +2624,33 @@ SYN.applyChainResult = function(msg) {
                                   ui.showSyntenyToggle.active, ui.ribbonSource);
         SYN.applyDotplotSegmentsForCurrentLayout(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.dpSegmentSource);
     }
-    ui.minBlockSpinner.high = maxAnyScore;
+    // high is the longest block, never below low. Bokeh clamps a value
+    // above high down to it and keeps it there, so a strict re-chain would
+    // otherwise lose the viewer's min block size for good: the value is the
+    // viewer's own (SYN.state.minBlockWanted) whenever high allows it, set
+    // in whichever order keeps it within bounds at every step
+    const spinner = ui.minBlockSpinner;
+    const floor = spinner.low;
+    const high = Math.max(floor, maxAnyScore);
+    const value = Math.min(SYN.state.minBlockWanted != null ? SYN.state.minBlockWanted : spinner.value, high);
+    // CustomJS callbacks run asynchronously, so min_block_callback tells
+    // this value from a viewer's by the value itself, not by a flag
+    if (value !== spinner.value) { SYN.state.minBlockFitted = value; }
+    if (value <= spinner.high) { spinner.value = value; spinner.high = high; } else { spinner.high = high; spinner.value = value; }
+    // no block longer than the floor (or no blocks at all): nothing to
+    // filter, so the spinner is disabled and its note says why, instead of
+    // silently ignoring every edit
+    const stuck = maxAnyScore <= floor;
+    spinner.disabled = stuck;
+    const any = msg.crossLinks.length || msg.targetSelfLinks.length || msg.referenceSelfLinks.length;
+    // after this update has finished: showing the note re-lays out the page,
+    // and a repaint in the middle of it throws (BokehJS "Out of bounds")
+    setTimeout(() => {
+        ui.minBlockNote.text = !stuck ? '' : any
+            ? `Fixed at ${floor}: no block is longer. Loosen Synteny detection for longer blocks.`
+            : 'No blocks to filter at these settings.';
+        ui.minBlockNote.visible = stuck;
+    }, 0);
     // the selection against the new blocks (a selected block that's gone
     // falls back to its pair), and the detail panel rebuilt for them --
     // which also replaces SYN.showComputingStatus's message
@@ -2744,6 +2774,9 @@ SYN.init = function(s) {
         // after this makes both redundant re-renders moot within a frame.
         s.minIdentitySpinner.value = Math.round(minPositive * 100);
         s.minBlockSpinner.value = minBlock;
+        // no change event when it already shows minBlock: the viewer's value
+        // to keep through re-chains starts here (see SYN.applyChainResult)
+        SYN.state.minBlockWanted = minBlock;
         SYN.requestChain(SYN.currentChainParams());
     }).catch(function(e) {
         console.error('SYN.startChainer failed -- the page has no synteny to show:', e);
@@ -3171,6 +3204,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                  step=1, value=min_block or 15, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
                                      "The minimum number of anchors for a syntenic block to be drawn."))
+    # shown, with the spinner disabled, when no block is longer than its
+    # floor and there's nothing to filter (SYN.applyChainResult)
+    min_block_note = Div(text="", visible=False, width=TOP_CONTROL_WIDTH, margin=(0, 5, 5, 5),
+                         styles={'font-size': '11.5px', 'line-height': '1.35', 'color': THEME['fg2']})
     # One-line status ("N blocks", plus self-link blocks while Show
     # self-links is on -- see SYN.updateChainStatus), refreshed by every
     # chain request and result -- lets a viewer tell a slow re-chain (a large
@@ -3418,6 +3455,13 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, color_spinner=color_spinner,
         self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
     ), code="""
+        // the viewer's own value, kept through re-chains that lower the
+        // spinner's high (see SYN.applyChainResult)
+        if (cb_obj.value === SYN.state.minBlockFitted) {
+            SYN.state.minBlockFitted = null;
+        } else {
+            SYN.state.minBlockWanted = cb_obj.value;
+        }
         // every rebuild below re-applies the selection (dropping a block
         // that no longer passes back to its pair) and the detail panel
         const minScore = cb_obj.value;
@@ -3616,7 +3660,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         row(control_group("Genomes", reference_label_input, target_label_input, divider=False),
             control_group("Synteny detection (recomputes)", min_identity_spinner, max_gap_spinner,
                           hit_rank_select, chain_status_div)),
-        row(control_group("Filters", min_block_spinner, min_seq_size_spinner, divider=False),
+        row(control_group("Filters", column(min_block_spinner, min_block_note), min_seq_size_spinner, divider=False),
             control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle,
                           original_names_toggle)),
         stylesheets=[CARD_CSS])
@@ -3663,7 +3707,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         dp_q_src=dp_q_src, dp_s_src=dp_s_src, dp_grid_src=dp_grid_src,
         dp_q_label_src=dp_q_label_src, dp_s_label_src=dp_s_label_src,
         dp_seg_src=dp_seg_src, dp_gap_src=dp_gap_src, dotplot_fig=dotplot_fig,
-        color_spinner=color_spinner, min_block_spinner=min_block_spinner,
+        color_spinner=color_spinner, min_block_spinner=min_block_spinner, min_block_note=min_block_note,
         min_identity_spinner=min_identity_spinner, max_gap_spinner=max_gap_spinner,
         hit_rank_select=hit_rank_select, self_links_toggle=self_links_toggle,
         show_synteny_toggle=show_synteny_toggle, chain_status_div=chain_status_div,
@@ -3683,7 +3727,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             dpQuerySource: dp_q_src, dpSubjectSource: dp_s_src, dpGridSource: dp_grid_src,
             dpQueryLabelSource: dp_q_label_src, dpSubjectLabelSource: dp_s_label_src,
             dpSegmentSource: dp_seg_src, dpGapSource: dp_gap_src, dotplotFig: dotplot_fig,
-            colorSpinner: color_spinner, minBlockSpinner: min_block_spinner,
+            colorSpinner: color_spinner, minBlockSpinner: min_block_spinner, minBlockNote: min_block_note,
             minIdentitySpinner: min_identity_spinner, maxGapSpinner: max_gap_spinner,
             hitRankSelect: hit_rank_select, selfLinksToggle: self_links_toggle,
             showSyntenyToggle: show_synteny_toggle, chainStatusDiv: chain_status_div,
