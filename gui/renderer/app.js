@@ -92,7 +92,7 @@ const STEP_TEXT = {
 // the reference step, when it isn't a search from your species outwards
 const REFERENCE_TEXT = {
     accession: ['Get the assembly you chose', 'Getting the assembly you chose', 'Got the assembly you chose'],
-    taxid: ['Find the best genome of your choice', 'Finding the best genome of your choice', 'Found the best genome of your choice'],
+    taxid: ['Find the best assembly of your species', 'Finding the best assembly of your species', 'Found the best assembly of your species'],
 };
 
 // where the reference and proteome come from: a file, an exact assembly, a
@@ -132,7 +132,7 @@ function stepDetail(r, step, showNote) {
     case 'prepare': return 'Naming the sequences and indexing both genomes';
     case 'align': return 'Where each protein sits in both genomes: these matches are the synteny anchors';
     case 'synteny': return s.blocks !== undefined ? `${num(s.blocks)} blocks` : 'Runs of anchors in the same order on both genomes';
-    case 'plot': return step.state === 'done' ? 'Ready: Open plot shows it' : 'Opens by itself when it\'s ready';
+    case 'plot': return step.state === 'done' ? 'Ready: click Open plot' : 'Opens by itself when it\'s ready';
     default: return '';
     }
 }
@@ -162,7 +162,6 @@ function renderFound(r) {
     const ref = r.found.reference;
     const prot = r.found.proteome;
     const proteins = s.proteome_total ? `${num(s.proteome_total)} proteins` : null;
-    $('#found-label').textContent = r.discovery ? 'What we found' : 'What you gave';
     // not found yet: being searched for, still to come, or never reached
     const pending = (id) => {
         const st = r.steps.find((s) => s.id === id)?.state;

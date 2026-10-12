@@ -48,7 +48,7 @@
     <div class="scroll">
       <header class="view-head">
         <h1 id="form-title">New run</h1>
-        <p id="form-sub">Plot a genome against a related one, or against files of your own.</p>
+        <p id="form-sub">Visualize synteny between two genomes.</p>
       </header>
 
       <section class="block">
@@ -64,6 +64,17 @@
           <button type="button" class="btn" data-pick="assembly" data-title="Your genome (FASTA)">Change…</button>
         </div>
         <p class="field-status" id="status-assembly" hidden></p>
+        <div id="organism-taxid" hidden>
+          <label class="field-label" for="taxon-search">Which species is your genome?</label>
+          <div class="search">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
+            <input id="taxon-search" placeholder="Species name, or an NCBI taxid" autocomplete="off">
+          </div>
+          <ul id="taxon-results" class="suggest" hidden></ul>
+          <p class="field-status" id="search-status" hidden></p>
+          <input id="taxid" name="taxid" type="hidden">
+          <p class="field-status" id="taxid-status" hidden></p>
+        </div>
       </section>
 
       <section class="block">
@@ -71,7 +82,7 @@
         <div class="segmented" role="radiogroup" aria-label="Compare it with">
           <label><input type="radio" name="mode" value="manual" checked><span>My own files</span></label>
           <label><input type="radio" name="mode" value="chosen"><span>A species I choose</span></label>
-          <label><input type="radio" name="mode" value="auto"><span>Its closest relative</span></label>
+          <label><input type="radio" name="mode" value="auto"><span>Auto-discovery</span></label>
         </div>
 
         <div id="mode-manual" class="mode-body">
@@ -89,7 +100,7 @@
           <div class="slot filled" id="slot-proteome-ncbi" hidden>
             <div class="file-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M3 12h18"></path><path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"></path></svg></div>
             <div class="file-text"><div class="slot-label">Proteome</div><div class="file-name">From NCBI</div>
-              <div class="file-meta">The annotated proteins of your organism's closest relative</div></div>
+              <div class="file-meta">The best annotated assembly in the nearest group (your species, genus, …) that has one</div></div>
             <button type="button" class="btn" id="btn-proteome-own">Use my own file</button>
           </div>
           <p class="field-status" id="status-proteome" hidden></p>
@@ -98,44 +109,37 @@
         </div>
 
         <div id="mode-chosen" class="mode-body" hidden>
-          <label for="ref-search" class="field-label">Which species should it be compared with?</label>
+          <label for="ref-search" class="field-label">Which species should your genome be compared with?</label>
           <div class="search">
             <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
             <input id="ref-search" placeholder="Species name, or an NCBI taxid" autocomplete="off">
           </div>
           <ul id="ref-results" class="suggest" hidden></ul>
           <p class="field-status" id="ref-search-status" hidden></p>
-          <div class="grid">
-            <label>Reference taxid <button type="button" class="help" data-param="reference_taxid">?</button>
-              <input id="ref-taxid" name="reference_taxid" inputmode="numeric" autocomplete="off"></label>
-            <label>Or an exact assembly <button type="button" class="help" data-param="reference_accession">?</button>
+          <input id="ref-taxid" name="reference_taxid" type="hidden">
+          <p class="field-status" id="ref-taxid-status" hidden></p>
+          <div class="grid" id="ref-accession-row" hidden>
+            <label>Exact assembly <button type="button" class="help" data-param="reference_accession">?</button>
               <input id="ref-accession" name="reference_accession" placeholder="GCA_… or GCF_…" autocomplete="off"></label>
           </div>
-          <p class="field-status" id="ref-taxid-status" hidden></p>
           <p class="field-status" id="ref-accession-status" hidden></p>
-          <p class="hint">Its best chromosome-level assembly is used, unless you give an exact one. The proteome comes from that species too, when NCBI has its proteins.</p>
+          <p class="hint">Its best chromosome-level assembly is used, unless you give an exact one. The proteome comes from that species too, if available.
+            <button type="button" class="link" id="btn-ref-accession">Have an exact assembly? Enter its accession</button></p>
         </div>
 
         <div id="mode-auto" class="mode-body" hidden>
-          <p class="hint">quick_synteny looks for the closest well-assembled genome and an annotated proteome on NCBI, starting from your genome's species and moving outwards.</p>
+          <p class="hint">quick_synteny climbs NCBI's taxonomy from your genome's species (genus, family, …) and stops at the first
+            group with a chromosome-level assembly. The best of those (by assembly level, then contig N50) becomes the reference.
+            The proteome is the reference species' own annotation if it has one, otherwise the nearest annotated assembly.</p>
         </div>
 
         <div id="organism" class="organism" hidden>
-          <label for="taxon-search" class="field-label">Which organism is your genome from?</label>
-          <div class="search">
-            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path></svg>
-            <input id="taxon-search" placeholder="Species name, or an NCBI taxid" autocomplete="off">
-          </div>
-          <ul id="taxon-results" class="suggest" hidden></ul>
-          <p class="field-status" id="search-status" hidden></p>
           <div class="grid">
-            <label>Taxid <input id="taxid" name="taxid" inputmode="numeric" autocomplete="off"></label>
-            <label>Look as far as <button type="button" class="help" data-param="max_rank">?</button>
+            <label><span id="max-rank-label">Look as far as</span> <button type="button" class="help" data-param="max_rank">?</button>
               <select name="max_rank"></select>
             </label>
           </div>
-          <p class="field-status" id="taxid-status" hidden></p>
-          <label class="check"><input type="checkbox" name="exclude_target"> Never pick a same-species reference or proteome
+          <label class="check"><input type="checkbox" name="exclude_target"> <span id="exclude-label">Never pick a same-species reference or proteome</span>
             <button type="button" class="help" data-param="exclude_target">?</button></label>
           <p class="hint" id="organism-hint" hidden>Used to find a proteome close to your genome.</p>
         </div>
@@ -162,7 +166,7 @@
           <svg class="ico chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>
         </summary>
         <div class="options-body">
-          <h3>Tools</h3>
+          <h3>Run the tools with</h3>
           <div class="tabs">
             <label><input type="radio" name="engine" value="conda" checked> Conda (no Docker needed)</label>
             <label><input type="radio" name="engine" value="docker"> Docker</label>
@@ -174,16 +178,16 @@
           <!-- each "?" shows its parameter's help from the pipeline's
                nextflow_schema.json (form.js, applySchema) -->
           <div class="grid">
-            <label>Min sequence length (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
+            <label>Shortest sequence to plot (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
               <input name="min_seq_size"></label>
-            <label>Min assembly gap (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
+            <label>Shortest gap to mark (bp) <button type="button" class="help" data-param="min_asm_gap">?</button>
               <input name="min_asm_gap"></label>
           </div>
           <h3>Memory</h3>
           <div class="grid">
-            <label>miniprot -M <button type="button" class="help" data-param="miniprot_m">?</button>
+            <label>Index sparsity (miniprot -M) <button type="button" class="help" data-param="miniprot_m">?</button>
               <input name="miniprot_m" placeholder="miniprot's default"></label>
-            <label>Chunk size (Gb) <button type="button" class="help" data-param="miniprot_chunk_gb">?</button>
+            <label>Split the genome into chunks of (Gb) <button type="button" class="help" data-param="miniprot_chunk_gb">?</button>
               <input name="miniprot_chunk_gb" id="chunk" placeholder="off: whole genome"></label>
           </div>
         </div>
@@ -234,7 +238,7 @@
         <div class="card"><ol id="run-steps" class="steps"></ol></div>
         <div class="side-col">
           <div class="card found">
-            <div class="card-label" id="found-label">What we found</div>
+            <div class="card-label">Compared</div>
             <div id="run-found"></div>
           </div>
           <details id="log-box" class="log-box">
@@ -252,7 +256,7 @@
       <header class="view-head">
         <h1>Getting quick_synteny ready</h1>
         <p>The first launch installs Nextflow, Java and two Nextflow plugins into <code id="setup-root"></code>.
-          It takes about a minute and needs an internet connection, this once.</p>
+          It takes about a minute and needs an internet connection.</p>
       </header>
       <div class="card setup-card">
         <div class="setup-row" id="setup-progress">

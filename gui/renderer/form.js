@@ -98,8 +98,8 @@ document.querySelectorAll('[data-drop]').forEach((zone) => {
 // ---------- compare with ----------
 
 // What the choices ask of NCBI: My own files can still take the proteome
-// from NCBI; A species I choose gets that reference (and a proteome); Its
-// closest relative discovers both. Anything taken from NCBI is found
+// from NCBI; A species I choose gets that reference (and a proteome);
+// Auto-discovery finds both. Anything taken from NCBI is found
 // outward from your genome's organism, so that's asked for then.
 let proteomeFromNcbi = false;
 const needsOrganism = () => mode() !== 'manual' || proteomeFromNcbi;
@@ -113,7 +113,11 @@ function showMode() {
     $('#slot-proteome-ncbi').hidden = !proteomeFromNcbi;
     $('#btn-proteome-ncbi').hidden = proteomeFromNcbi;
     $('#organism').hidden = !needsOrganism();
+    $('#organism-taxid').hidden = !needsOrganism();
     $('#organism-hint').hidden = m === 'auto';
+    // a chosen species fixes the reference itself, so the limit only reaches the proteome
+    $('#max-rank-label').textContent = m === 'auto' ? 'Look as far as' : 'Look for a proteome as far as';
+    $('#exclude-label').textContent = m === 'auto' ? 'Never pick a same-species reference or proteome' : 'Never pick a same-species proteome';
     updatePreflight();
     suggestOutdir();
     refreshForm();
@@ -146,7 +150,7 @@ function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
         else setStatus(taxidStatus, null);
         // a bare taxid in the search box (typed, or a past run's without
         // its name) gets the name NCBI gave it
-        if (t.status === 'found' && t.name && $(search).value.trim() === String(t.taxid)) $(search).value = t.name;
+        if (search && t.status === 'found' && t.name && $(search).value.trim() === String(t.taxid)) $(search).value = t.name;
         if (t.status === 'found') suggestOutdir();
         refreshForm();
     };
@@ -177,11 +181,11 @@ function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
     // a taxid and its name, as a past run had them
     p.set = (id, name) => {
         $(taxid).value = id || '';
-        $(search).value = name || id || '';
+        if (search) $(search).value = name || id || '';
         p.check();
     };
 
-    $(search).addEventListener('input', () => {
+    if (search) $(search).addEventListener('input', () => {
         clearTimeout(suggestTimer);
         const q = $(search).value.trim();
         if (/^\d+$/.test(q)) {
@@ -269,6 +273,17 @@ function checkAccession() {
     });
 }
 $('#ref-accession').addEventListener('input', checkAccession);
+
+// the exact assembly is behind a link, like the NCBI proteome: shown once
+// asked for, or when it holds a value
+function showAccessionRow(show) {
+    $('#ref-accession-row').hidden = !show;
+    $('#btn-ref-accession').hidden = show;
+}
+$('#btn-ref-accession').addEventListener('click', () => {
+    showAccessionRow(true);
+    $('#ref-accession').focus();
+});
 
 // ---------- where to save ----------
 
@@ -385,8 +400,8 @@ function updatePreflight() {
     box.hidden = false;
     box.textContent = `The largest genome is about ${gb.toFixed(2)} Gb: miniprot needs about ${need.toFixed(0)} GB of memory, `
         + `but ${inDocker ? 'Docker has' : 'this computer has'} ${memGb.toFixed(1)} GB. `
-        + `${inDocker ? 'Raise Docker Desktop\'s memory limit, or set' : 'Set'} Options → Chunk size `
-        + `to ${fit > 0 ? fit : 'a smaller value'} Gb or less (close to, but not identical to, a whole-genome run).`;
+        + `${inDocker ? 'Raise Docker Desktop\'s memory limit, or split' : 'Split'} the genome into chunks (Options → Memory) `
+        + `of ${fit > 0 ? fit : 'a smaller size'} Gb or less (close to, but not identical to, a whole-genome run).`;
 }
 $('#chunk').addEventListener('input', updatePreflight);
 
@@ -398,12 +413,27 @@ $('#chunk').addEventListener('input', updatePreflight);
 // list is its enum, and numbers are checked against its limits before a run
 let schema = {};
 
+// tips whose schema text is written for the command line (--flags, "the
+// target", a bare --miniprot_chunk_gb), in the form's own words
+const GUI_HELP = {
+    reference_accession: 'Use exactly this NCBI assembly as the reference (a GCA_ or GCF_ accession), at any assembly level. '
+        + 'When given, it is used instead of the species above, and the proteome then preferably comes from its species.',
+    max_rank: 'How far up the taxonomy to look before giving up. The search starts at your genome\'s species and moves '
+        + 'outwards (genus, family, …), stopping at this rank.',
+    exclude_target: 'Off: a same-species reference or proteome is kept when it\'s chromosome-level or better, e.g. a second '
+        + 'assembly of the same organism. On: always pick another species.',
+    miniprot_chunk_gb: 'Align against pieces of the genome of about this many Gb, instead of all of it at once, to need less '
+        + 'memory (about 11 GB per Gb of chunk, plus 4 GB). Not identical to a whole-genome run: about 2% of proteins get a '
+        + 'different best hit, and small blocks can differ. Leave it empty when the genome fits.',
+};
+
 async function applySchema() {
     const s = await window.qs.getSchema();
     schema = Object.assign({}, ...Object.values(s.$defs || {}).map((d) => d.properties || {}));
     document.querySelectorAll('.help[data-param]').forEach((btn) => {
         const p = schema[btn.dataset.param] || {};
-        const text = [p.description, p.help_text, p.default !== undefined && `Default: ${p.default}.`].filter(Boolean).join(' ');
+        const text = [GUI_HELP[btn.dataset.param] || [p.description, p.help_text], p.default !== undefined && `Default: ${p.default}.`]
+            .flat().filter(Boolean).join(' ');
         btn.dataset.help = text;
         btn.setAttribute('aria-label', text);
     });
@@ -490,7 +520,7 @@ function validate(form) {
         }
     }
     if (needsOrganism()) {
-        if (!form.taxid) return 'Pick the organism your genome is from.';
+        if (!form.taxid) return 'Enter your genome\'s species (a name or an NCBI taxid).';
         const bad = taxonProblem(organism, form.taxid);
         if (bad) return bad;
     }
@@ -508,7 +538,7 @@ function validate(form) {
 function refreshForm(error = null) {
     const msg = $('#form-msg');
     const blocked = validate(collectForm());
-    msg.textContent = error || blocked || 'Ready. A genome this size usually takes a few minutes.';
+    msg.textContent = error || blocked || 'Ready to start.';
     msg.className = `form-msg ${error ? 'bad' : ''}`;
     $('#btn-run').disabled = !!blocked;
 }
@@ -563,6 +593,7 @@ function resetForm() {
     checkAccession();
     for (const sel of ['#taxon-results', '#ref-results']) $(sel).hidden = true;
     for (const sel of ['#search-status', '#ref-search-status']) setStatus(sel, null);
+    showAccessionRow(false);
     clearTimeout(suggestTimerOut);
     outdir = null;
     outdirInfo = null;
@@ -606,6 +637,7 @@ async function prefillForm(r) {
     if (f.taxid) organism.set(f.taxid, r.targetSpecies);
     if (f.reference_taxid) referenceTaxon.set(f.reference_taxid, r.found?.reference?.species);
     $('#ref-accession').value = f.reference_accession || '';
+    showAccessionRow(!!f.reference_accession);
     checkAccession();
     if (f.max_rank) document.querySelector('[name=max_rank]').value = f.max_rank;
     document.querySelector('[name=exclude_target]').checked = !!f.exclude_target;

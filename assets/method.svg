@@ -1,0 +1,222 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 460" width="1200" height="460" role="img" aria-labelledby="title desc">
+  <title id="title">How quick_synteny works</title>
+  <desc id="desc">Three steps. 1: climb the taxonomy from your genome's species until a rank has a chromosome-level assembly, and take its chromosome-level assembly with the highest contig N50 as the reference; the proteome is the reference species' own annotation, or else the nearest annotated assembly. 2: align that one proteome to both genomes with miniprot; a protein's locus in each genome is an anchor. 3: chain anchors that run in the same order on both genomes into blocks, allowing gaps of at most max_gap anchors; plus blocks run diagonally, minus blocks (inversions) anti-diagonally, and runs shorter than min block are dropped.</desc>
+  <style>
+    svg { --card: #F6F7F3; --line: #D9DCD3; --fg: #1C1E19; --muted: #5A5F55; --faint: #A3A89C;
+          --accent: #95B540; --ink: #46600F; --tint: #EEF4DE; --target: #9A9E94;
+          --c1: #4E79A7; --c2: #E1813B; --c3: #59A14F; --badge-fg: #FFFFFF; }
+    @media (prefers-color-scheme: dark) {
+      svg { --card: #161B22; --line: #30363D; --fg: #E6EDF3; --muted: #9198A1; --faint: #59606A;
+            --accent: #9CC24A; --ink: #B9D873; --tint: #233016; --target: #7D838C;
+            --c1: #6F9BD1; --c2: #F0995A; --c3: #7CC36F; --badge-fg: #0D1117; }
+    }
+    text { font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: var(--fg); }
+    .card { fill: var(--card); stroke: var(--line); stroke-width: 1; }
+    .title { font-size: 15px; font-weight: 700; }
+    .sub { font-size: 12px; fill: var(--muted); }
+    .small { font-size: 11.5px; }
+    .muted { fill: var(--muted); }
+    .faint { fill: var(--faint); }
+    .ink { fill: var(--ink); font-weight: 700; }
+    .badge { fill: var(--accent); }
+    .badge-t { font-size: 13px; font-weight: 700; fill: var(--badge-fg); text-anchor: middle; }
+    .rail { stroke: var(--line); stroke-width: 2; }
+    .climb { stroke: var(--accent); stroke-width: 3; fill: none; }
+    .rung { fill: var(--card); stroke: var(--muted); stroke-width: 1.5; }
+    .rung-on { fill: var(--accent); stroke: var(--accent); }
+    .band { fill: var(--tint); }
+    .chip-full { fill: var(--accent); }
+    .chip-part { fill: none; stroke: var(--muted); stroke-width: 1.3; stroke-dasharray: 3 2; }
+    .arrow { stroke: var(--muted); stroke-width: 1.6; fill: none; }
+    .head { fill: var(--muted); }
+    .prot { stroke: var(--faint); stroke-width: 2.5; stroke-linecap: round; }
+    .prot-on { stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round; }
+    .box { fill: none; stroke: var(--muted); stroke-width: 1.3; }
+    .tchr { fill: var(--target); }
+    .r1 { fill: var(--c1); } .r2 { fill: var(--c2); } .r3 { fill: var(--c3); }
+    .tick { stroke: var(--fg); stroke-width: 1.2; opacity: .35; }
+    .tick-on { stroke: var(--accent); stroke-width: 3; }
+    .anchor { stroke: var(--accent); stroke-width: 1.8; stroke-dasharray: 5 4; fill: none; }
+    .halo { paint-order: stroke; stroke: var(--card); stroke-width: 5px; stroke-linejoin: round; }
+    .axis { stroke: var(--muted); stroke-width: 1.3; }
+    .dot1 { fill: var(--c1); } .dot2 { fill: var(--c2); }
+    .chain1 { stroke: var(--c1); stroke-width: 2.5; fill: none; opacity: .55; }
+    .chain2 { stroke: var(--c2); stroke-width: 2.5; fill: none; opacity: .55; }
+    .noise { fill: none; stroke: var(--faint); stroke-width: 1.4; }
+    .short { fill: var(--faint); }
+    .short-line { stroke: var(--faint); stroke-width: 2; stroke-dasharray: 3 3; }
+    .bracket { stroke: var(--fg); stroke-width: 1.2; fill: none; }
+  </style>
+  <defs>
+    <marker id="tip" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" class="head"/>
+    </marker>
+    <marker id="tip-accent" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" class="badge"/>
+    </marker>
+  </defs>
+
+  <!-- ============ 1. choose a reference and proteome ============ -->
+  <rect class="card" x="10" y="10" width="370" height="410" rx="12"/>
+  <circle class="badge" cx="34" cy="36" r="12"/><text class="badge-t" x="34" y="41">1</text>
+  <text class="title" x="54" y="41">Find a reference and proteome</text>
+  <text class="sub" x="24" y="66">Climb NCBI's taxonomy from your genome's species,</text>
+  <text class="sub" x="24" y="81">stopping at the first rank with a chromosome-level assembly.</text>
+
+  <rect class="band" x="18" y="178" width="354" height="32" rx="6"/>
+  <line class="rail" x1="40" y1="110" x2="40" y2="244"/>
+  <line class="climb" x1="40" y1="236" x2="40" y2="204" marker-end="url(#tip-accent)"/>
+
+  <circle class="rung" cx="40" cy="110" r="6"/>
+  <text class="small faint" x="56" y="114">order (--max_rank)</text>
+  <text class="small faint" x="196" y="114" font-style="italic">not searched</text>
+
+  <circle class="rung" cx="40" cy="152" r="6"/>
+  <text class="small faint" x="56" y="156">family</text>
+  <text class="small faint" x="196" y="156" font-style="italic">not searched</text>
+
+  <circle class="rung rung-on" cx="40" cy="194" r="6"/>
+  <text class="small" x="56" y="198" font-weight="700">genus</text>
+  <rect class="chip-full" x="196" y="187" width="22" height="14" rx="3"/>
+  <rect class="chip-full" x="224" y="187" width="22" height="14" rx="3"/>
+  <rect class="chip-part" x="252" y="187" width="22" height="14" rx="3"/>
+  <text class="small ink" x="286" y="198">stop here</text>
+
+  <circle class="rung" cx="40" cy="244" r="6"/>
+  <text class="small" x="56" y="248">species (yours)</text>
+  <rect class="chip-part" x="196" y="237" width="22" height="14" rx="3"/>
+  <rect class="chip-part" x="224" y="237" width="22" height="14" rx="3"/>
+  <text class="small muted" x="256" y="248">scaffolds only</text>
+
+  <text class="small" x="24" y="284" font-weight="700">Rank its chromosome-level assemblies by contig N50</text>
+  <rect class="chip-full" x="24" y="295" width="22" height="14" rx="3"/>
+  <text class="small" x="56" y="306">chromosome · contig N50 2.1 Mb</text>
+  <text class="small ink" x="262" y="306">→ reference</text>
+  <rect class="chip-full" x="24" y="317" width="22" height="14" rx="3"/>
+  <text class="small muted" x="56" y="328">chromosome · contig N50 0.8 Mb</text>
+  <rect class="chip-part" x="24" y="339" width="22" height="14" rx="3"/>
+  <text class="small muted" x="56" y="350">scaffold-level: never a reference</text>
+
+  <text class="small" x="24" y="382"><tspan font-weight="700">Proteome:</tspan> the reference species' own annotation</text>
+  <text class="small" x="24" y="398">if it has one, otherwise the nearest annotated</text>
+  <text class="small" x="24" y="414">assembly, found by the same climb.</text>
+
+  <line class="arrow" x1="384" y1="215" x2="410" y2="215" marker-end="url(#tip)"/>
+
+  <!-- ============ 2. align one proteome to both genomes ============ -->
+  <rect class="card" x="415" y="10" width="370" height="410" rx="12"/>
+  <circle class="badge" cx="439" cy="36" r="12"/><text class="badge-t" x="439" y="41">2</text>
+  <text class="title" x="459" y="41">Align one proteome to both genomes</text>
+  <text class="sub" x="429" y="66">miniprot finds each protein's spliced alignments in</text>
+  <text class="sub" x="429" y="81">both assemblies, so neither needs an annotation.</text>
+
+  <text class="small muted" x="470" y="163" text-anchor="middle">proteome</text>
+  <rect class="box" x="440" y="170" width="60" height="104" rx="6"/>
+  <line class="prot" x1="450" y1="183" x2="490" y2="183"/>
+  <line class="prot" x1="450" y1="195" x2="484" y2="195"/>
+  <line class="prot" x1="450" y1="207" x2="490" y2="207"/>
+  <line class="prot-on" x1="450" y1="221" x2="488" y2="221"/>
+  <line class="prot" x1="450" y1="235" x2="482" y2="235"/>
+  <line class="prot" x1="450" y1="247" x2="490" y2="247"/>
+  <line class="prot" x1="450" y1="259" x2="486" y2="259"/>
+  <text class="small ink" x="470" y="292" text-anchor="middle">protein P</text>
+
+  <path class="arrow" d="M503 196 C 530 170, 530 130, 552 118" marker-end="url(#tip)"/>
+  <path class="arrow" d="M503 248 C 530 274, 530 300, 552 312" marker-end="url(#tip)"/>
+  <text class="small muted" x="534" y="166">miniprot</text>
+  <text class="small muted" x="534" y="278">miniprot</text>
+
+  <text class="small" x="560" y="98">your genome (target)</text>
+  <rect class="tchr" x="560" y="108" width="82" height="14" rx="4"/>
+  <rect class="tchr" x="648" y="108" width="62" height="14" rx="4"/>
+  <rect class="tchr" x="716" y="108" width="56" height="14" rx="4"/>
+  <g class="tick">
+    <line x1="568" y1="104" x2="568" y2="126"/><line x1="579" y1="104" x2="579" y2="126"/>
+    <line x1="590" y1="104" x2="590" y2="126"/><line x1="612" y1="104" x2="612" y2="126"/>
+    <line x1="626" y1="104" x2="626" y2="126"/><line x1="658" y1="104" x2="658" y2="126"/>
+    <line x1="671" y1="104" x2="671" y2="126"/><line x1="690" y1="104" x2="690" y2="126"/>
+    <line x1="703" y1="104" x2="703" y2="126"/><line x1="726" y1="104" x2="726" y2="126"/>
+    <line x1="741" y1="104" x2="741" y2="126"/><line x1="760" y1="104" x2="760" y2="126"/>
+  </g>
+  <line class="tick-on" x1="601" y1="101" x2="601" y2="129"/>
+  <text class="small ink" x="601" y="144" text-anchor="middle">locus i</text>
+
+  <text class="small" x="560" y="300">reference genome</text>
+  <rect class="r1" x="560" y="310" width="88" height="14" rx="4"/>
+  <rect class="r2" x="654" y="310" width="58" height="14" rx="4"/>
+  <rect class="r3" x="718" y="310" width="54" height="14" rx="4"/>
+  <g class="tick">
+    <line x1="569" y1="306" x2="569" y2="328"/><line x1="583" y1="306" x2="583" y2="328"/>
+    <line x1="598" y1="306" x2="598" y2="328"/><line x1="617" y1="306" x2="617" y2="328"/>
+    <line x1="636" y1="306" x2="636" y2="328"/><line x1="663" y1="306" x2="663" y2="328"/>
+    <line x1="677" y1="306" x2="677" y2="328"/><line x1="701" y1="306" x2="701" y2="328"/>
+    <line x1="729" y1="306" x2="729" y2="328"/><line x1="744" y1="306" x2="744" y2="328"/>
+    <line x1="762" y1="306" x2="762" y2="328"/>
+  </g>
+  <line class="tick-on" x1="689" y1="303" x2="689" y2="331"/>
+  <text class="small ink" x="689" y="346" text-anchor="middle">locus j</text>
+
+  <path class="anchor" d="M601 150 C 610 210, 680 240, 689 287"/>
+  <text class="small ink halo" x="652" y="222">anchor (i, j)</text>
+
+  <text class="small" x="429" y="382">Overlapping hits form one locus, so isoforms count</text>
+  <text class="small" x="429" y="398">once. An anchor is one protein's locus in each</text>
+  <text class="small" x="429" y="414">genome; it's the unit everything after counts in.</text>
+
+  <line class="arrow" x1="789" y1="215" x2="815" y2="215" marker-end="url(#tip)"/>
+
+  <!-- ============ 3. chain anchors into blocks ============ -->
+  <rect class="card" x="820" y="10" width="370" height="410" rx="12"/>
+  <circle class="badge" cx="844" cy="36" r="12"/><text class="badge-t" x="844" y="41">3</text>
+  <text class="title" x="864" y="41">Chain anchors into blocks</text>
+  <text class="sub" x="834" y="66">Anchors in the same order on both genomes form a</text>
+  <text class="sub" x="834" y="81">block; its score is its number of anchors.</text>
+
+  <line class="axis" x1="866" y1="336" x2="1176" y2="336" marker-end="url(#tip)"/>
+  <line class="axis" x1="866" y1="336" x2="866" y2="96" marker-end="url(#tip)"/>
+  <text class="small muted" x="1020" y="354" text-anchor="middle">target loci, in genome order</text>
+  <text class="small muted" transform="translate(852 216) rotate(-90)" text-anchor="middle">reference loci, in order</text>
+
+  <!-- unchained anchors -->
+  <g class="noise">
+    <circle cx="902" cy="160" r="3.5"/><circle cx="934" cy="122" r="3.5"/><circle cx="1012" cy="296" r="3.5"/>
+    <circle cx="1160" cy="236" r="3.5"/><circle cx="880" cy="214" r="3.5"/><circle cx="1158" cy="122" r="3.5"/>
+    <circle cx="956" cy="290" r="3.5"/><circle cx="1000" cy="132" r="3.5"/><circle cx="1040" cy="262" r="3.5"/>
+    <circle cx="962" cy="254" r="3.5"/>
+  </g>
+
+  <!-- + block, with one gap -->
+  <polyline class="chain1" points="884,318 896,308 909,296 920,287 932,274 944,265 976,234 988,224 1000,212 1012,201 1024,190"/>
+  <g class="dot1">
+    <circle cx="884" cy="318" r="4"/><circle cx="896" cy="308" r="4"/><circle cx="909" cy="296" r="4"/>
+    <circle cx="920" cy="287" r="4"/><circle cx="932" cy="274" r="4"/><circle cx="944" cy="265" r="4"/>
+    <circle cx="976" cy="234" r="4"/><circle cx="988" cy="224" r="4"/><circle cx="1000" cy="212" r="4"/>
+    <circle cx="1012" cy="201" r="4"/><circle cx="1024" cy="190" r="4"/>
+  </g>
+  <path class="bracket" d="M948 274 L 948 280 L 972 280 L 972 274"/>
+  <text class="small halo" x="960" y="296" text-anchor="middle" dy="12">gap ≤ max_gap</text>
+  <text class="small halo" x="1032" y="196" font-weight="700">+ block</text>
+
+  <!-- − block (inverted) -->
+  <polyline class="chain2" points="1046,112 1057,121 1069,131 1080,140 1092,151 1104,160 1115,170 1127,180"/>
+  <g class="dot2">
+    <circle cx="1046" cy="112" r="4"/><circle cx="1057" cy="121" r="4"/><circle cx="1069" cy="131" r="4"/>
+    <circle cx="1080" cy="140" r="4"/><circle cx="1092" cy="151" r="4"/><circle cx="1104" cy="160" r="4"/>
+    <circle cx="1115" cy="170" r="4"/><circle cx="1127" cy="180" r="4"/>
+  </g>
+  <text class="small halo" x="1000" y="104" font-weight="700">− block (inverted)</text>
+
+  <!-- a run too short to keep -->
+  <line class="short-line" x1="1076" y1="310" x2="1100" y2="290"/>
+  <g class="short"><circle cx="1076" cy="310" r="3.5"/><circle cx="1088" cy="300" r="3.5"/><circle cx="1100" cy="290" r="3.5"/></g>
+  <text class="small muted halo" x="1108" y="286">fewer than</text>
+  <text class="small muted halo" x="1108" y="300">min block:</text>
+  <text class="small muted halo" x="1108" y="314">dropped</text>
+
+  <text class="small" x="834" y="382">Gaps are counted in anchors, not base pairs, so one</text>
+  <text class="small" x="834" y="398">max gap suits small and huge genomes alike. Open</text>
+  <text class="small" x="834" y="414">circles are anchors no block takes.</text>
+
+  <!-- ============ caption ============ -->
+  <text class="sub" x="600" y="448" text-anchor="middle">With your own reference and proteome, step 1 is skipped; with a reference you choose, only the proteome is searched for. Step 3 reruns on the result page when you change a setting.</text>
+</svg>

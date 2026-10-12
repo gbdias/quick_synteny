@@ -52,7 +52,7 @@ test('every form field and every "?" names a schema parameter', () => {
     assert.ok(fields.length >= 9);
     for (const f of fields) assert.ok(props[f], `form field ${f} isn't in the schema`);
     const tips = [...html.matchAll(/class="help" data-param="(\w+)"/g)].map((m) => m[1]);
-    assert.ok(tips.length >= 8);
+    assert.ok(tips.length >= 7);
     for (const t of tips) assert.ok(props[t] && (props[t].help_text || props[t].description), `tip ${t} has no text`);
 });
 

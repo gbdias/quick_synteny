@@ -71,9 +71,9 @@ function run(cmd, args, opts = {}) {
 }
 
 // micromamba prints long solves and downloads; stream them to the UI
-function stream(cmd, args, env, onLog) {
+function stream(cmd, args, env, onLog, cwd) {
     return new Promise((resolve, reject) => {
-        const child = spawn(cmd, args, { env });
+        const child = spawn(cmd, args, { env, cwd });
         child.stdout.on('data', (d) => onLog(String(d)));
         child.stderr.on('data', (d) => onLog(String(d)));
         child.on('error', reject);
@@ -157,7 +157,9 @@ async function setup(runtimeYml, onLog) {
     }
     for (const id of missingPlugins()) {
         onLog(`Installing the Nextflow plugin ${id}…\n`);
-        await stream(nextflow, ['plugin', 'install', id], runtimeEnv(), onLog);
+        // Nextflow makes a .nextflow/ dir in its cwd, and a packaged app's cwd
+        // (/ on macOS) isn't writable
+        await stream(nextflow, ['plugin', 'install', id], runtimeEnv(), onLog, ROOT);
     }
     const s = await status();
     if (!s.ok) throw new Error(`runtime installed, but nextflow does not start:\n${s.detail || ''}`);
