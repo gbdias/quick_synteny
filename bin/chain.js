@@ -33,17 +33,23 @@
 //   selfMode     bool         both sides are the same table (homeolog scan)
 //   Nothing is tuned to the data: minPositive 0.7 and minBlock 15 are only
 //   where the page's controls start, and a viewer moves them from there.
-//   Checked 2026-09-23: at minBlock 15, axolotl-vs-itself gives 22 blocks
-//   (one per chromosome arm, 98.5 % coverage) and A. thaliana vs the
-//   allotetraploid A. suecica gives depth 1.99 (its two subgenomes); at 5,
-//   Arabidopsis's short ancient-duplication blocks join in (depth 2.72).
+//   Checked 2026-10-12 (VERSION 2) on the hit tables under results/ and
+//   scratch/: at minBlock 15, axolotl (A. mexicanum) against itself gives 27
+//   blocks covering 99.4 % of the sequence its hits span, and the
+//   allotetraploid A. suecica against A. thaliana gives 195 blocks, thaliana
+//   covered at depth 2.61; at 5, Arabidopsis's short ancient-duplication
+//   blocks join in (depth 4.24). On the same anchors, every block MCScanX
+//   1.0.0 reports at its defaults (with -m maxGap-1) is matched 1:1 for
+//   suecica vs thaliana, A. mexicanum vs A. tigrinum and two yeast pairs;
+//   the extra blocks here are short or gappy ones its score cutoff and
+//   E-value test drop.
 //   meanBestPositive (mean over proteins of their rank-1 positive, the best
 //   positive if no rank-1 hit) only serves chain_blocks.mjs's sanity check.
 //   gapPenalty stays 0 by default: 0.1 removes the end-extension noise of
-//   note (b) below on synthetic data at no recall cost, but on thaliana vs
-//   suecica it also splits real, gappy ancient-duplication blocks (depth
-//   2.72 -> 2.15). The page runs one parameter set for all three of its
-//   chains (cross and both self).
+//   note (b) below on synthetic data at no recall cost (checked with
+//   VERSION 1), but on suecica vs thaliana it also splits real, gappy
+//   ancient-duplication blocks (minBlock 5: depth 4.24 -> 2.71). The page
+//   runs one parameter set for all three of its chains (cross and both self).
 //
 // CHAINING RULES (normative):
 //   1. A locus passes if any of its hits passes. A passing locus's rank
@@ -52,7 +58,12 @@
 //   2. Anchors: for each protein, every (passing hit a in A, passing hit b in
 //      B), collapsed to one per (locusA, locusB) keeping the highest
 //      min(positive_a, positive_b); ties -> lower rank_a + rank_b, then lower
-//      a, then lower b.
+//      a, then lower b. Then MCScanX's repeat collapse (its -w,
+//      COLLAPSE_WINDOW = 5), per (chromA, chromB): anchors sharing rankA,
+//      each with rankB within 5 of the previous one's, form a run, of which
+//      only the highest min(positive) stays (the lowest rankB on ties); then
+//      the same along B over what's left (shared rankB, rankA within 5,
+//      lowest rankA on ties). Tandem copies would otherwise chain in parallel.
 //   3. Self mode keeps only locusA < locusB and drops same-chromosome pairs
 //      with |rankA - rankB| <= maxGap (tandem neighbours).
 //   4. DP per (chromA, chromB) and orientation o in {+, -}, anchors sorted by
@@ -62,10 +73,16 @@
 //      and 1 <= dB <= maxGap, dB = rankB_i - rankB_j for '+' and
 //      rankB_j - rankB_i for '-'. f_i = max(1, max_j f_j + 1 -
 //      gapPenalty * (max(dA, dB) - 1)); the first j found wins ties.
-//   5. Extraction: all (anchor, orientation) pairs by f descending, ties '+'
-//      first, then lower anchor index. From each still-unused anchor, walk
-//      parent links marking anchors used, stopping at the first used one;
-//      each walk is one chain. Anchors are marked whatever the chain length.
+//   5. Extraction, per (chromA, chromB), in rounds. Each round runs rule 4
+//      over the anchors still free, then takes chain ends that have a
+//      parent (chains of two or more) by f descending, ties '+' first, then
+//      lower anchor index. From each end not yet taken this round, walk the
+//      parent links: a walk that reaches an anchor taken this round ends the
+//      round untaken; otherwise the whole walk is one chain. The anchors
+//      taken leave, and the next round reruns the DP; a round with no such
+//      walk is the last. Anchors left over are in no chain. This is
+//      MCScanX's dagchainer without its score cutoff: a walk is never cut
+//      short, and a lone anchor never takes another chain's anchor.
 //   6. Blocks are chains with length >= minBlock. Since extraction ignores
 //      minBlock, the blocks at threshold T are exactly the blocks at any
 //      T' < T filtered to length >= T -- a min-block control is a pure filter.
@@ -75,9 +92,16 @@
 //   (a) Anchor deserts don't break chains: distance counts passing loci, so two
 //       loci with nothing between them are adjacent however many bp apart.
 //       That is what makes chaining genome-size invariant (a bp limit found
-//       0.3 % of axolotl-vs-itself; this finds 98.5 %).
+//       0.3 % of axolotl-vs-itself; this found 98.5 %, with VERSION 1).
 //   (b) Noise can extend a block's ends, never its interior: monotonicity
 //       only leaves room beyond a block's last true anchor.
+//   (c) A block can bridge a shorter inversion: the '+' chain jumps from one
+//       flank to the inversion's middle anchor and on to the other flank
+//       (any inversion under about 2 * maxGap loci), while the rest of the
+//       inversion is its own '-' block, so the two spans overlap, as in
+//       MCScanX. Rule 5's rounds keep that '-' block: in VERSION 1's single
+//       pass, the inverted anchors' high '+' scores (from following on from
+//       the flank) took them first as one-anchor chains.
 //
 // OUTPUTS: Block = {qChrom, sChrom (chrom indices), qStart, qEnd, sStart,
 //   sEnd (min start / max end over member hits), orientation, nAnchors
@@ -111,8 +135,9 @@
 (function (root) {
     'use strict';
 
-    const VERSION = 1;
+    const VERSION = 2;
     const MIN_CHAIN_LENGTH = 2;   // a single anchor is never a block, whatever minBlock says
+    const COLLAPSE_WINDOW = 5;    // CHAINING RULES 2: MCScanX's default -w
 
     const DEFAULTS = {
         minPositive: 0.7,
@@ -314,82 +339,126 @@
         ord = countingSort(ord, rA, LA.maxRank + 1);
         ord = countingSort(ord, pair, maxPair + 1);
 
+        const keep = collapseRepeats(ord, pair, rA, rB, cQ);
+        let nk = 0;
+        for (let k = 0; k < n; k++) { if (keep[k]) { nk++; } }
         const anchors = {
-            n, ha: new Uint32Array(n), hb: new Uint32Array(n), qual: new Uint16Array(n),
-            pair: new Uint32Array(n), rA: new Uint32Array(n), rB: new Uint32Array(n),
+            n: nk, ha: new Uint32Array(nk), hb: new Uint32Array(nk), qual: new Uint16Array(nk),
+            pair: new Uint32Array(nk), rA: new Uint32Array(nk), rB: new Uint32Array(nk),
         };
-        for (let k = 0; k < n; k++) {
+        for (let k = 0, x = 0; k < n; k++) {
+            if (!keep[k]) { continue; }
             const c = ord[k];
-            anchors.ha[k] = cHa[c]; anchors.hb[k] = cHb[c]; anchors.qual[k] = cQ[c];
-            anchors.pair[k] = pair[c]; anchors.rA[k] = rA[c]; anchors.rB[k] = rB[c];
+            anchors.ha[x] = cHa[c]; anchors.hb[x] = cHb[c]; anchors.qual[x] = cQ[c];
+            anchors.pair[x] = pair[c]; anchors.rA[x] = rA[c]; anchors.rB[x] = rB[c];
+            x++;
         }
         return anchors;
     }
 
+    // CHAINING RULES 2, second half (MCScanX's -w): over `ord` (candidate
+    // indices sorted by pair, rankA, rankB), a locus's anchors whose partners
+    // lie within COLLAPSE_WINDOW ranks of the previous one form a run, and
+    // only the run's best min(positive) is kept, the first on ties; first
+    // along A, then along B over what's left. Returns keep flags by position
+    // in `ord`.
+    function collapseRepeats(ord, pair, rA, rB, qual) {
+        const n = ord.length, keep = new Uint8Array(n).fill(1);
+        const pass = (pos, same, step) => {
+            for (let s = 0; s < pos.length;) {
+                let best = pos[s], e = s + 1;
+                while (e < pos.length && same(pos[e - 1], pos[e]) && step(pos[e - 1], pos[e]) <= COLLAPSE_WINDOW) {
+                    if (qual[ord[pos[e]]] > qual[ord[best]]) { best = pos[e]; }
+                    e++;
+                }
+                for (let k = s; k < e; k++) { if (pos[k] !== best) { keep[pos[k]] = 0; } }
+                s = e;
+            }
+        };
+        const at = (k) => ord[k];
+        // along A: `ord` is already in (pair, rankA, rankB) order
+        const byA = Array.from({length: n}, (_, k) => k);
+        pass(byA, (x, y) => pair[at(x)] === pair[at(y)] && rA[at(x)] === rA[at(y)], (x, y) => rB[at(y)] - rB[at(x)]);
+        // along B: the survivors in (pair, rankB, rankA) order
+        const byB = byA.filter((k) => keep[k]);
+        byB.sort((x, y) => (pair[at(x)] - pair[at(y)]) || (rB[at(x)] - rB[at(y)]) || (rA[at(x)] - rA[at(y)]));
+        pass(byB, (x, y) => pair[at(x)] === pair[at(y)] && rB[at(x)] === rB[at(y)], (x, y) => rA[at(y)] - rA[at(x)]);
+        return keep;
+    }
+
     // ---------------------------------------------------------------- stage 2: DP + extraction
 
+    // CHAINING RULES 4-5: per chromosome pair, rounds of DP over the anchors
+    // still free; each round takes chains by f descending until a walk
+    // reaches an anchor taken earlier in the round, then the DP reruns
+    // without the taken anchors. The first candidate of a round is always
+    // taken whole, so every round makes progress.
     function chainAnchors(an, q) {
         const n = an.n, G = q.maxGap, H = q.maxLookback, pen = q.gapPenalty;
         const rA = an.rA, rB = an.rB;
-        const f = [new Float64Array(n), new Float64Array(n)];
-        const par = [new Int32Array(n), new Int32Array(n)];
+        const free = new Uint8Array(n).fill(1);
+        const members = new Uint32Array(n);
+        const chainOff = [0], chainOri = [];
+        let m = 0;
         for (let s = 0; s < n;) {
             let e = s;
             const pr = an.pair[s];
             while (e < n && an.pair[e] === pr) { e++; }
-            for (let o = 0; o < 2; o++) {
-                const F = f[o], P = par[o];
-                for (let i = s; i < e; i++) {
-                    let best = 1, bj = -1, valid = 0;
-                    for (let j = i - 1; j >= s; j--) {
-                        const dA = rA[i] - rA[j];
-                        if (dA > G) { break; }
-                        if (dA === 0) { continue; }
-                        const dB = o === 0 ? rB[i] - rB[j] : rB[j] - rB[i];
-                        if (dB < 1 || dB > G) { continue; }
-                        const sc = F[j] + 1 - pen * (Math.max(dA, dB) - 1);
-                        if (sc > best) { best = sc; bj = j; }
-                        if (++valid >= H) { break; }
+            for (;;) {
+                const idx = [];
+                for (let i = s; i < e; i++) { if (free[i]) { idx.push(i); } }
+                const k = idx.length;
+                if (k < MIN_CHAIN_LENGTH) { break; }
+                const f = [new Float64Array(k), new Float64Array(k)];
+                const par = [new Int32Array(k), new Int32Array(k)];
+                for (let o = 0; o < 2; o++) {
+                    const F = f[o], P = par[o];
+                    for (let x = 0; x < k; x++) {
+                        const i = idx[x];
+                        let best = 1, bj = -1, valid = 0;
+                        for (let y = x - 1; y >= 0; y--) {
+                            const j = idx[y];
+                            const dA = rA[i] - rA[j];
+                            if (dA > G) { break; }
+                            if (dA === 0) { continue; }
+                            const dB = o === 0 ? rB[i] - rB[j] : rB[j] - rB[i];
+                            if (dB < 1 || dB > G) { continue; }
+                            const sc = F[y] + 1 - pen * (Math.max(dA, dB) - 1);
+                            if (sc > best) { best = sc; bj = y; }
+                            if (++valid >= H) { break; }
+                        }
+                        F[x] = best; P[x] = bj;
                     }
-                    F[i] = best; P[i] = bj;
                 }
+
+                // rule 5: chain ends c = o*k + x (two or more members), by f
+                // descending, ties by c ascending ('+' first, then lower anchor)
+                const cand = [];
+                for (let c = 0; c < 2 * k; c++) { if (par[c < k ? 0 : 1][c < k ? c : c - k] >= 0) { cand.push(c); } }
+                if (!cand.length) { break; }
+                const fv = (c) => (c < k ? f[0][c] : f[1][c - k]);
+                cand.sort((x, y) => (fv(y) - fv(x)) || (x - y));
+
+                const used = new Uint8Array(k);
+                let collided = false;
+                for (const c of cand) {
+                    const o = c < k ? 0 : 1, P = par[o];
+                    const end = c < k ? c : c - k;
+                    if (used[end]) { continue; }
+                    let len = 0, y = end;
+                    while (y >= 0 && !used[y]) { len++; y = P[y]; }
+                    if (y >= 0) { collided = true; break; }
+                    // walked end -> start; store in chain order (ascending rankA)
+                    m += len;
+                    for (let w = m - 1, z = end; z >= 0; w--, z = P[z]) { used[z] = 1; members[w] = idx[z]; }
+                    chainOff.push(m); chainOri.push(o);
+                }
+                for (let x = 0; x < k; x++) { if (used[x]) { free[idx[x]] = 0; } }
+                if (!collided) { break; }
             }
             s = e;
         }
-
-        // rule 5: candidates c = o*n + i, by f descending, ties by c
-        // ascending ('+' first, then lower anchor index)
-        let cand;
-        if (pen === 0) {
-            // f is an integer chain length in [1, n] -- counting sort by
-            // (maxF - f) keeps the tie order for free, since it's stable
-            let maxF = 1;
-            for (let o = 0; o < 2; o++) { for (let i = 0; i < n; i++) { if (f[o][i] > maxF) { maxF = f[o][i]; } } }
-            const key = new Uint32Array(2 * n), idx = new Uint32Array(2 * n);
-            for (let c = 0; c < 2 * n; c++) { idx[c] = c; key[c] = maxF - f[c < n ? 0 : 1][c < n ? c : c - n]; }
-            cand = countingSort(idx, key, maxF);
-        } else {
-            cand = new Uint32Array(2 * n);
-            for (let c = 0; c < 2 * n; c++) { cand[c] = c; }
-            const fv = (c) => (c < n ? f[0][c] : f[1][c - n]);
-            cand.sort((x, y) => (fv(y) - fv(x)) || (x - y));
-        }
-
-        const used = new Uint8Array(n);
-        const members = new Uint32Array(n);   // every anchor lands in exactly one chain
-        const chainOff = [0], chainOri = [];
-        let m = 0;
-        for (let k = 0; k < cand.length; k++) {
-            const c = cand[k], o = c < n ? 0 : 1;
-            let i = o === 0 ? c : c - n;
-            if (used[i]) { continue; }
-            const from = m;
-            while (i >= 0 && !used[i]) { used[i] = 1; members[m++] = i; i = par[o][i]; }
-            // walked end -> start; store in chain order (ascending rankA)
-            for (let a = from, b = m - 1; a < b; a++, b--) { const t = members[a]; members[a] = members[b]; members[b] = t; }
-            chainOff.push(m); chainOri.push(o);
-        }
-        return {members, chainOff: Uint32Array.from(chainOff), chainOri: Uint8Array.from(chainOri)};
+        return {members: members.slice(0, m), chainOff: Uint32Array.from(chainOff), chainOri: Uint8Array.from(chainOri)};
     }
 
     // ---------------------------------------------------------------- stage 3: blocks
