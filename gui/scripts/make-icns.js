@@ -1,15 +1,12 @@
-// Builds build/icon.icns, the macOS app icon, from build/icon-macos.svg:
-// Chromium renders the vector artwork at each size (so a 16 px icon is drawn
-// at 16 px, not shrunk from 1024), and Apple's iconutil packs the sizes.
-// macOS only; commit the resulting build/icon.icns.
+// Builds build/icon.icns from build/icon-macos.svg: Chromium renders the
+// vector art at each size, and iconutil packs them. macOS only; commit the
+// result.
 //
 //   npm run icons
 //
-// Why not let electron-builder convert a PNG: it writes the 16 and 32 px
-// sizes in the old pre-Retina icon formats, and wrote them as noise --
-// which is what Spotlight and Finder's list view draw. Scaling the 1024 px
-// PNG down with sips instead leaves a pale fringe on the semi-transparent
-// edge pixels.
+// electron-builder's PNG conversion writes the 16 and 32 px sizes (what
+// Spotlight and Finder's list view draw) as noise, and scaling the PNG down
+// with sips leaves a pale fringe on semi-transparent edges.
 
 const { app, BrowserWindow } = require('electron');
 const { execFileSync } = require('node:child_process');
@@ -29,7 +26,7 @@ app.whenReady().then(async () => {
     for (const size of SIZES) {
         for (const scale of [1, 2]) {
             const px = size * scale;
-            // the SVG drawn straight onto a px-by-px canvas: rasterized at that size
+            // rasterized at px, not shrunk from a larger render
             const dataUrl = await win.webContents.executeJavaScript(`new Promise((resolve, reject) => {
                 const img = new Image();
                 img.onload = () => {

@@ -4,10 +4,9 @@
 Usage: describe_assembly.py --summary summary.jsonl --accession GCA_... --out reference_selection.json
 
 summary.jsonl is `datasets summary genome accession <acc> --as-json-lines`.
-The selection has the fields find_closest_assembly.py writes for a searched
-reference, so main.nf, the download and the page treat both alike; `chosen`
-says it was picked by accession, and `rank`/`name` say so too ("assembly",
-the accession), since no taxon was climbed to.
+Writes the same fields find_closest_assembly.py does, so downstream treats
+both alike; with no taxon climbed, `rank` is "assembly" and `name` the
+accession.
 """
 import argparse
 import json

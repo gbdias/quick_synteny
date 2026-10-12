@@ -1,17 +1,13 @@
-// The New run form's species search: what you type -> taxa to pick from.
+// The New run form's species search.
 //
-// NCBI's taxon_suggest alone misses some species even by their exact name:
-// "Babesia ovis" (taxid 5869) gets Babesia ovata and other Babesia, not
-// itself. Restricting it to taxa with genomes on NCBI does list it, but
-// can't be the only search: your genome may be the first of its species.
-// And the taxon endpoint looks up an exact scientific name, though no
-// common names or typos. So all three are asked at once, merged without
-// repeats, and the closest matches go first: the exact name, then names
-// starting with what you typed (species before strains and hybrids, so
-// shorter names first), then the rest.
+// taxon_suggest alone misses some species even by exact name ("Babesia
+// ovis" gets other Babesia, not itself). Filtered to taxa with genomes it
+// lists it, but the user's genome may be its species' first; the taxon
+// endpoint takes only exact scientific names. So all three are asked,
+// merged without repeats, closest first: the exact name, then prefix
+// matches (species first, then shorter names), then the rest.
 //
-// NCBI allows a few requests a second without an API key and answers more
-// with 429, so one of those is retried once, a second later.
+// Without an API key NCBI answers bursts with 429: retried once, a second later.
 
 const API = 'https://api.ncbi.nlm.nih.gov/datasets/v2/taxonomy';
 
@@ -31,8 +27,8 @@ async function getJson(fetchImpl, url, retryAfter = 1000) {
     return r.json();
 }
 
-// -> [{ sci_name, tax_id, rank, common_name }] (taxon_suggest's shape), best first.
-// Throws only when every request failed, i.e. NCBI can't be reached.
+// -> [{ sci_name, tax_id, rank, common_name }], best first. Throws only when
+// every request failed, i.e. NCBI can't be reached.
 async function searchTaxa(query, fetchImpl = fetch, { retryAfter = 1000 } = {}) {
     const q = query.trim();
     const enc = encodeURIComponent(q);

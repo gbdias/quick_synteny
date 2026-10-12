@@ -1,8 +1,6 @@
-// The New run view: files (dropped or chosen), what to compare with (your
-// own reference and proteome by default, a reference you choose on NCBI,
-// or discovery there), where to
-// save, and options; checked before a run starts so a bad input fails here,
-// not minutes into a run.
+// The New run view: inputs, what to compare with, where to save, and
+// options. Checked before a run starts so a bad input fails here, not
+// minutes into a run.
 
 const files = { assembly: null, reference: null, proteome: null };
 let outdir = null;
@@ -90,17 +88,15 @@ document.querySelectorAll('[data-drop]').forEach((zone) => {
         try {
             setFile(key, await window.qs.inspectFile(window.qs.pathForFile(file)));
         } catch (err) {
-            setStatus(`#status-${key}`, 'bad', String(err.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+            setStatus(`#status-${key}`, 'bad', cleanIpcError(err));
         }
     });
 });
 
 // ---------- compare with ----------
 
-// What the choices ask of NCBI: My own files can still take the proteome
-// from NCBI; A species I choose gets that reference (and a proteome);
-// Auto-discovery finds both. Anything taken from NCBI is found
-// outward from your genome's organism, so that's asked for then.
+// My own files can still take the proteome from NCBI. Anything from NCBI
+// is searched outwards from your genome's organism, so that's asked for then.
 let proteomeFromNcbi = false;
 const needsOrganism = () => mode() !== 'manual' || proteomeFromNcbi;
 
@@ -126,12 +122,10 @@ document.querySelectorAll('input[name=mode]').forEach((r) => r.addEventListener(
 $('#btn-proteome-ncbi').addEventListener('click', () => { proteomeFromNcbi = true; showMode(); });
 $('#btn-proteome-own').addEventListener('click', () => { proteomeFromNcbi = false; showMode(); });
 
-// A species search: a name box with suggestions (lib/taxa.js, once typing
-// pauses; an answer for text that has changed since is dropped), and the
-// taxid field it fills, which is checked against NCBI as it's typed, so a
-// mistyped or unknown taxid is caught here rather than a minute into a run.
+// A species search (your genome's organism, or the reference species):
+// name suggestions once typing pauses, and the taxid they fill, checked
+// against NCBI as it's typed. Answers for text changed since are dropped.
 // NCBI being unreachable doesn't block a run: the pipeline checks it again.
-// Used twice: your genome's organism, and the reference species you choose.
 function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
     const p = { state: { status: 'empty' }, pending: Promise.resolve() };
     let suggestTimer = null;
@@ -150,7 +144,7 @@ function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
         else setStatus(taxidStatus, null);
         // a bare taxid in the search box (typed, or a past run's without
         // its name) gets the name NCBI gave it
-        if (search && t.status === 'found' && t.name && $(search).value.trim() === String(t.taxid)) $(search).value = t.name;
+        if (t.status === 'found' && t.name && $(search).value.trim() === String(t.taxid)) $(search).value = t.name;
         if (t.status === 'found') suggestOutdir();
         refreshForm();
     };
@@ -181,11 +175,11 @@ function taxonPicker({ search, results, searchStatus, taxid, taxidStatus }) {
     // a taxid and its name, as a past run had them
     p.set = (id, name) => {
         $(taxid).value = id || '';
-        if (search) $(search).value = name || id || '';
+        $(search).value = name || id || '';
         p.check();
     };
 
-    if (search) $(search).addEventListener('input', () => {
+    $(search).addEventListener('input', () => {
         clearTimeout(suggestTimer);
         const q = $(search).value.trim();
         if (/^\d+$/.test(q)) {
@@ -227,9 +221,8 @@ const organism = taxonPicker({ search: '#taxon-search', results: '#taxon-results
 const referenceTaxon = taxonPicker({ search: '#ref-search', results: '#ref-results', searchStatus: '#ref-search-status',
     taxid: '#ref-taxid', taxidStatus: '#ref-taxid-status' });
 
-// An exact assembly, checked against NCBI as it's typed: the schema's
-// pattern first, then whether NCBI has it. When given, it's used instead of
-// the reference species.
+// An exact assembly, used instead of the reference species: checked
+// against the schema's pattern, then NCBI, as it's typed.
 let assembly = { status: 'empty' };
 let assemblyCheck = Promise.resolve();
 let assemblyTimer = null;
@@ -287,10 +280,9 @@ $('#btn-ref-accession').addEventListener('click', () => {
 
 // ---------- where to save ----------
 
-// Documents/quick_synteny/<target>_vs_<taxid or reference>, unless the user
-// has picked a folder; a new one per run. Each suggestion is numbered: one
-// that comes back after a newer one was asked for, a folder was picked or
-// the form was cleared is dropped, so it can't replace the user's choice.
+// Documents/quick_synteny/<target>_vs_<taxid or reference>, a new one per
+// run, unless the user picked a folder. Suggestions are numbered so a late
+// one can't replace a newer one, a picked folder, or a cleared form.
 let suggestTimerOut = null;
 let suggestSeq = 0;
 const PATH_EMPTY = $('#path-outdir').textContent;
@@ -419,10 +411,8 @@ $('#chunk').addEventListener('input', updatePreflight);
 
 // ---------- the pipeline's parameter schema ----------
 
-// nextflow_schema.json, flattened to { name: property }: the "?" tips show
-// each parameter's description, help_text and default (as --help <param>
-// does), fields without their own placeholder show its default, the rank
-// list is its enum, and numbers are checked against its limits before a run
+// nextflow_schema.json, flattened to { name: property }: the "?" tips'
+// text, placeholders' defaults, the rank list, and numbers' limits
 let schema = {};
 
 // tips whose schema text is written for the command line (--flags, "the
@@ -587,16 +577,15 @@ $('#form').addEventListener('submit', async (e) => {
         resetForm();
         showRun(id);
     } catch (ex) {
-        refreshForm(String(ex.message).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+        refreshForm(cleanIpcError(ex));
     }
 });
 
 // the heading of a blank form, as index.html has it
 const FORM_HEAD = [$('#form-title').textContent, $('#form-sub').textContent];
 
-// A blank form for the next run: no files, organism or reference, and no
-// folder until a genome is added. How runs are made stays as it was: the
-// comparison mode, the engine and the options.
+// A blank form for the next run: no inputs or folder. The comparison mode,
+// engine and options stay as they were.
 function resetForm() {
     for (const key of Object.keys(files)) clearFile(key);
     organism.set('', '');

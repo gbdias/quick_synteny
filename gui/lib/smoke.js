@@ -1,15 +1,12 @@
-// `quick_synteny --smoke-test`: checks that a packaged app works on this
-// machine, without a window -- the CI workflow runs it on every build.
-// It goes through the app's own code paths:
+// `quick_synteny --smoke-test`: checks a packaged app works on this machine,
+// without a window (CI runs it on every build), through the app's own code:
 //
-//   1. first-launch setup (runtime.setup): the bundled micromamba, then
-//      Nextflow, Java and the weblog plugin from runtime.yml, into QS_HOME
-//      (set it to a scratch folder; ~/.quick_synteny otherwise);
+//   1. first-launch setup (runtime.setup) into QS_HOME (point it at a
+//      scratch folder; ~/.quick_synteny otherwise);
 //   2. the Nextflow it would launch (env.checkAll);
 //   3. `nextflow run main.nf --help -profile conda` on the bundled pipeline,
-//      which parses main.nf, nextflow.config and conf/conda.config and
-//      loads nf-schema for the help. It runs with NXF_OFFLINE, so a plugin
-//      setup didn't install fails here instead of being downloaded.
+//      with NXF_OFFLINE so a plugin setup didn't install fails here rather
+//      than being downloaded.
 //
 // It doesn't run the pipeline: that needs NCBI and tens of MB of genome.
 

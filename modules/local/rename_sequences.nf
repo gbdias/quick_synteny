@@ -1,11 +1,6 @@
-// Single full read of the genome: renames sequence IDs to plot-friendly
-// labels (chr1, chr2, ...) and, in the same pass, computes the chromosome
-// size table and the assembly-gap table that used to each cost a separate
-// full read (faSize, then a per-character Python gap scan -- see
-// rename_sequences.py's docstring). No renamed FASTA is written at all:
-// MINIPROT_INDEX indexes the original genome_fasta, and RENAME_GFF renames
-// the seqid column of MINIPROT_ALIGN's GFF afterwards using the lookup this
-// process emits.
+// One read of the genome: plot-friendly names (chr1, chr2, ...), chromosome
+// sizes and assembly gaps. No renamed FASTA is written: miniprot indexes
+// the original, and RENAME_GFF applies this lookup to its GFF.
 process RENAME_SEQUENCES {
     tag "${name}"
     label 'process_low'

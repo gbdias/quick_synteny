@@ -1,23 +1,17 @@
 #!/usr/bin/env node
 // Pipeline entry point for bin/chain.js: chains one comparison (two genomes'
-// hit tables, or one genome against itself with --self) and writes
-// links.tsv (bin/chain.js's OUTPUTS header), its first line naming the
-// parameters used. Any parameter left out takes SYNCHAIN.DEFAULTS' value,
-// the same defaults the interactive page starts its controls at.
+// hit tables, or one genome against itself with --self) and writes links.tsv
+// (bin/chain.js's OUTPUTS header). Parameters left out take SYNCHAIN.DEFAULTS.
 import fs from 'node:fs';
 import v8 from 'node:v8';
 import zlib from 'node:zlib';
 import {createRequire} from 'node:module';
 import {parseArgs} from 'node:util';
 
-// Maglev, V8's mid-tier optimizing compiler, miscompiles chain.js's hot
-// loops when node runs under x86-64 emulation on an arm64 host (an amd64
-// container on Apple Silicon): SYNCHAIN.meanBestPositive came back 0 instead
-// of 0.95 in about 1 run in 20, and almost always once the function got hot.
-// Nothing is tuned from it any more, but it stays the canary below. TurboFan alone and
-// the interpreter compute it correctly (160/160 under the same load, flag
-// set here). Off before chain.js is loaded, so none of it is ever
-// Maglev-compiled; the cost natively is nil at these run times.
+// Maglev (V8's mid-tier JIT) miscompiles chain.js's hot loops under x86-64
+// emulation on an arm64 host (an amd64 container on Apple Silicon):
+// meanBestPositive came back 0 instead of 0.95 in ~1 run in 20. TurboFan and
+// the interpreter get it right. Set before chain.js loads; free natively.
 v8.setFlagsFromString('--no-maglev');
 
 const require = createRequire(import.meta.url);
@@ -55,11 +49,9 @@ if (!args.self) { genomes.push({name: 'reference', rows: readRows(args.subject_h
 const {tables} = SYNCHAIN.makeTables(genomes);
 const A = tables[0], B = args.self ? tables[0] : tables[1];
 
-// Every hit carries a miniprot Positive= above 0, so with hits on both sides
-// the weaker mean best-hit positive can only be in (0, 1]. Anything else is
-// a miscomputation (see --no-maglev above), not data -- fail loudly rather
-// than trust a runtime that got it wrong to chain. Exit status 3 is what the
-// CHAIN_* processes retry on.
+// Canary for --no-maglev above: every hit has Positive= > 0, so the weaker
+// mean best-hit positive must be in (0, 1]; anything else means the runtime
+// miscomputed. Exit 3 is what the CHAIN_* processes retry on.
 const w = Math.min(SYNCHAIN.meanBestPositive(A), args.self ? Infinity : SYNCHAIN.meanBestPositive(B));
 if (A.n > 0 && B.n > 0 && !(w > 0 && w <= 1)) {
     console.error(`[chain_blocks] ERROR: weaker mean best-hit positive computed as ${w} from `
@@ -91,4 +83,4 @@ const s = result.stats;
 console.error(`[chain_blocks] ${args.self ? 'self' : 'cross'}: ${shown}; weaker mean best-hit positive `
     + `${w.toFixed(4)}`);
 console.error(`[chain_blocks] ${A.n}${args.self ? '' : ` + ${B.n}`} hits -> ${s.nAnchors} anchors -> `
-    + `${s.nChains} chains -> ${s.nBlocks} block(s) in ${s.ms.total.toFixed(0)} ms -> ${args.out}`);
+    + `${s.nChains} chains -> ${s.nBlocks} block(s) in ${s.ms.toFixed(0)} ms -> ${args.out}`);

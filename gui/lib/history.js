@@ -1,7 +1,5 @@
-// The runs the sidebar lists, kept in the app's userData as runs.json, newest
-// first, with each finished run's thumbnail beside it. Only the record is
-// kept; the results stay in the run's own folder, and removing a run from
-// the list leaves that folder alone.
+// The sidebar's runs: userData/runs.json, newest first, plus thumbnails.
+// Removing a run leaves its output folder alone.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -32,8 +30,7 @@ class History {
         return this.runs.find((r) => r.id === id) || null;
     }
 
-    // add or replace; written out shortly after, so a burst of task events
-    // costs one write
+    // add or replace; the write is debounced so a burst of task events costs one
     put(record) {
         const i = this.runs.findIndex((r) => r.id === record.id);
         if (i === -1) this.runs.unshift(record);

@@ -1,7 +1,6 @@
-// Is there a connection, to the places the app needs one for? navigator.onLine
-// and Electron's net.isOnline() only know whether a network interface is
-// up, which says nothing about a captive portal, a firewall or a dead
-// Wi-Fi, so this asks the two services themselves. Any HTTP answer, even
+// Can the app reach NCBI and conda-forge? navigator.onLine and
+// net.isOnline() only know whether an interface is up (not captive portals,
+// firewalls, dead Wi-Fi), so this asks the services. Any HTTP answer, even
 // an error status, means reachable.
 
 const PROBES = {

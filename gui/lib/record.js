@@ -1,6 +1,5 @@
-// A run as the app remembers it: what the sidebar lists and the run screen
-// draws. The main process builds it from the runner's events (lib/runner.js)
-// and keeps it in the history (lib/history.js); the page only renders it.
+// A run as the app remembers it, built by the main process from the
+// runner's events and kept in the history; the page only renders it.
 //
 //   { id, status: running|finished|failed|cancelled, startedAt, finishedAt,
 //     sources: { reference: file|accession|taxid|discovered, proteome: file|discovered },
@@ -24,8 +23,7 @@ function fileStem(p) {
     return p ? path.basename(p).replace(/\.gz$/, '').replace(/\.(fa|fasta|fna|fas|faa|fsa)$/i, '') : '';
 }
 
-// where a run's reference and proteome come from; records from before
-// sources existed have only `discovery` (both from NCBI, or both files)
+// older records have only `discovery` (both from NCBI, or both files)
 function sourcesOf(r) {
     if (r.sources) return r.sources;
     const f = r.form || {};
@@ -60,9 +58,8 @@ function newRecord(form, { targetSpecies = '' } = {}) {
     return r;
 }
 
-// One of the runner's events. `tasks` (id -> { process|name, status }) stays
-// in memory with the run, since the record keeps only the steps. Returns
-// whether the record changed.
+// `tasks` (id -> { process|name, status }) lives in memory only; the record
+// keeps just the steps. Returns whether the record changed.
 function applyEvent(r, tasks, channel, payload) {
     switch (channel) {
     case 'run:task':
@@ -95,10 +92,9 @@ function finishRecord(r, tasks, { code, cancelled, results }) {
     r.title = titleOf(r);
 }
 
-// What discovery picked, from the selections the pipeline publishes to
-// pipeline_info/ (FIND_REFERENCE_ASSEMBLY, FIND_PROTEOME_ASSEMBLY): the
-// same facts as the log lines the runner parses while the run goes, for
-// any of those it missed. Returns whether anything was added.
+// What discovery picked, from pipeline_info/*_selection.json: the same facts
+// as the log lines the runner parses, for any it missed (and the assembly
+// level, which the lines lack). Returns whether anything was added.
 function fillFound(r) {
     if (!r.discovery) return false;
     const sources = sourcesOf(r);
@@ -108,7 +104,6 @@ function fillFound(r) {
         let sel;
         try { sel = JSON.parse(fs.readFileSync(path.join(r.outdir, 'pipeline_info', `${kind}_selection.json`), 'utf8')); } catch { continue; }
         if (!sel.accession) continue;
-        // from the log line: only the level is missing (the line doesn't say it)
         if (r.found[kind]) {
             if (sel.assembly_level && sel.accession === r.found[kind].accession) {
                 r.found[kind].level = sel.assembly_level;
@@ -125,9 +120,8 @@ function fillFound(r) {
     return added;
 }
 
-// the finished run's numbers: compute_alignment_stats.py's stats.json, and
-// the blocks at the published min_block (links.tsv: a `#` settings line,
-// a header, then a block a line)
+// compute_alignment_stats.py's stats.json, plus the block count from
+// links.tsv (a `#` settings line, a header, then one block per line)
 function readSummary(outdir) {
     const dir = path.join(outdir, 'synteny');
     let names;
@@ -145,4 +139,4 @@ function readSummary(outdir) {
     return summary;
 }
 
-module.exports = { newRecord, applyEvent, finishRecord, fillFound, readSummary, shortSpecies, fileStem, titleOf, sourcesOf };
+module.exports = { newRecord, applyEvent, finishRecord, fillFound, shortSpecies, fileStem, sourcesOf };

@@ -4,18 +4,15 @@
 Usage: parse_lineage.py taxonomy.json > lineage.tsv
 
 Output columns: rank, taxid, name -- one row per taxon from species outward
-to phylum, nearest first, INCLUDING every intermediate taxon NCBI has
-between them (subgenus, tribe, subfamily, superfamily, infraorder, suborder,
-unranked clades, ...), not only the six major ranks. Each row is a nested
-clade, so querying them in order meets closer relatives first: e.g. for
-Trox cadaverinus the superfamily Scarabaeoidea sits between family Trogidae
-and order Coleoptera, and skipping it would jump straight from a family with
-no other assemblies to all of Coleoptera. Rank is NCBI's own, lowercased
-('clade' and 'no rank' can each occur more than once -- key on taxid, not
-rank). Taxa below species (a subspecies query) and above phylum are dropped.
+to phylum, nearest first, INCLUDING every intermediate taxon (tribe,
+superfamily, unranked clades, ...): e.g. for Trox cadaverinus, skipping
+superfamily Scarabaeoidea would jump from a family with no other assemblies
+straight to all of Coleoptera. Rank is NCBI's, lowercased; 'clade' and 'no
+rank' can repeat, so key on taxid. Taxa below species and above phylum are
+dropped.
 
-Input without --parents (only the queried taxon's own report) falls back to
-that report's classification block, i.e. the major ranks only.
+Without --parents, falls back to the report's classification block (major
+ranks only).
 """
 import json
 import sys
@@ -26,8 +23,8 @@ RANKS = ['species', 'genus', 'family', 'order', 'class', 'phylum']
 
 
 def full_lineage(reports, query):
-    """Every taxon from `query` outward, nearest first, using the parent
-    reports --parents adds; None when they're missing."""
+    """Every taxon from `query` outward, nearest first, from the --parents
+    reports; None when they're missing."""
     by_id = {r['taxonomy']['tax_id']: r['taxonomy'] for r in reports if 'taxonomy' in r}
     # the root (taxid 1) itself comes back without a report of its own
     parents = [p for p in query.get('parents') or [] if p in by_id]
@@ -80,8 +77,7 @@ def main():
 
     rows = full_lineage(reports, query) or classification_lineage(query)
 
-    # start at species (dropping a subspecies query itself), end at the
-    # outermost major rank
+    # species (not a subspecies query) through the outermost major rank
     ranks = [rank for rank, _, _ in rows]
     if 'species' in ranks:
         rows = rows[ranks.index('species'):]

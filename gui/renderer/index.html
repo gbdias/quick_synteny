@@ -104,7 +104,7 @@
             <button type="button" class="btn" id="btn-proteome-own">Use my own file</button>
           </div>
           <p class="field-status" id="status-proteome" hidden></p>
-          <p class="hint" id="proteome-hint">The proteins are aligned to both genomes, and their matches are what the synteny is built from.
+          <p class="hint">The proteins are aligned to both genomes, and their matches are what the synteny is built from.
             <button type="button" class="link" id="btn-proteome-ncbi">No proteome? Find one on NCBI</button></p>
         </div>
 
@@ -175,8 +175,7 @@
           <p class="field-status" id="docker-status" hidden></p>
 
           <h3>Sequences</h3>
-          <!-- each "?" shows its parameter's help from the pipeline's
-               nextflow_schema.json (form.js, applySchema) -->
+          <!-- each "?" gets its text from nextflow_schema.json (form.js, applySchema) -->
           <div class="grid">
             <label>Shortest sequence to plot (bp) <button type="button" class="help" data-param="min_seq_size">?</button>
               <input name="min_seq_size"></label>
@@ -206,7 +205,7 @@
   </form>
 
   <!-- ---------- a run ---------- -->
-  <section id="view-run" class="view view-run" hidden>
+  <section id="view-run" class="view" hidden>
     <div class="scroll">
       <header class="run-head">
         <div class="run-head-text">
@@ -237,11 +236,11 @@
       <div class="run-grid">
         <div class="card"><ol id="run-steps" class="steps"></ol></div>
         <div class="side-col">
-          <div class="card found">
+          <div class="card">
             <div class="card-label">Compared</div>
             <div id="run-found"></div>
           </div>
-          <details id="log-box" class="log-box">
+          <details class="log-box">
             <summary>Show the technical log</summary>
             <pre id="log"></pre>
           </details>
@@ -277,7 +276,7 @@
   </section>
 
   <!-- ---------- settings ---------- -->
-  <section id="view-settings" class="view view-settings" hidden>
+  <section id="view-settings" class="view" hidden>
     <div class="scroll narrow">
       <header class="view-head">
         <h1>Settings</h1>

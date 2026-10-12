@@ -1,25 +1,17 @@
 #!/usr/bin/env python3
 """Pick the closest available genome assembly from pre-fetched ladder results.
 
-The datasets CLI and this script deliberately run in separate containers (the
-datasets image, envs/ncbi_datasets.yml, has no Python), so the ladder-walk is
-split in two: query_genome_ladder.sh, in the datasets container, queries the
-lineage's taxa from species outward (intermediate ranks and clades included)
-and writes one JSON-lines file per taxon (<taxid>.jsonl, empty if no hits)
-plus query_log.tsv listing the taxa it queried, in order; this script then
-picks the first of those taxa with a usable hit and ranks its candidates by
-assembly quality.
+query_genome_ladder.sh (in the datasets container, which has no Python)
+writes <taxid>.jsonl per queried taxon plus query_log.tsv; this picks the
+first taxon with a usable hit and ranks its candidates by assembly quality.
 
 Writes, in the current directory:
   <outprefix>_selection.json   chosen accession + rank + candidate count
-  <outprefix>_candidates.tsv   every candidate considered at the winning rank,
-                                best first
-  <outprefix>_search_log.tsv   rank, taxid, name, usable hit count and how the
-                                query was cut (see query_genome_ladder.sh) for
-                                every taxon actually queried (including zero-
-                                hit ones)
+  <outprefix>_candidates.tsv   every candidate at the winning rank, best first
+  <outprefix>_search_log.tsv   rank, taxid, name, usable hits and query mode
+                                for every taxon queried (zero-hit ones too)
 
-Exits non-zero with a clear message if no taxon up to --max_rank has a hit.
+Exits non-zero if no taxon up to --max_rank has a hit.
 """
 import argparse
 import json
@@ -97,34 +89,23 @@ def main():
                               'preferred.jsonl and query_log.tsv into')
     parser.add_argument('--outprefix', required=True)
     parser.add_argument('--exclude_target', action='store_true',
-                         help="exclude every candidate of the target's own species outright, "
-                              "regardless of assembly quality. Off by default: a same-species "
-                              "candidate is a legitimate result (e.g. a second, independently "
-                              "submitted assembly of the same organism) and is kept as long as "
-                              "it's chromosome-level or better -- only a same-species candidate "
-                              "below that quality bar is dropped either way, same-species or not.")
+                         help="exclude every candidate of the target's own species, regardless "
+                              "of assembly quality. Off by default: a same-species candidate "
+                              "(e.g. another assembly of the same organism) is kept if it's "
+                              "chromosome-level or better.")
     parser.add_argument('--require_chromosome_level', action='store_true',
-                         help="require EVERY candidate, same-species or not, to be chromosome- or "
-                              "complete-genome-level -- used for reference-genome discovery, where "
-                              "a low-quality genome makes a poor synteny comparison regardless of "
-                              "species. Off for proteome discovery, which only needs a candidate's "
-                              "protein sequences and is deliberately more permissive (a scaffold-"
-                              "level annotated assembly is fine there). When this flag is off, a "
-                              "same-species candidate is still individually held to chromosome "
-                              "level -- see --exclude_target -- but a DIFFERENT-species one is not.")
+                         help="require EVERY candidate to be chromosome- or complete-genome-level "
+                              "(reference discovery: a low-quality genome makes a poor synteny "
+                              "comparison). Off for proteome discovery, which only needs proteins; "
+                              "same-species candidates are held to chromosome level either way.")
     parser.add_argument('--prefer_taxid', default='',
                          help="species taxid to prefer: if it has any kept candidate "
-                              "(preferred.jsonl, queried on its own), the best of those wins over "
-                              "the usual ranking. Proteome discovery passes the chosen reference "
-                              "genome's species, so the proteome comes from the reference species "
-                              "whenever it has an annotated assembly -- the ranking below knows "
-                              "assembly quality, not relatedness.")
+                              "(preferred.jsonl), the best of those wins over the quality ranking. "
+                              "Proteome discovery passes the reference genome's species.")
     parser.add_argument('--chosen', action='store_true',
-                         help="the lineage is --reference_taxid's, cut to that taxon's own row "
-                              "(find_reference_assembly.nf): its best assembly is the pick. The "
-                              "lineage's species is then the chosen one, not the target's, so "
-                              "nothing is reported as the target's own species, and finding no "
-                              "assembly is the chosen taxon's problem, not the ladder's.")
+                         help="the lineage is --reference_taxid's own row: its best assembly is "
+                              "the pick, nothing is reported as the target's species, and finding "
+                              "none is an error about that taxon, not the ladder.")
     parser.add_argument('--prefer_rank_taxid', default='',
                          help="the lineage taxon --prefer_taxid's species joins the target's "
                               "lineage at (the reference selection's own taxid), reported as the "
@@ -133,24 +114,11 @@ def main():
 
     lineage = read_lineage(args.lineage)
     ladder = read_query_log(os.path.join(args.ladder_dir, 'query_log.tsv'))
-    # 'species' in the lineage file is, by construction, the taxon the whole
-    # search started from -- i.e. the target's own species -- not merely "a"
-    # species. A same-species candidate is real, useful data in general (a
-    # different assembly of the same organism, e.g. for validating synteny
-    # within a species, or the only chromosome-level resource available for
-    # a sparsely-sequenced group -- this pipeline was pointed at exactly
-    # that case once already), so it's not excluded outright by default --
-    # only gated to chromosome/complete level (see --require_chromosome_level
-    # below for why that gate applies to a same-species candidate even when
-    # it's off for everyone else). --exclude_target restores the stricter
-    # behavior for a user who wants a same-species result excluded
-    # regardless of quality. Applied at every rank a same-species record
-    # could in principle appear at, not just species -- there's no
-    # structural guarantee it can't.
+    # the lineage's species row is the target's species; same-species
+    # candidates are checked at every rank. The species' strains count too:
+    # assemblies are often filed under a strain's taxid (S. cerevisiae S288C
+    # is 559292, not 4932); query_genome_ladder.sh lists them.
     target_taxid = next((taxid for rank, taxid, _ in lineage if rank == 'species'), None)
-    # ...and every taxon under it: assemblies are often filed under a
-    # strain's own taxid (S. cerevisiae S288C is 559292, not 4932), which is
-    # still the target's species. query_genome_ladder.sh lists them.
     target_taxids = {target_taxid} if target_taxid else set()
     taxids_file = os.path.join(args.ladder_dir, 'target_taxids.txt')
     if target_taxid and os.path.exists(taxids_file):
@@ -161,9 +129,6 @@ def main():
         return str(r.get('organism', {}).get('tax_id', '')) in target_taxids
 
     def keep(r):
-        # explicit and self-contained here, rather than relying solely on
-        # find_reference_assembly.nf's own upstream --assembly-level
-        # chromosome,complete query filter to make this true incidentally
         if args.require_chromosome_level and not is_chromosome_level(r):
             return False
         if not is_same_species(r):
@@ -188,18 +153,16 @@ def main():
             chosen_rank, chosen_taxid, chosen_name = rank, taxid, name
             candidates = sorted(records, key=sort_key, reverse=True)
 
-    # a candidate of the preferred species beats the ranking above -- listed
-    # first, then the rest of the rank it joins the lineage at, if queried
+    # preferred-species candidates first, then the rest of the rank that
+    # species joins the lineage at, if queried
     preferred = False
     if args.prefer_taxid:
         match = [r for r in read_jsonl(os.path.join(args.ladder_dir, 'preferred.jsonl'))
                  if keep(r) and str(r.get('organism', {}).get('tax_id', '')) == str(args.prefer_taxid)]
         if match:
             match = sorted(match, key=sort_key, reverse=True)
-            # where the preferred species joins the target's lineage; a
-            # chosen reference (--reference_taxid/--reference_accession) can
-            # come from outside it, and is then reported as itself: the
-            # proteome is that species' own
+            # a chosen reference can come from outside the target's
+            # lineage, and is then reported as its own species
             chosen_rank, chosen_taxid, chosen_name = next(
                 (row for row in lineage if row[1] == str(args.prefer_rank_taxid)),
                 ('species', str(args.prefer_taxid), match[0].get('organism', {}).get('organism_name', '')))
@@ -248,22 +211,17 @@ def main():
         'rank': chosen_rank,
         'taxid': chosen_taxid,
         'name': chosen_name,
-        # the chosen assembly's OWN species -- `name` above is the taxon of
-        # the rank the ladder stopped at, which is a genus/family name
-        # whenever the pick came from above species rank
+        # the assembly's own species; `name` is the ladder taxon it came from
         'organism_name': best.get('organism', {}).get('organism_name', ''),
         'organism_taxid': str(best.get('organism', {}).get('tax_id', '')),
-        # true when --prefer_taxid decided the pick (see above)
+        # true when --prefer_taxid decided the pick
         'preferred_species': preferred,
         'candidate_count': len(candidates),
         'annotated': 'annotation_info' in best,
-        # true when the chosen candidate is of the target's own species --
-        # a legitimate result by default (see --exclude_target above), but
-        # a meaningfully different kind of comparison worth surfacing
-        # rather than leaving indistinguishable from a cross-species pick
+        # surfaced since a same-species comparison is a different kind of result
         'same_species_as_target': same_species,
-        # how the reference was decided: 'taxid' for --reference_taxid,
-        # absent for discovery (and 'accession' from describe_assembly.py)
+        # 'taxid' for --reference_taxid, absent for discovery ('accession'
+        # comes from describe_assembly.py)
         **({'chosen': 'taxid'} if args.chosen else {}),
     }
     with open(f"{args.outprefix}_selection.json", 'w') as f:

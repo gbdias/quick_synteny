@@ -1,30 +1,19 @@
 #!/usr/bin/env python3
 """Split a genome FASTA into size-capped chunks for MINIPROT_ALIGN_CHUNK
-(--miniprot_chunk_gb) -- so each chunk's miniprot index is a fraction
-of the whole genome's, capping peak alignment RAM (~10 GB per Gb of genome,
+(--miniprot_chunk_gb), capping peak alignment RAM (~10 GB per Gb of genome,
 dominated by the index).
 
 Greedily packs WHOLE sequences, in FASTA order, into chunk_000.fa,
-chunk_001.fa, ...: a sequence joins the current chunk if doing so keeps that
-chunk's cumulative length <= --chunk_bp, otherwise a new chunk starts. No
-sequence is ever split across chunks, so a single sequence longer than
---chunk_bp still gets a whole chunk to itself (that chunk alone won't shrink
-the index below one full sequence, but nothing else does either).
+chunk_001.fa, ...: a sequence joins the current chunk if it keeps the
+chunk's length <= --chunk_bp, otherwise a new chunk starts. A sequence
+longer than --chunk_bp gets a chunk to itself.
 
-Two full passes over the input, both streaming: sequence data itself is
-never held in memory (only the current line), which is what lets this scale
-to a genome too large to buffer.
-  1. record each sequence's id and length only (no sequence bytes kept), to
-     decide the whole packing up front;
-  2. re-read the FASTA and copy each sequence's header + lines straight into
-     its already-decided chunk file.
+Two streaming passes (sequence data is never held in memory): lengths
+first, to decide the packing, then each record is copied into its chunk.
 
-Alongside the chunks: chunks.tsv (file<TAB>length_bp, one row per chunk, in
-chunk order -- no header line, same convention as rename_sequences.py's
---out_sizes/--out_gaps) and total_length.txt (the whole genome's length, a
-single integer -- MINIPROT_ALIGN_CHUNK needs this for its -G max-intron
-formula, which is defined on the WHOLE genome's length, not a chunk's; see
-that process).
+Also writes chunks.tsv (file<TAB>length_bp per chunk, no header) and
+total_length.txt (the whole genome's length: MINIPROT_ALIGN_CHUNK's -G
+formula is defined on it, not a chunk's).
 """
 import argparse
 import gzip
@@ -35,24 +24,21 @@ GZIP_MAGIC = b'\x1f\x8b'
 
 
 def _opener_for(fasta_path):
-    """Gzip is detected by magic bytes, not extension -- same convention as
-    rename_sequences.py."""
+    """Gzip is detected by magic bytes, not extension."""
     with open(fasta_path, 'rb') as f:
         magic = f.read(2)
     return gzip.open if magic == GZIP_MAGIC else open
 
 
 def _header_id(line):
-    """line is a stripped '>...' header (bytes); returns its first
-    whitespace-delimited token, decoded, the same way rename_sequences.py
-    and miniprot itself take a FASTA record's id."""
+    """First whitespace-delimited token of a stripped '>...' header (bytes),
+    as rename_sequences.py and miniprot take a record's id."""
     header = line[1:].decode('utf-8', errors='replace')
     return header.split(None, 1)[0] if header else ''
 
 
 def scan_lengths(fasta_path):
-    """First pass: [(seq_id, length), ...] in FASTA order. Counts line
-    lengths only -- no sequence bytes are kept."""
+    """First pass: [(seq_id, length), ...] in FASTA order."""
     opener = _opener_for(fasta_path)
     records = []
     seq_id = None
@@ -77,8 +63,7 @@ def scan_lengths(fasta_path):
 
 
 def assign_chunks(records, chunk_bp):
-    """Greedy bin-packing of whole sequences, in FASTA order (see module
-    docstring). Returns (seq_id -> chunk_index, [chunk_length_bp, ...])."""
+    """-> (seq_id -> chunk_index, [chunk_length_bp, ...])."""
     assignment = {}
     chunk_lengths = []
     current_chunk = -1
@@ -95,8 +80,7 @@ def assign_chunks(records, chunk_bp):
 
 
 def write_chunks(fasta_path, assignment, n_chunks, outdir):
-    """Second pass: stream each sequence's header + lines straight into its
-    already-decided chunk file. Only the current line is ever held."""
+    """Second pass: copy each record into its assigned chunk file."""
     opener = _opener_for(fasta_path)
     paths = [os.path.join(outdir, f'chunk_{i:03d}.fa') for i in range(n_chunks)]
     outputs = [open(p, 'wb') for p in paths]

@@ -3,34 +3,25 @@
 #
 # Usage: query_genome_ladder.sh <lineage.tsv> <max_rank> <prefer_taxid|''> [datasets filter flags...]
 #
-# Walks lineage.tsv (from parse_lineage.py: every taxon from species outward,
-# intermediate ranks and clades included) up to <max_rank>, running
+# Walks lineage.tsv (parse_lineage.py) up to <max_rank>, running
 # `datasets summary genome taxon <taxid> <filters>` for each, and stops after
-# the first taxon that returns an assembly of any species other than the
-# target's own. Every taxon above that one is a strict superset of it, and
-# find_closest_assembly.py only ever picks from the lowest taxon with a
-# usable hit, so querying further would only fetch farther relatives. The
-# stop is deliberately conservative: a same-species hit alone never stops
-# the climb, since whether it's usable (--exclude_target, the chromosome-
-# level gate on same-species candidates) is decided in the selection step.
+# the first taxon with an assembly of a species other than the target's:
+# every taxon above is a superset, and find_closest_assembly.py picks from
+# the lowest taxon with a usable hit. A same-species hit alone never stops
+# the climb, since whether it's usable is decided in the selection step.
 #
-# At most LADDER_CAP (default 1000) records are kept per taxon. A taxon with
-# more than that is re-queried with --reference (NCBI's designated reference
-# genome, one per species) instead of keeping an arbitrary first
-# LADDER_CAP of whatever order NCBI returns -- a principled one-per-species
-# cut rather than a truncated sample. Only if even that exceeds the cap is it
-# truncated, and query_log.tsv says so. Records average ~5 kB of JSON each,
-# so the cap also bounds the selection step's memory, which is what the old
-# fixed --limit 200 was for.
+# At most LADDER_CAP (default 1000) records are kept per taxon. A larger
+# taxon is re-queried with --reference (one designated genome per species)
+# rather than keeping an arbitrary first LADDER_CAP; only if that still
+# exceeds the cap is it truncated, as query_log.tsv records. At ~5 kB of
+# JSON per record, the cap also bounds the selection step's memory.
 #
 # <prefer_taxid>, when given, is also queried on its own (preferred.jsonl):
-# proteome discovery prefers the chosen reference species' own annotation,
-# and that species may join the lineage above where this climb stops.
+# that species may join the lineage above where the climb stops.
 #
 # Writes into ./ladder/: <taxid>.jsonl per taxon queried, preferred.jsonl,
 # target_taxids.txt (the target species and every taxon under it), and
-# query_log.tsv (rank, taxid, name, records, query) listing every taxon
-# queried in order -- the selection step reads the ladder from that log.
+# query_log.tsv (rank, taxid, name, records, query), in query order.
 set -u
 
 lineage=$1
@@ -43,10 +34,8 @@ cap=${LADDER_CAP:-1000}
 mkdir -p ladder
 target=$(awk -F'\t' '$1=="species"{print $2; exit}' "$lineage")
 
-# every taxid of the target's species: the species itself and each strain,
-# subspecies, etc. under it. Assemblies are often filed under a strain's own
-# taxid (S. cerevisiae S288C is 559292, not 4932), and each of those is
-# still the target's species -- for the stop below and for --exclude_target.
+# the target species and every strain/subspecies under it: assemblies are
+# often filed under a strain's taxid (S. cerevisiae S288C is 559292, not 4932)
 : > ladder/target_taxids.txt
 if [ -n "$target" ]; then
     echo "$target" > ladder/target_taxids.txt

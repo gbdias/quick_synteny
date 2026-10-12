@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
 """Regenerate conf/containers.config from envs/*.yml via Seqera Containers.
 
-Each envs/<name>.yml is a conda environment (channels + pinned
-dependencies) and the one place a tool's version is written. For each, this
-asks Seqera Containers (the public Wave API behind seqera.io/containers, no
-token needed) for its image in every combination the pipeline runs:
+Each envs/<name>.yml is a conda environment and the one place a tool's
+version is written. For each, this asks Seqera Containers (the public Wave
+API, no token needed) for its image in every combination the pipeline runs:
 
     Docker image      linux/amd64, linux/arm64
     Singularity SIF   linux/amd64, linux/arm64
 
 Wave returns the same frozen image for the same package list, so rerunning
-this is safe and only builds what is new (a new version, a new
-environment). A SIF is written as a direct HTTPS download of its registry
-blob rather than its oras:// reference, which the cluster's Singularity
-refused ("could not get image manifest", 2026-09-23).
-
-The generated config gives processes labelled env_<name> their image,
-chosen when each task runs by container engine and by the host's
-architecture (the Nextflow JVM's -- on a local Docker host also the
-engine's).
+is safe and only builds what is new. A SIF is written as an HTTPS download
+of its registry blob, not its oras:// reference, which the cluster's
+Singularity refused ("could not get image manifest").
 
 To update a tool: edit its envs/<name>.yml, run this, commit both files.
 
@@ -123,7 +116,7 @@ def sif_blob_url(oras_ref):
 
 
 def read_existing():
-    """label -> (block text) from the current config, kept for the
+    """label -> block text from the current config, kept for the
     environments not being regenerated."""
     blocks = {}
     if OUT.exists():

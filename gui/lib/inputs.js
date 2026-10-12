@@ -1,12 +1,11 @@
-// Cheap checks on the form's inputs, so an obviously wrong file or folder
-// is caught before a run rather than minutes into one.
+// Cheap checks that catch a wrong file or folder before a run starts.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
 
-// First bytes of a FASTA: '>' after any leading whitespace, possibly under
-// gzip (bgzip too -- same magic). Returns 'fasta', 'gzip-fasta' or 'other'.
+// '>' after any leading whitespace, possibly gzipped (bgzip has the same
+// magic). Returns 'fasta', 'gzip-fasta' or 'other'.
 function sniffFasta(file) {
     const fd = fs.openSync(file, 'r');
     const buf = Buffer.alloc(65536);
@@ -17,7 +16,7 @@ function sniffFasta(file) {
     if (head[0] === 0x1f && head[1] === 0x8b) {
         gz = true;
         try {
-            // a truncated gzip stream: Z_SYNC_FLUSH returns what inflates
+            // only the head was read: Z_SYNC_FLUSH inflates what's there
             // instead of throwing at the missing end
             head = zlib.gunzipSync(head, { finishFlush: zlib.constants.Z_SYNC_FLUSH });
         } catch {
@@ -29,9 +28,8 @@ function sniffFasta(file) {
     return gz ? 'gzip-fasta' : 'fasta';
 }
 
-// What running into `dir` would mean: whether it can be written, and
-// whether it already holds something other than a previous run (whose
-// synteny/, pipeline_info/ and .nextflow/ a rerun or -resume reuses)
+// whether `dir` is writable, and whether it holds a previous run (which a
+// rerun or -resume reuses) or something else
 function inspectOutdir(dir) {
     let writable = true;
     try { fs.accessSync(dir, fs.constants.W_OK); } catch { writable = false; }
@@ -46,7 +44,7 @@ function inspectOutdir(dir) {
     return { path: dir, writable, empty: entries.length === 0, isRun };
 }
 
-// a folder name for a new run inside a chosen folder: <target>_vs_<taxid>
+// <target>_vs_<taxid>, filesystem-safe
 function suggestRunName(assembly, taxid) {
     const safe = (s) => s.replace(/[^\w.-]+/g, '_').replace(/^_+|_+$/g, '');
     const stem = assembly ? safe(path.basename(assembly).replace(/\.gz$/, '').replace(/\.[^.]+$/, '')) : '';

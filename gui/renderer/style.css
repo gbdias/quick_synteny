@@ -23,7 +23,6 @@
     --warn: #9A4A00;
     --warn-tint: #FBF0E4;
     --bad: #B42318;
-    --bad-tint: #FDF0EE;
     --shadow: 0 1px 3px rgba(30, 40, 10, 0.12);
     --shadow-lg: 0 10px 30px rgba(30, 40, 10, 0.10);
     font: 14px/1.45 system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -52,7 +51,6 @@
         --warn: #F0A55B;
         --warn-tint: #3A2A18;
         --bad: #FF8A7A;
-        --bad-tint: #3A1F1B;
         --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
         --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.35);
     }
@@ -67,7 +65,6 @@ h1 { margin: 0; font-size: 24px; font-weight: 650; letter-spacing: -0.01em; }
 h2 { margin: 0 0 10px; font-size: 13px; font-weight: 650; }
 h3 { margin: 18px 0 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg2); }
 code { font-size: 12px; }
-a { color: var(--accent-ink); }
 
 .ico { width: 18px; height: 18px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.9;
     stroke-linecap: round; stroke-linejoin: round; }
@@ -76,10 +73,9 @@ a { color: var(--accent-ink); }
 .spin-track { stroke-opacity: 0.18; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* window frame: on macOS the sidebar's top strip and the main view's top
-   strip are the title bar (the traffic lights sit over the sidebar) */
+/* macOS title bar: the top strips of the sidebar (under the traffic lights) and main view */
 .drag { -webkit-app-region: drag; }
-.drag * , button, input, select, summary, a, label { -webkit-app-region: no-drag; }
+button, input, select, summary, label { -webkit-app-region: no-drag; }
 
 .app { display: flex; height: 100vh; }
 
@@ -151,8 +147,7 @@ a { color: var(--accent-ink); }
 .update .hint { flex-basis: 100%; margin: 0; }
 
 /* ---------- new run ---------- */
-/* with Options open, room below them for the last fields' tips (Chunk
-   size's runs ~370px), which open downwards inside the scrolling area */
+/* room below an open Options for its last tips (~370px), which open downwards */
 .view-new .scroll:has(.options[open]) { padding-bottom: 320px; }
 .block { margin-bottom: 24px; max-width: 760px; }
 .drop { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; height: 150px;
@@ -189,7 +184,7 @@ a { color: var(--accent-ink); }
 label { display: block; margin: 8px 0; font-size: 12.5px; color: var(--fg2); }
 .field-label { margin-top: 14px; }
 label.check, .tabs label { display: flex; align-items: center; gap: 8px; color: var(--fg); font-size: 13.5px; }
-input:not([type]), input[inputmode], select {
+input:not([type]), select {
     display: block; width: 100%; height: 36px; margin-top: 4px; padding: 0 10px; font: inherit; font-size: 14px;
     border: 1px solid var(--field-line); border-radius: 8px; background: var(--card); color: var(--fg);
 }
@@ -231,8 +226,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .form-msg { flex-grow: 1; margin: 0; font-size: 13px; color: var(--fg2); text-align: right; }
 .form-msg.bad { color: var(--bad); }
 
-/* "?" after a label: its tip opens below it on hover or keyboard focus; in a
-   grid's right-hand column it opens leftwards */
+/* "?" after a label: its tip opens below on hover or focus, leftwards in a
+   grid's right-hand column */
 .help {
     display: inline-flex; align-items: center; justify-content: center; position: relative;
     width: 15px; height: 15px; margin-left: 3px; padding: 0; vertical-align: 1px;
@@ -255,8 +250,7 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 #run-title { overflow-wrap: anywhere; }
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip { padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--fg2); font-size: 12.5px; }
-.chip.ok { background: var(--accent-tint); color: var(--accent-tint-fg); font-weight: 600; }
-.chip.busy { background: var(--accent-tint); color: var(--accent-tint-fg); font-weight: 600; }
+.chip.ok, .chip.busy { background: var(--accent-tint); color: var(--accent-tint-fg); font-weight: 600; }
 .chip.bad { background: var(--warn-tint); color: var(--warn); font-weight: 600; }
 .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 

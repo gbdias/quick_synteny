@@ -1,20 +1,14 @@
-// The reference genome only ever needs its genome FASTA (miniprot aligns
-// the proteome against it; its own GFF3/protein are never used) and
-// proteome only ever needs its protein FASTA. Because each accession's role only ever needs ONE
-// distinct file type, a same-accession reference-genome+proteome pair each
-// fetch different content (genome vs. protein), so no separate dedup branch
-// is needed: there is no redundant download to avoid.
+// The reference needs only its genome FASTA and the proteome only its
+// protein FASTA, so a reference and proteome from the same accession never
+// download the same file.
 //
-// Both download dehydrated: the zip holds only a manifest, and rehydrate
-// then fetches the sequence files as separate requests. NCBI drops
-// downloads now and then (HTTP/2 stream resets, "stream error: stream ID 5;
-// INTERNAL_ERROR; received from peer"), the dehydrated zip as well as the
-// files rehydrate fetches, so each step is retried in the script itself.
-// Not with errorStrategy: that would resubmit the whole task (a new SLURM
-// job), and conf/slurm.config's own errorStrategy only retries OOM kills.
+// Both download dehydrated, then rehydrate fetches the sequence files. NCBI
+// drops downloads now and then (HTTP/2 stream resets), so each step is
+// retried in the script itself, not with errorStrategy: that would resubmit
+// the whole task (a new SLURM job), and conf/slurm.config's errorStrategy
+// only retries OOM kills.
 
-// `retry CMD...`: runs CMD until it succeeds, at most 4 times, waiting 1, 2
-// then 3 minutes in between; the last failure's exit status is the task's
+// `retry CMD...`: at most 4 tries, waiting 1, 2 then 3 minutes in between
 def retryFunction() {
     return '''
     retry() {

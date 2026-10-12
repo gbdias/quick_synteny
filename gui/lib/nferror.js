@@ -1,41 +1,31 @@
 // Turns Nextflow's console error report into something to show the user.
 //
-// Nextflow prints one block per fatal error, starting at "ERROR ~ " and
-// ending at " -- Check '.nextflow.log' file for details". It takes one of
-// two forms:
+// Nextflow prints one block per fatal error, from "ERROR ~ " to
+// " -- Check '.nextflow.log' file for details", in one of two forms:
 //
-//   ERROR ~ ERROR: --taxid must be an NCBI taxid ...     (the pipeline's own
-//                                                         exit 1, "...")
+//   ERROR ~ ERROR: --taxid must be an NCBI taxid ...     (main.nf's own exit)
 //
 //   ERROR ~ Error executing process > 'RESOLVE_TAXONOMY:PARSE_LINEAGE (taxonomy.json)'
 //
 //   Caused by:
 //     Process `...` terminated with an error exit status (1)
-//   Command executed:
-//     ...
-//   Command exit status:
-//     1
-//   Command output:
-//     (empty)
-//   Command error:
+//   Command error:                    (also Command executed/exit status/output)
 //     ERROR: --taxid 999999999 is not a known NCBI taxid
 //   Work dir:
 //     /.../work/c5/47d4a6...
 //
 //   Tip: you can replicate the issue by ...
 //
-// The weblog doesn't cover the first form at all (it runs before the
-// workflow starts), so this reads the console for both.
+// The weblog misses the first form (it precedes the workflow), so this reads
+// the console for both.
 //
-// Parameters that fail nextflow_schema.json are reported by nf-schema, on
-// stderr, as a list of its own; the ERROR line on stdout then only says
-// "Validation of pipeline parameters failed!" (and for unrecognised
-// parameters there's no ERROR line at all):
+// nf-schema lists parameters failing nextflow_schema.json on stderr; stdout's
+// ERROR line then only says "Validation of pipeline parameters failed!"
+// (unrecognised parameters get no ERROR line at all):
 //
 //   The following invalid input values have been detected:
 //
 //   * --taxid (): 0 is less than 1 (must be an NCBI taxid, a positive whole number)
-//   * --max_rank (kingdom): Expected any of [species, genus, family, order, class, phylum]
 //
 //    -- Check script '.../main.nf' at line: 53 or see '.nextflow.log' file for more details
 
@@ -47,7 +37,7 @@ const ANSI = /\x1b\[[0-9;]*m/g;
 const END = /^ -- Check '.*\.nextflow\.log' file for details/;
 const END_SCRIPT = /^ -- Check script /;
 
-// "Command error:" etc. -- flush-left and ending in a colon
+// "Command error:" etc.: flush-left, ending in a colon
 const SECTION = /^([A-Z][A-Za-z ]+):$/;
 
 function sections(lines) {
@@ -75,8 +65,8 @@ function sections(lines) {
 
 const meaningful = (body) => (body || []).filter((l) => l.trim() && l.trim() !== '(empty)');
 
-// a run of identical lines as one, counted: micromamba says "Retrying in 2
-// seconds" over and over while it can't connect
+// collapses repeated lines: micromamba repeats "Retrying in 2 seconds"
+// while it can't connect
 function collapse(lines) {
     const out = [];
     for (const l of lines) {
@@ -87,23 +77,18 @@ function collapse(lines) {
     return out.map(({ line, n }) => (n > 1 ? `${line}  (×${n})` : line));
 }
 
-// what the tools print when there's no connection: curl/micromamba ("Could
-// not resolve host: conda.anaconda.org"), datasets' Go client ("dial tcp:
-// lookup api.ncbi.nlm.nih.gov: no such host"), node
+// no connection, as curl/micromamba, datasets' Go client and node say it
 const NETWORK = /could not resolve host|no such host|network is unreachable|couldn't connect to server|connection refused|connection timed out|dial tcp|ENOTFOUND|EAI_AGAIN|temporary failure in name resolution/i;
 const OFFLINE_HINT = 'This looks like a network problem: check the internet connection. Finding a reference on NCBI '
     + 'always needs one, and so does the first run of each step, which downloads its tools.';
 const CONDA_OFFLINE = 'Downloading them failed: the computer seems to be offline, or can\'t reach conda-forge/bioconda. '
     + 'Connect and run again; once downloaded, they\'re kept for later runs.';
 
-// strips the "ERROR: " our own messages carry, which Nextflow's
-// "ERROR ~ " prefix would otherwise double up
+// drops our own "ERROR: ", which Nextflow's "ERROR ~ " would double up
 const clean = (s) => s.replace(/^ERROR:\s*/, '').trim();
 
-// the line that says what went wrong: the last one that announces an
-// error, else the last line. Tools often print something after it --
-// datasets ends every failure with "Use datasets ... --help for detailed
-// help about a command."
+// the last line announcing an error, else the last line: tools often print
+// boilerplate after it (datasets: "Use datasets ... --help ...")
 function errorLine(body) {
     const announced = body.filter((l) => /^\s*(error\b|critical\b|\w*(error|exception)\b:)/i.test(l));
     return announced.length ? announced[announced.length - 1] : body[body.length - 1];
@@ -122,9 +107,9 @@ function parse(block) {
     const out = meaningful(s['Command output']);
     const exit = (s['Command exit status'] || [])[0];
     const network = NETWORK.test(block.join('\n'));
-    // the step never ran: Nextflow couldn't build its conda env, and says
-    // so under "Caused by:" alone (micromamba's own text below it, whose
-    // "package cache may be corrupted" advice is wrong when offline)
+    // the step never ran: its conda env failed to build. Said under
+    // "Caused by:" alone, with micromamba's output (whose "package cache may
+    // be corrupted" advice is wrong when offline)
     const caused = meaningful(s['Caused by']);
     if (/^Failed to create Conda environment/.test(caused[0] || '')) {
         return {
@@ -135,12 +120,10 @@ function parse(block) {
             detail: collapse(caused).slice(-40).join('\n'),
         };
     }
-    // a traceback or a tool's complaint ends in the line that says what
-    // went wrong; fall back to the output, then to what Nextflow says caused it
+    // stderr, else stdout, else what Nextflow says caused it
     const body = err.length ? err : out.length ? out : caused.filter((l) => !/^Process `.*` terminated/.test(l));
-    // datasets' own wording is one long "Error: [gateway] Post ... giving up
-    // after 11 attempt(s): ... no such host" line; say it plainly, and keep
-    // that line as the detail
+    // datasets' own one-line "giving up after 11 attempt(s): ... no such
+    // host" stays as the detail, under a plain message
     const ncbiDown = network && /ncbi\.nlm\.nih\.gov/.test(body.join('\n'));
     return {
         title: `Step failed: ${proc[1]}`,
@@ -148,14 +131,13 @@ function parse(block) {
         message: ncbiDown ? 'Couldn\'t reach NCBI (api.ncbi.nlm.nih.gov).'
             : body.length ? clean(errorLine(body)) : `exited with status ${exit ?? '?'}`,
         detail: body.slice(-40).join('\n'),
-        exitStatus: exit,
         workdir: (s['Work dir'] || [])[0]?.trim(),
         hint: network ? OFFLINE_HINT : undefined,
     };
 }
 
-// Feed it console lines; it keeps the first error block, plus the last
-// lines seen as a fallback for failures that print no block at all.
+// Keeps the first error block from the console lines it's fed, plus the
+// last lines as a fallback for failures that print no block.
 class ErrorCollector {
     constructor() {
         this.block = null;
@@ -210,14 +192,13 @@ class ErrorCollector {
     }
 }
 
-// The tools don't always say it's the network: micromamba with a cached
-// index only reports "Could not load repodata.json ... after retry". So a
-// failed run also gets a connection check (lib/network.js), and when the
-// computer is offline the error says so whatever the tools printed.
+// The tools don't always say it's the network (micromamba with a cached
+// index only reports "Could not load repodata.json"), so a failed run's
+// error also takes a connection check into account.
 function withNetwork(error, net) {
     if (net.online && (error.kind !== 'conda-env' || net.conda)) return error;
     if (error.kind === 'conda-env') return { ...error, message: CONDA_OFFLINE };
     return { ...error, hint: OFFLINE_HINT };
 }
 
-module.exports = { ErrorCollector, parse, withNetwork, NETWORK };
+module.exports = { ErrorCollector, withNetwork };

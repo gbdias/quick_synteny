@@ -2,46 +2,28 @@
 """Merge per-chunk miniprot GFFs (--miniprot_chunk_gb) back into one
 GFF that approximates a single whole-genome miniprot run.
 
-The idea: for each query protein, miniprot keeps alignments with score >=
---outs * bestScore, up to -N secondaries, and a chunk's best score for a
-protein is <= the whole genome's best. Re-applying both filters (--outs
-and -N) here, using the score across ALL chunks as "best", therefore
-recovers the whole-genome result -- IF the per-chunk outputs together
-contain every whole-genome hit.
+miniprot keeps, per protein, alignments scoring >= --outs * best, up to -N
+secondaries; a chunk's best is <= the genome's. Re-applying both filters
+with the best across ALL chunks recovers the whole-genome result, if the
+chunks together contain every whole-genome hit.
 
-They don't quite, so this is NOT exact. miniprot decides per index, not
-per genome, which k-mers are too repetitive to seed from (an adaptive
-cutoff from each query's k-mer counts in the loaded index) and which
-candidate chains survive -p/-N, before DP computes the final score. A
-chunk can therefore gain or lose seeds at a locus, and prune or keep
-different candidates, so some whole-genome hits come out of no chunk at all
-and some chunk hits exist in no whole-genome run -- no merge rule can undo
-that. Measured on C. elegans (3-6 chunks): the best hit was identical for
-~98% of proteins, ~1-1.5% of whole-genome hits were in no chunk's output,
-and weak hits, rank 4-6 secondaries, tandem arrays and exact score ties
-account for most of the difference. See modules/local/miniprot_align.nf.
+They don't quite, so this is NOT exact: miniprot's repetitive-k-mer cutoff
+and -p/-N chain pruning are per index, so a chunk can gain or lose seeds
+and candidates at a locus. Measured on C. elegans (3-6 chunks): the best
+hit matched for ~98% of proteins, ~1-1.5% of whole-genome hits were in no
+chunk, mostly weak hits, rank 4-6 secondaries, tandem arrays and score
+ties. See modules/local/miniprot_align.nf.
 
-Per input GFF, a record is one mRNA line plus its child lines (CDS,
-stop_codon, ... -- anything with Parent=<the mRNA's ID>), read as a
-contiguous block the way miniprot itself emits them. ##PAF lines are
-dropped (nothing downstream reads them) and so is each chunk's own
-##gff-version header (one is written once for the merged output).
+A record is one mRNA line plus the contiguous lines with Parent=<its ID>,
+as miniprot emits them. ##PAF lines and per-chunk headers are dropped.
+IDs restart at MP000001 in each chunk, so ID=/Parent= get a "c<chunk>_"
+prefix, chunk = position after sorting inputs by filename.
 
-IDs collide across chunks (miniprot numbers them MP000001, MP000002, ...
-from 1 within EACH chunk), so every ID=/Parent= is prefixed with
-"c<chunk index>_" first, chunk index being the input files' position after
-sorting by filename (chunk_000.*, chunk_001.*, ... sort in chunk order).
-
-Per protein (first token of a record's Target= attribute): best = the
-highest mRNA score (GFF column 6) across every chunk's record for that
-protein. Records with score >= --outs * best survive, ranked by score
-descending (ties: lower chunk index, then the record's position within
-that chunk's file), truncated to 1 + --max_secondary. Rank= is then
-rewritten 1..k, on the mRNA line and every one of its children, to match.
-
-Output: one "##gff-version 3" line, then every surviving record (mRNA line
-followed by its children, in their original relative order), sorted by
-(protein accession, new rank).
+Per protein (first token of Target=): records scoring >= --outs * best
+survive, ranked by score descending (ties: lower chunk, then file order),
+truncated to 1 + --max_secondary; Rank= is rewritten 1..k on the mRNA and
+its children. Output: "##gff-version 3", then the survivors sorted by
+(protein, new rank).
 """
 import argparse
 import os
@@ -50,8 +32,8 @@ from collections import defaultdict
 
 
 def parse_attrs(attr_str):
-    """'ID=x;Rank=1;Target=y 1 2' -> [['ID', 'x'], ['Rank', '1'], ...],
-    order preserved (mutated in place by set_attr, then rejoined)."""
+    """'ID=x;Rank=1;Target=y 1 2' -> [['ID', 'x'], ['Rank', '1'], ...], order
+    preserved."""
     pairs = []
     for token in attr_str.split(';'):
         if not token:
@@ -83,8 +65,7 @@ def set_attr(pairs, key, value):
 def parse_gff(path):
     """-> [record, ...] in file order. record: {'mrna': (fields, pairs),
     'children': [(fields, pairs), ...], 'protein': str, 'score': float,
-    'orig_id': str (the ID= value BEFORE chunk-prefixing, used only to
-    match up children)}."""
+    'orig_id': the unprefixed ID=}."""
     records = []
     current = None
     with open(path) as f:
@@ -123,8 +104,7 @@ def parse_gff(path):
 
 
 def prefix_ids(records, chunk_idx):
-    """Rewrite ID=/Parent= in place so they're unique across chunks --
-    chunk index becomes part of every record's identity from here on."""
+    """Rewrite ID=/Parent= in place so they're unique across chunks."""
     for rec in records:
         _fields, pairs = rec['mrna']
         set_attr(pairs, 'ID', f"c{chunk_idx}_{rec['orig_id']}")
@@ -133,12 +113,9 @@ def prefix_ids(records, chunk_idx):
 
 
 def merge(gff_paths, outs, max_secondary):
-    """-> (n_input, [record, ...]) -- n_input is the total candidate count
-    across all chunks before filtering; the records are the survivors, each
-    with 'new_rank' set, NOT yet sorted for output."""
+    """-> (input record count, survivors with 'new_rank' set, unsorted)."""
     all_records = []
-    # sort by filename so "c<chunk index>_" and the tie-break "lower chunk
-    # index" both mean the same thing chunk_NNN.* naming implies
+    # chunk_NNN.* sorts in chunk order
     for chunk_idx, path in enumerate(sorted(gff_paths, key=os.path.basename)):
         records = parse_gff(path)
         prefix_ids(records, chunk_idx)

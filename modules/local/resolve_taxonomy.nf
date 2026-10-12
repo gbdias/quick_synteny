@@ -1,10 +1,6 @@
-// Ranks are queried outward from species; see bin/parse_lineage.py for the
-// exact ladder order (species outward to phylum, every intermediate taxon
-// included -- hence --parents, which adds each ancestor's own report).
-//
-// Split into two processes because the datasets image (envs/ncbi_datasets.yml)
-// has no Python: fetch the raw taxonomy JSON in the datasets container, parse
-// it in the Python one (envs/python.yml).
+// --parents adds each ancestor's own report, so parse_lineage.py can list
+// every taxon from species to phylum. Two processes because the datasets
+// image has no Python.
 
 process FETCH_TAXONOMY_JSON {
     tag "${taxid}"

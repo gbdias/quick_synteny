@@ -1,12 +1,9 @@
-// Finds what the pipeline needs on the host: the Nextflow to launch (the
-// app's managed runtime, or one pinned in settings), and -- checked
-// separately, only while the Docker engine is selected -- a running Docker
-// daemon.
+// The Nextflow to launch (managed runtime, or one set in Settings) and,
+// separately, whether Docker is running.
 //
-// An app started from Finder/the Dock doesn't inherit the user's shell
-// PATH (it gets launchd's /usr/bin:/bin:/usr/sbin:/sbin), so the login
-// shell's PATH is merged in first -- that's how a Docker Desktop or
-// Homebrew install is found.
+// An app started from Finder/the Dock gets launchd's minimal PATH, so the
+// login shell's PATH is merged in first: that's how Docker Desktop or
+// Homebrew installs are found.
 
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
@@ -22,9 +19,7 @@ function run(cmd, args, opts = {}) {
     });
 }
 
-// PATH as the user's interactive login shell sets it.
 async function loginShellPath() {
-    if (process.platform === 'win32') return null;
     const shell = process.env.SHELL || '/bin/zsh';
     const marker = '__QS_PATH__';
     const r = await run(shell, ['-ilc', `printf '${marker}%s${marker}' "$PATH"`], { timeout: 10000 });
@@ -50,12 +45,12 @@ function which(name) {
     return null;
 }
 
-// what to launch Nextflow with: settings' nextflowPath/javaHome win over
-// the managed runtime. The env always carries the runtime's micromamba,
-// which the conda engine needs whichever Nextflow runs.
+// settings' nextflowPath/javaHome win over the managed runtime. The env
+// always carries the runtime's micromamba, which the conda engine needs
+// whichever Nextflow runs.
 async function nextflowLaunch(settings) {
-    // the app pins its Nextflow, so Nextflow's own "26.x is available"
-    // notice only misleads; offline, its check also prints a curl error
+    // the app pins its Nextflow, so the "newer version available" notice
+    // only misleads (and offline, prints a curl error)
     const env = { ...runtime.runtimeEnv(), NXF_DISABLE_CHECK_LATEST: 'true' };
     if (settings.javaHome) {
         env.JAVA_HOME = settings.javaHome;
@@ -77,18 +72,18 @@ async function checkDocker() {
     const bin = which('docker');
     if (!bin) return { ok: false, message: 'Docker not installed' };
     const r = await run(bin, ['info', '--format', '{{json .}}']);
-    if (!r.ok) return { ok: false, bin, message: 'Docker not running' };
+    if (!r.ok) return { ok: false, message: 'Docker not running' };
     try {
         const info = JSON.parse(r.stdout);
-        return { ok: true, bin, version: info.ServerVersion, memBytes: info.MemTotal, cpus: info.NCPU };
+        return { ok: true, version: info.ServerVersion, memBytes: info.MemTotal };
     } catch {
-        return { ok: true, bin, version: '?' };
+        return { ok: true, version: '?' };
     }
 }
 
 async function checkAll(settings) {
     const nextflow = await nextflowLaunch(settings);
-    return { nextflow, host: { memBytes: os.totalmem(), cpus: os.cpus().length }, runtimeRoot: runtime.ROOT, home: os.homedir() };
+    return { nextflow, host: { memBytes: os.totalmem() }, runtimeRoot: runtime.ROOT, home: os.homedir() };
 }
 
 module.exports = { fixPath, checkAll, checkDocker };

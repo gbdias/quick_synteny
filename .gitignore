@@ -7,14 +7,6 @@ results/
 .DS_Store
 __pycache__/
 
-# exploration/planning artifacts, not part of the pipeline itself
+# local notes and plans
 /scratch/
-/prototypes/
-/quick_synteny_nextflow_plan.md
-
-# local real-data fixtures for chainer development (large, not versioned)
-/test_data/
-/slurm/results_*/
-
-#for now
 docs/

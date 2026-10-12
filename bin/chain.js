@@ -2,7 +2,7 @@
 // shared by the pipeline (node, via bin/chain_blocks.mjs) and the
 // interactive page (inlined into the HTML and run in a Web Worker). This
 // header is the contract every producer and consumer follows; the on-disk
-// hit-table format itself is specified in bin/extract_hits.py's docstring.
+// hit-table format is specified in bin/extract_hits.py's docstring.
 // Changing any rule below means bumping VERSION.
 //
 // Dependency-free and DOM-free on purpose: the same source text must run
@@ -31,25 +31,13 @@
 //   minBlock     int (loci)   minimum chain length reported as a block
 //                             (default 15)
 //   selfMode     bool         both sides are the same table (homeolog scan)
-//   Nothing is tuned to the data: minPositive 0.7 and minBlock 15 are only
-//   where the page's controls start, and a viewer moves them from there.
-//   Checked 2026-10-12 (VERSION 2) on the hit tables under results/ and
-//   scratch/: at minBlock 15, axolotl (A. mexicanum) against itself gives 27
-//   blocks covering 99.4 % of the sequence its hits span, and the
-//   allotetraploid A. suecica against A. thaliana gives 195 blocks, thaliana
-//   covered at depth 2.61; at 5, Arabidopsis's short ancient-duplication
-//   blocks join in (depth 4.24). On the same anchors, every block MCScanX
-//   1.0.0 reports at its defaults (with -m maxGap-1) is matched 1:1 for
-//   suecica vs thaliana, A. mexicanum vs A. tigrinum and two yeast pairs;
-//   the extra blocks here are short or gappy ones its score cutoff and
-//   E-value test drop.
-//   meanBestPositive (mean over proteins of their rank-1 positive, the best
-//   positive if no rank-1 hit) only serves chain_blocks.mjs's sanity check.
-//   gapPenalty stays 0 by default: 0.1 removes the end-extension noise of
-//   note (b) below on synthetic data at no recall cost (checked with
-//   VERSION 1), but on suecica vs thaliana it also splits real, gappy
-//   ancient-duplication blocks (minBlock 5: depth 4.24 -> 2.71). The page
-//   runs one parameter set for all three of its chains (cross and both self).
+//   Nothing is tuned to the data: the defaults are where the page's controls
+//   start. gapPenalty stays 0 because, while 0.1 trims the end noise of
+//   consequence (b) below, it also splits real, gappy ancient-duplication
+//   blocks. The page runs one parameter set for all three of its chains
+//   (cross and both self). meanBestPositive (mean over proteins of their
+//   rank-1 positive, else their best) only serves chain_blocks.mjs's sanity
+//   check.
 //
 // CHAINING RULES (normative):
 //   1. A locus passes if any of its hits passes. A passing locus's rank
@@ -91,17 +79,16 @@
 //   Consequences:
 //   (a) Anchor deserts don't break chains: distance counts passing loci, so two
 //       loci with nothing between them are adjacent however many bp apart.
-//       That is what makes chaining genome-size invariant (a bp limit found
-//       0.3 % of axolotl-vs-itself; this found 98.5 %, with VERSION 1).
+//       That is what makes chaining genome-size invariant.
 //   (b) Noise can extend a block's ends, never its interior: monotonicity
 //       only leaves room beyond a block's last true anchor.
 //   (c) A block can bridge a shorter inversion: the '+' chain jumps from one
 //       flank to the inversion's middle anchor and on to the other flank
 //       (any inversion under about 2 * maxGap loci), while the rest of the
 //       inversion is its own '-' block, so the two spans overlap, as in
-//       MCScanX. Rule 5's rounds keep that '-' block: in VERSION 1's single
-//       pass, the inverted anchors' high '+' scores (from following on from
-//       the flank) took them first as one-anchor chains.
+//       MCScanX. Rule 5's rounds are what keep that '-' block: in a single
+//       pass, the inverted anchors' high '+' scores (carried on from the
+//       flank) would take them first, one anchor at a time.
 //
 // OUTPUTS: Block = {qChrom, sChrom (chrom indices), qStart, qEnd, sStart,
 //   sEnd (min start / max end over member hits), orientation, nAnchors
@@ -166,22 +153,19 @@
         return rows;
     }
 
-    // Builds HitTables (HIT TABLE above) from parsed TSV rows for one comparison --
-    // two genomes, or one for a self-comparison. The protein list is the
-    // sorted union of every genome's accessions, so prot indices are shared.
-    // chromNames defaults to first appearance order, which is chrom.sizes
-    // order restricted to sequences with hits (rows are sorted that way).
+    // HIT TABLEs for one comparison (two genomes, or one for self) from parsed
+    // TSV rows. chromNames is first-appearance order, i.e. chrom.sizes order
+    // restricted to sequences with hits (rows are sorted that way).
     function makeTables(genomes) {
         const accessions = new Set();
         for (const g of genomes) { for (const r of g.rows) { accessions.add(r[8]); } }
         const proteins = Array.from(accessions).sort();
         const protIndex = new Map(proteins.map((p, i) => [p, i]));
         const tables = genomes.map((g) => {
-            const chromNames = g.chromNames ? g.chromNames.slice() : [];
-            const chromIndex = new Map(chromNames.map((c, i) => [c, i]));
+            const chromNames = [], chromIndex = new Map();
             const n = g.rows.length;
             const t = {
-                name: g.name, chromNames, chromSizes: g.chromSizes ? g.chromSizes.slice() : null, n,
+                name: g.name, chromNames, chromSizes: null, n,
                 chrom: new Uint16Array(n), start: new Float64Array(n), end: new Float64Array(n),
                 strand: new Uint8Array(n), positive: new Uint16Array(n), rank: new Uint8Array(n),
                 prot: new Uint32Array(n), locus: new Uint32Array(n), nLoci: 0,
@@ -189,10 +173,7 @@
             for (let i = 0; i < n; i++) {
                 const r = g.rows[i];
                 let ci = chromIndex.get(r[0]);
-                if (ci === undefined) {
-                    if (g.chromNames) { throw new Error(`hits: chromosome "${r[0]}" not in chromNames`); }
-                    ci = chromNames.length; chromNames.push(r[0]); chromIndex.set(r[0], ci);
-                }
+                if (ci === undefined) { ci = chromNames.length; chromNames.push(r[0]); chromIndex.set(r[0], ci); }
                 t.chrom[i] = ci;
                 t.start[i] = +r[1];
                 t.end[i] = +r[2];
@@ -225,8 +206,7 @@
 
     // ---------------------------------------------------------------- params
 
-    // mean over proteins of the rank-1 positive (falling back to the best
-    // positive for a protein without a rank-1 hit) -- see PARAMETERS above
+    // see PARAMETERS above
     function meanBestPositive(t) {
         const r1 = new Map(), best = new Map();
         for (let i = 0; i < t.n; i++) {
@@ -239,7 +219,6 @@
         for (const [p, v] of best) { sum += r1.has(p) ? r1.get(p) : v; }
         return sum / best.size / 10000;
     }
-
 
     function resolveParams(p, selfMode) {
         const q = Object.assign({}, DEFAULTS, p || {});
@@ -356,12 +335,8 @@
         return anchors;
     }
 
-    // CHAINING RULES 2, second half (MCScanX's -w): over `ord` (candidate
-    // indices sorted by pair, rankA, rankB), a locus's anchors whose partners
-    // lie within COLLAPSE_WINDOW ranks of the previous one form a run, and
-    // only the run's best min(positive) is kept, the first on ties; first
-    // along A, then along B over what's left. Returns keep flags by position
-    // in `ord`.
+    // CHAINING RULES 2, second half: keep flags by position in `ord`
+    // (candidate indices sorted by pair, rankA, rankB)
     function collapseRepeats(ord, pair, rA, rB, qual) {
         const n = ord.length, keep = new Uint8Array(n).fill(1);
         const pass = (pos, same, step) => {
@@ -388,11 +363,8 @@
 
     // ---------------------------------------------------------------- stage 2: DP + extraction
 
-    // CHAINING RULES 4-5: per chromosome pair, rounds of DP over the anchors
-    // still free; each round takes chains by f descending until a walk
-    // reaches an anchor taken earlier in the round, then the DP reruns
-    // without the taken anchors. The first candidate of a round is always
-    // taken whole, so every round makes progress.
+    // CHAINING RULES 4-5. A round's first candidate is always taken whole, so
+    // every round makes progress.
     function chainAnchors(an, q) {
         const n = an.n, G = q.maxGap, H = q.maxLookback, pen = q.gapPenalty;
         const rA = an.rA, rB = an.rB;
@@ -494,15 +466,14 @@
 
     // ---------------------------------------------------------------- driver
 
-    // Caches each stage by the parameters it depends on (CHAINING RULES): anchors
-    // by (minPositive, maxHitRank, and maxGap in self mode), chains by the
-    // anchor key plus (maxGap, maxLookback, gapPenalty); minBlock is a pure
-    // filter over the cached chains, so changing it re-chains nothing.
+    // Caches each stage by the parameters it depends on: anchors by
+    // (minPositive, maxHitRank, and maxGap in self mode), chains by those plus
+    // (maxGap, maxLookback, gapPenalty); minBlock only filters cached chains.
     function createChainer(A, B, opts) {
         const selfMode = !!(opts && opts.selfMode);
         if (selfMode && B && B !== A) { throw new Error('chain: selfMode needs the same table on both sides'); }
         B = selfMode ? A : B;
-        const nProteins = (opts && opts.nProteins) || Math.max(maxPlusOne(A.prot), maxPlusOne(B.prot));
+        const nProteins = Math.max(maxPlusOne(A.prot), maxPlusOne(B.prot));
         prepareTable(A, nProteins); prepareTable(B, nProteins);
         const cache = {anchorKey: null, anchors: null, chainKey: null, chains: null, blocksByChain: null};
 
@@ -514,13 +485,11 @@
                 cache.anchors = buildAnchors(A, B, q);
                 cache.anchorKey = anchorKey; cache.chainKey = null;
             }
-            const t1 = now();
             const chainKey = [anchorKey, q.maxGap, q.maxLookback, q.gapPenalty].join(',');
             if (cache.chainKey !== chainKey) {
                 cache.chains = chainAnchors(cache.anchors, q);
                 cache.chainKey = chainKey; cache.blocksByChain = new Map();
             }
-            const t2 = now();
             const ch = cache.chains, blocks = [];
             for (let c = 0; c + 1 < ch.chainOff.length; c++) {
                 if (ch.chainOff[c + 1] - ch.chainOff[c] < q.minBlock) { continue; }
@@ -529,14 +498,13 @@
                 blocks.push(b);
             }
             blocks.sort(compareBlocks);
-            const t3 = now();
             return {
-                version: VERSION, params: publicParams(q), A, B, anchors: cache.anchors, blocks,
+                params: publicParams(q), A, B, anchors: cache.anchors, blocks,
                 stats: {nAnchors: cache.anchors.n, nChains: ch.chainOff.length - 1, nBlocks: blocks.length,
-                        ms: {anchors: t1 - t0, chains: t2 - t1, blocks: t3 - t2, total: t3 - t0}},
+                        ms: now() - t0},
             };
         }
-        return {run, selfMode};
+        return {run};
     }
 
     function chain(A, B, params) {
@@ -557,7 +525,7 @@
 
     // ---------------------------------------------------------------- outputs
 
-    // link objects in the shape the page already renders (OUTPUTS above)
+    // OUTPUTS above
     function blocksToLinks(result) {
         const A = result.A, B = result.B;
         return result.blocks.map((b) => ({
@@ -571,8 +539,7 @@
     const TSV_HEADER = 'target_chrom\ttarget_start\ttarget_end\treference_chrom\treference_start\treference_end\t'
         + 'score\torientation\tmean_identity\tanchor_density\n';
 
-    // the `# key=value ...` line naming the parameters a TSV was made with
-    // (OUTPUTS above); extra: further [key, value] pairs, appended as given
+    // OUTPUTS above; extra: further [key, value] pairs, appended as given
     function settingsLine(params, extra) {
         const p = Object.assign({}, DEFAULTS, params);
         const pairs = [['min_identity', +p.minPositive.toFixed(4)], ['max_gap', p.maxGap], ['min_block', p.minBlock],
@@ -595,35 +562,31 @@
     // ---------------------------------------------------------------- embedded payload (EMBEDDED PAYLOAD above)
 
     function b64ToBytes(b64) {
-        if (typeof atob === 'function') {
-            const bin = atob(b64), out = new Uint8Array(bin.length);
-            for (let i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
-            return out;
-        }
-        return new Uint8Array(Buffer.from(b64, 'base64'));
+        const bin = atob(b64), out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
+        return out;
     }
 
-    async function gunzipDefault(bytes) {
+    async function gunzip(bytes) {
         const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
         return new Uint8Array(await new Response(stream).arrayBuffer());
     }
 
     const DTYPES = {u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, f64: Float64Array};
 
-    async function decodeColumn(col, gunzip) {
+    async function decodeColumn(col) {
         const bytes = await gunzip(b64ToBytes(col.data));
         const T = DTYPES[col.dtype];
         if (!T) { throw new Error(`payload: unknown dtype ${col.dtype}`); }
-        // copy into an aligned buffer: the decompressed bytes may not start
-        // on an element boundary
+        // the decompressed bytes may not start on an element boundary
         const buf = new ArrayBuffer(bytes.byteLength);
         new Uint8Array(buf).set(bytes);
         return new T(buf);
     }
 
-    async function decodeGenome(g, chroms, gunzip) {
+    async function decodeGenome(g, chroms) {
         const c = {};
-        for (const name of Object.keys(g.cols)) { c[name] = await decodeColumn(g.cols[name], gunzip); }
+        for (const name of Object.keys(g.cols)) { c[name] = await decodeColumn(g.cols[name]); }
         const n = g.n;
         const t = {
             name: chroms.name, chromNames: chroms.names.slice(), chromSizes: chroms.sizes.slice(), n,
@@ -642,24 +605,22 @@
     }
 
     // -> {proteins, target, reference}; chroms = {target: {names, sizes},
-    // reference: {names, sizes}}; gunzip is injectable for environments
-    // without DecompressionStream
-    async function decodePayload(payload, chroms, gunzip) {
+    // reference: {names, sizes}}
+    async function decodePayload(payload, chroms) {
         if (payload.version !== VERSION) { throw new Error(`payload: version ${payload.version}, expected ${VERSION}`); }
-        gunzip = gunzip || gunzipDefault;
         const text = new TextDecoder().decode(await gunzip(b64ToBytes(payload.proteins)));
         const proteins = text.length ? text.split('\n') : [];
-        const target = await decodeGenome(payload.genomes.target, {name: 'target', ...chroms.target}, gunzip);
+        const target = await decodeGenome(payload.genomes.target, {name: 'target', ...chroms.target});
         const reference = payload.genomes.reference === 'same_as_target'
             ? Object.assign({}, target, {name: 'reference', chromNames: chroms.reference.names.slice(),
                                           chromSizes: chroms.reference.sizes.slice()})
-            : await decodeGenome(payload.genomes.reference, {name: 'reference', ...chroms.reference}, gunzip);
+            : await decodeGenome(payload.genomes.reference, {name: 'reference', ...chroms.reference});
         return {proteins, target, reference};
     }
 
     const api = {
-        VERSION, DEFAULTS, MIN_CHAIN_LENGTH,
-        parseHitsTsv, makeTables, prepareTable, meanBestPositive,
+        VERSION, DEFAULTS,
+        parseHitsTsv, makeTables, meanBestPositive,
         createChainer, chain, blocksToLinks, settingsLine, linksToTsv, blocksToTsv, decodePayload,
     };
     if (typeof module !== 'undefined' && module.exports) { module.exports = api; } else { root.SYNCHAIN = api; }

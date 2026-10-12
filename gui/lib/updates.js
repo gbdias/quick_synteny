@@ -1,13 +1,11 @@
-// "A new version is available": the app isn't signed, so it can't update
-// itself (electron-updater needs a signed app on macOS). It only looks for
-// a newer release on GitHub and links to it.
+// "A new version is available": the app is unsigned, so it can't update
+// itself (electron-updater needs a signed app on macOS); it links to the
+// newer GitHub release instead.
 //
-// Only a release carrying an app file for this platform and architecture
-// counts. The repo also has pipeline-only releases (v0.1.0-alpha), which
-// have nothing to download. App files are named by package.json's
-// build.artifactName: quick_synteny-<version>-<mac|linux>-<arch>.<ext>,
-// where electron-builder spells an AppImage's arch the AppImage way
-// (x86_64, not Node's x64).
+// Only releases with an app file for this platform and arch count (the repo
+// also has pipeline-only ones). Files follow package.json's
+// build.artifactName, quick_synteny-<version>-<mac|linux>-<arch>.<ext>, with
+// an AppImage's arch spelled the AppImage way (x86_64, not x64).
 
 const REPO = 'gbdias/quick_synteny';
 const RELEASES = `https://api.github.com/repos/${REPO}/releases?per_page=30`;
@@ -17,8 +15,7 @@ const EXTENSIONS = { darwin: ['dmg'], linux: ['AppImage', 'deb', 'rpm'] };
 const OS_NAMES = { darwin: 'mac', linux: 'linux' };
 const ARCH_NAMES = { x64: ['x64', 'x86_64'], arm64: ['arm64', 'aarch64'] };
 
-// semver order, enough for tags like 0.2.0 and 0.1.0-alpha: numbers first,
-// then a release sorts after its own pre-releases
+// semver order, enough for tags like 0.2.0 and 0.1.0-alpha
 function parse(v) {
     const m = String(v).replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/);
     return m ? { nums: m.slice(1, 4).map(Number), pre: m[4] ? m[4].split('.') : [] } : null;
@@ -48,8 +45,7 @@ function isRepoUrl(url) {
 }
 
 // the newest release newer than `current` with a file for this machine,
-// or null. Network trouble means "no news", never an error: checking is
-// a courtesy, not something to fail over.
+// or null; network trouble means "no news", never an error
 async function checkForUpdate({ current, platform = process.platform, arch = process.arch, url = RELEASES }) {
     const exts = EXTENSIONS[platform];
     if (!exts) return null;

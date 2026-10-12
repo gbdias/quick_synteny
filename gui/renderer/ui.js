@@ -1,6 +1,5 @@
-// Shared by form.js and app.js: element helpers, icons, formatting, and
-// the page's state. Classic scripts, loaded in order (index.html): Chromium
-// doesn't run ES modules from file:// pages.
+// Shared by form.js and app.js. Classic scripts, loaded in order
+// (index.html): Chromium doesn't run ES modules from file:// pages.
 
 const $ = (sel) => document.querySelector(sel);
 
@@ -89,6 +88,9 @@ function fmtDuration(ms) {
     if (m < 60) return `${m} min${s % 60 ? ` ${s % 60} s` : ''}`;
     return `${Math.floor(m / 60)} h ${m % 60} min`;
 }
+
+// an ipcRenderer.invoke rejection's message, without Electron's prefix
+const cleanIpcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 const baseName = (p) => (p ? String(p).split(/[\\/]/).pop() : '');
 
