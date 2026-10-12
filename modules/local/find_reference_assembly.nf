@@ -1,26 +1,14 @@
-// Climbs the lineage ladder (species -> params.max_rank, through every
-// intermediate taxon NCBI has -- see parse_lineage.py) looking for a
-// chromosome/complete-level assembly. Split into a ladder-query process
-// (datasets container, one query per taxon) and a selection process (plain
-// Python container) for the same reason as resolve_taxonomy.nf: the datasets
-// CLI image has no Python to do the JSON selection logic in-process.
+// Climbs the lineage ladder (species -> params.max_rank, every taxon in
+// between -- see parse_lineage.py) for a chromosome/complete-level assembly.
+// Query and selection are separate processes because the datasets image
+// has no Python.
 //
-// query_genome_ladder.sh stops at the first taxon with another species'
-// assembly and caps each query's size -- see that script for how the cap
-// avoids keeping an arbitrary subset of a large taxon.
+// --assembly-level here and --require_chromosome_level in the selection are
+// deliberately redundant: the selection script enforces it itself rather
+// than relying on the query's filter.
 //
-// --assembly-level chromosome,complete here is belt-and-suspenders with
-// find_closest_assembly.py's own --require_chromosome_level flag (always
-// passed below): a low-quality genome makes a poor synteny comparison
-// regardless of species, so this is enforced explicitly in the selection
-// script itself, not left to only ever be true as an incidental side effect
-// of this query's own filter. Proteome discovery passes neither -- it only
-// needs a candidate's protein sequences, so a scaffold-level annotated
-// assembly is fine there (see find_proteome_assembly.nf).
-//
-// `chosen` is --reference_taxid: the lineage is then the chosen taxon's,
-// and only its first row -- that taxon itself -- is searched, for its best
-// chromosome-level assembly, instead of climbing outward from the target.
+// `chosen` is --reference_taxid: the lineage is the chosen taxon's, and
+// only its first row -- that taxon -- is searched.
 
 process QUERY_GENOME_LADDER_REFERENCE {
     tag "${chosen ? 'chosen taxon' : "max_rank=${max_rank}"}"
@@ -67,7 +55,7 @@ process SELECT_REFERENCE_ASSEMBLY {
     path 'reference_search_log.tsv'
 
     script:
-    def excludeFlag = exclude_target && !chosen ? '--exclude_target' : ''
+    def excludeFlag = exclude_target ? '--exclude_target' : ''
     if (chosen)
         """
         head -n 1 ${lineage} > chosen_lineage.tsv
@@ -81,12 +69,10 @@ process SELECT_REFERENCE_ASSEMBLY {
         """
 }
 
-// --reference_accession: one exact assembly, no search. Its summary from
-// NCBI becomes a reference_selection.json of the same shape the search
-// writes, so everything downstream (the download, the proteome's preferred
-// species, the page's labels) treats it alike. Any assembly level: it's the
-// user's pick. Fetched and described in two processes, like the search
-// above: the datasets image has no Python.
+// --reference_accession: no search. Its NCBI summary becomes a
+// reference_selection.json of the same shape the search writes, so
+// everything downstream treats it alike. Any assembly level: it's the
+// user's pick.
 process FETCH_ACCESSION_SUMMARY {
     tag "${accession}"
     label 'process_low'

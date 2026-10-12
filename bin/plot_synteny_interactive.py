@@ -1,65 +1,28 @@
 #!/usr/bin/env python3
 """Render a two-genome synteny plot as a self-contained interactive HTML page
-(Bokeh, no server -- all interactivity is CustomJS, and BokehJS itself is
-inlined, so the page opens offline). This is the pipeline's
-only plot output -- there is deliberately no static-image equivalent, so
-that "explore, then export exactly the panel you want" (see each panel's
-save button + format selector, SYN.exportFigure -- SVG for a vector original
-to edit or convert to PDF, PNG for something ready to paste into a slide or
-document) can be the one workflow, rather than needing separate static
-renders kept in sync with it.
+(Bokeh, CustomJS only, BokehJS inlined -- no server, works offline). This is
+the pipeline's only plot output; each panel exports itself as SVG/PNG
+(SYN.exportFigure).
 
-Three-column layout: a full Circos-style ring on the left (every wedge/
-ribbon individually hoverable), a linear zoom/detail panel in the middle, a
-whole-genome dotplot on the right. Clicking a reference-chromosome wedge, a
-target-chromosome wedge, or a chromosome band on either dotplot axis zooms
-the middle panel into that one chromosome's links -- whichever side you
-didn't click gets packed (multiple chromosomes side by side if more than one
-is involved), the clicked chromosome stays alone on its own row. Clicking a
-single square in the dotplot grid instead zooms straight into that one
-(target, reference) chromosome pair -- always exactly two bars, no packing,
-and this is also the only way to select a pair with zero links (see
-SYN.buildPairDetailData), since the axis rulers can only ever select one
-chromosome at a time. Reference-genome chromosomes are always drawn on top
-in every panel, regardless of which side triggered the zoom. A dropdown
-picks which of a few curated color palettes (see PALETTES) reference-genome
-chromosomes cycle through, and a numeric spinner recolors every panel by
-cycling through 1-MAX_COLORS discrete colors from whichever one is active
-instead of one color per chromosome; a min-block-size spinner filters every
-panel down to blocks with at least that many supporting anchors -- since
-extraction is independent of the minimum block size (bin/chain.js's
-CHAINING RULES header, rule 6), the chainer is always run at minBlock=3 and this spinner is a
-pure client-side filter on the result (see SYN.data.ribbons, built by
-SYN.buildRingLayout from whatever SYN.applyChainResult most recently put in
-SYN.data.linksByQuery/linksByReference, and SYN.buildOverviewRibbons). Min
-identity, max gap, and hit rank each trigger a fresh client-side re-chain
-(SYN.requestChain) -- see SYN.startChainer/SYN.applyChainResult below. Spinners
-rather than sliders since the filters are plain numeric comparisons that work
-for any value, not just a handful of steps -- a free-form numeric input
-doesn't imply a false ceiling the way a slider's end-of-track does. Two text
-inputs let a viewer relabel "target"/"reference" to the actual genome/species
-names before exporting a panel (see SYN.applyLabels) -- every exportable
-title/bar-label reads from these rather than the pipeline's literal role
-tags. A stats panel (see SYN.applyStats) shows the alignment summary --stats
-optionally provides, since that no longer has anywhere to live inside an
-exported image the way it did on the static plots this replaced.
+Three panels: a Circos-style ring, a linear zoom panel, and a whole-genome
+dotplot. Clicking a chromosome (ring wedge or dotplot ruler) zooms the middle
+panel into it, with its partners on the other side packed alongside; clicking
+a dotplot cell zooms into that one chromosome pair (the only way to select a
+pair with zero links, see SYN.buildPairDetailData). Reference chromosomes are
+always drawn on top.
 
-Every wedge/ribbon/segment/gap polygon on the page -- ring, zoom panel, and
-dotplot alike -- is built once, client-side, as plain JS (SHARED_JS): SYN.init
-(see build_page()'s doc.js_on_event(DocumentReady, ...)) runs it for the
-initial render, through the exact same functions every later control change
-reuses, so the browser can rebuild an arbitrary (pivot side, pivot chromosome,
-color count, min block size, chromosome order) combination instead of only
-combinations precomputed ahead of time. Python never computes any geometry,
-nor any synteny block, at all: it only ships each genome's raw hit table
-(bin/chain.js's EMBEDDED PAYLOAD header, SYN.hitsPayload) plus chromosome sizes
-and palette indices, as embedded JSON, and inlines bin/chain.js so the browser
-can chain (and re-chain, on every parameter change) client-side, in a Web
-Worker when one is available -- see SYN.startChainer/SYN.applyChainResult.
+Python computes no geometry and no synteny blocks: it ships each genome's raw
+hit table (bin/chain.js's EMBEDDED PAYLOAD header, SYN.hitsPayload) plus
+chromosome sizes and palette indices as embedded JSON, and inlines
+bin/chain.js so the browser chains client-side (in a Web Worker when
+available), re-chaining on every min identity / max gap / hit rank change
+(SYN.requestChain). Min block size is a pure client-side filter: extraction
+doesn't depend on it (bin/chain.js's CHAINING RULES header, rule 6), so the
+chainer always runs at minBlock=3. SYN.init renders the initial page through
+the same SHARED_JS functions every later control change reuses.
 
-This is not run in the pipeline's plain Python image -- it needs Bokeh, so
-it runs on envs/bokeh.yml's (conda-forge's bokeh package). See
-modules/local/pygenomeviz_plot.nf.
+Needs Bokeh, so it runs on envs/bokeh.yml (see
+modules/local/plot_synteny.nf).
 """
 import argparse
 import base64
@@ -103,24 +66,18 @@ PALETTE_BRIGHT = [
     '#023EFF', '#FF7C00', '#1AC938', '#E8000B', '#8B2BE2',
     '#9F4800', '#F14CC1', '#A3A3A3', '#FFC400', '#00D7FF',
 ]
-# seaborn's "dark" set -- same hues again, deepened/desaturated; pairs well
-# with light text or a light background where PALETTE/PALETTE_BRIGHT read
-# as too loud
+# seaborn's "dark" set -- same hues again, deepened/desaturated
 PALETTE_DARK = [
     '#001C7F', '#B1400D', '#12711C', '#8C0800', '#591E71',
     '#592F0D', '#A23582', '#3C3C3C', '#B8850A', '#006374',
 ]
-# matplotlib's "tab10" -- a different, widely-recognized categorical set
-# (distinct hues from seaborn's "deep"/PALETTE above, not just a
-# lighter/darker variant of the same ten) for a viewer who wants a familiar
-# look from outside the seaborn family
+# matplotlib's "tab10" -- distinct hues from the seaborn sets above
 PALETTE_TABLEAU = [
     '#1F77B4', '#FF7F0E', '#2CA02C', '#D62728', '#9467BD',
     '#8C564B', '#E377C2', '#7F7F7F', '#BCBD22', '#17BECF',
 ]
-# every option needs exactly MAX_COLORS entries -- SYN.paletteColor (see
-# SHARED_JS) indexes with idx % k for any k up to MAX_COLORS, so a shorter
-# list would read past its own end and recolor as undefined
+# every option needs exactly MAX_COLORS entries: SYN.paletteColor indexes
+# with idx % k for any k up to MAX_COLORS
 PALETTES = {
     'Default': PALETTE,
     'Colorblind-safe': PALETTE_COLORBLIND,
@@ -136,13 +93,10 @@ TARGET_GREY = '#999999'
 # palette color, which would read as a reference chromosome's
 TARGET_SELF_GREY = '#666666'
 
-# How the unselected rest of each panel looks while something is selected
-# (see SYN.select): Bokeh's own non-selection glyph, set per renderer in
-# build_page(). Ribbons and segments dim enough to read as "not what you
-# clicked" while staying visible as the context the selection sits in --
-# a single block selected leaves nearly everything dimmed, so too low and
-# the panel goes blank around it; wedges and ruler bands less, so the ring
-# and axes stay readable around the selection.
+# Non-selection glyph alpha while something is selected (SYN.select). A
+# single selected block dims nearly everything, so ribbons/segments can't go
+# much lower without the panel going blank; wedges/ruler bands dim less so
+# the ring and axes stay readable.
 RIBBON_DIM_ALPHA = 0.2
 WEDGE_DIM_ALPHA = 0.5
 
@@ -152,82 +106,51 @@ INNER_R = OUTER_R - RING_WIDTH
 LINK_R = INNER_R
 GROUP_GAP = math.radians(4)
 CHROM_GAP = math.radians(0.5)
-# a ring wedge narrower than this gets no name label (its hover tooltip and
-# click still work): at the label radius (OUTER_R + 0.14, ~275 px on the
-# 620 px figure) 2.5 degrees is ~12 px of arc, about one line of the 10 px
-# label text, so labels of neighbouring wedges can't pile on top of each
-# other the way a run of small scaffolds' did. In data space, so zooming the
-# ring in doesn't bring hidden labels back.
+# a ring wedge narrower than this gets no name label (hover/click still
+# work): at the label radius 2.5 degrees is ~12 px of arc, about one line of
+# the 10 px label text, so neighbouring labels can't pile up. In data space,
+# so zooming the ring doesn't bring hidden labels back.
 RING_LABEL_MIN_ANGLE = math.radians(2.5)
 
-# an assembly gap is typically a few hundred bp against a multi-Mb
-# chromosome -- drawn at its true angular width, most gaps would render
-# sub-pixel and be both invisible and practically unhoverable. Widening only
-# the ones that would otherwise fall under this floor (real length is still
-# exact in the tooltip/label) is the same "minimum feature width" convention
-# other genome browsers use for tiny features -- not applied to a gap that's
-# already wide enough to show its true size. Small on purpose: a gap wedge
-# spans the ideogram's FULL radial height (INNER_R to OUTER_R, same as
-# SYN.wedgePolygonJS's own r0/r1 defaults -- no separate radial inset), so it should
-# read as a thin needle mark across that whole band, not a short wide block --
-# only the angular width (this constant) needs flooring, not the height.
+# minimum drawn angular width of an assembly gap on the ring: at true width
+# most gaps (a few hundred bp) would be sub-pixel and unhoverable. The
+# tooltip still shows the real length. Small on purpose: a gap wedge spans
+# the ideogram's full radial height, so it should read as a thin needle.
 MIN_GAP_ANGLE = math.radians(0.2)
 
-# the zoom panel figure's own fixed pixel width -- embedded (not duplicated
-# as a separate JS literal) so SYN.widenGapBp's px-to-bp conversion can
-# never drift from the actual figure build_page() creates below
+# the zoom panel's pixel width -- embedded so SYN.widenGapBp's px-to-bp
+# conversion matches the actual figure
 DETAIL_FIG_WIDTH = 446
 
-# the default right-hand toolbar Bokeh reserves on every figure here (pan/
-# wheel-zoom/reset/hover icons) -- that strip eats into detail_fig's own
-# DETAIL_FIG_WIDTH rather than sitting outside it, so the panel's actual
-# *drawn* frame (what a viewer reads as "the zoom panel") is this much
-# narrower on the right than the figure's nominal width.
+# Bokeh's right-hand toolbar strip, which sits inside the figure's width
 PLOT_TOOLBAR_WIDTH = 30
 
-# the gap between detail_fig's own left edge and its drawn frame (the gray
-# outline) -- set explicitly on the figure (min_border_left) rather than left
-# to Bokeh's default of the same value, so the stats box below can be offset
-# by exactly this much and line up with the frame
+# detail_fig's min_border_left, set explicitly so the stats box can line up
+# with the drawn frame
 DETAIL_FRAME_LEFT = 5
 
-# the detail panel's two rows, in its own data units: the reference row's
-# bars span DETAIL_TOP_Y..+DETAIL_BAR_H, the target row's DETAIL_BOT_Y..
-# +DETAIL_BAR_H, ribbons in between -- embedded as SYN.data.detailRows for
-# SYN.buildDetailData/SYN.buildPairDetailData, and read here to place the
-# row labels just above/below them (see build_page())
+# the detail panel's two rows, in data units: reference bars span
+# DETAIL_TOP_Y..+DETAIL_BAR_H, target bars DETAIL_BOT_Y..+DETAIL_BAR_H,
+# ribbons in between (embedded as SYN.data.detailRows)
 DETAIL_BAR_H = 0.32
 DETAIL_TOP_Y = 1.2
 DETAIL_BOT_Y = 0.0
 
-# the stats box below detail_fig -- matched to the zoom panel's drawn frame,
-# not its full nominal width: its left edge is offset by DETAIL_FRAME_LEFT
-# (see stats_div's margin) and its right edge stops where the frame does,
-# instead of running on past it under the toolbar icons
+# the stats box spans the zoom panel's drawn frame, not its nominal width
 STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH - DETAIL_FRAME_LEFT
 
-# every titleless toolbar control below a figure (save/clear buttons, the
-# SVG/PNG/JPEG format dropdowns, the blocks TSV button) -- left
-# unset, each one auto-sizes to its own label/font metrics instead (a plain
-# Button came out a couple px shorter than one with an emoji glyph in its
-# label, and Select's own browser-native control renders shorter still than
-# either), so the buttons along one row didn't line up. Explicit and shared
-# so every one of them matches, no matter what's in its label.
+# shared height for every titleless toolbar control: left unset, buttons and
+# Selects auto-size to their own label/font metrics and don't line up
 TOOLBAR_CONTROL_HEIGHT = 32
 
-# the header row's titled controls (target/reference label, color palette,
-# colors, min identity, max gap, hit rank, min block size) -- narrower than
-# their old 220px, which was much wider than any of their labels or values
-# actually need
+# the header row's titled controls
 TOP_CONTROL_WIDTH = 150
 
-# The desktop app's look (gui/renderer/style.css, its light tokens): its
-# font, warm greys and green accent. The figures themselves stay white, so
-# what's exported is unchanged; the page doesn't follow dark mode for the
-# same reason. Bokeh draws every widget and layout in a shadow root of its
-# own, which page CSS can't reach, and each root redefines Bokeh's CSS
-# variables on its :host -- so THEME_CSS goes on every element (see
-# build_page()), redefining them after Bokeh's own.
+# The desktop app's light tokens (gui/renderer/style.css). Figures stay
+# white so exports are unchanged; no dark mode for the same reason. Bokeh
+# draws each widget in its own shadow root, which page CSS can't reach, and
+# redefines its CSS variables on each :host -- so THEME_CSS goes on every
+# element (see build_page()), after Bokeh's own.
 UI_FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif"
 THEME = {
     'ground': '#F4F5F1', 'card': '#FFFFFF', 'line': '#E2E4DC', 'field_line': '#C9CCC0',
@@ -257,27 +180,23 @@ CARD_CSS = (f":host{{background:{THEME['card']};border:1px solid {THEME['line']}
 PAGE_CSS = (f"<style>:root{{color-scheme:light;}}html body{{margin:0;padding:20px 16px 32px;"
             f"background:{THEME['ground']};color:{THEME['fg']};font-family:{UI_FONT};}}</style>")
 
-# the "Chromosome order" menu's options -> (order by size, order by
-# similarity), embedded as SYN.data.orderModes for its callback. Similarity
-# starts from size order (see SYN.computeSimilarityOrder), so its tiebreak
-# among chromosomes with no visible blocks is by size.
+# "Chromosome order" options -> (order by size, order by similarity), as
+# SYN.data.orderModes. Similarity starts from size order (see
+# SYN.computeSimilarityOrder), so chromosomes with no visible blocks tiebreak
+# by size.
 ORDER_MODES = {'Size': (True, False), 'File order': (False, False), 'Similarity': (True, True)}
 
-# dotplot gap lines only -- a lighter grey than the ring/zoom panel's own
-# solid-black gap markers (a `multi_line` renderer style, set once here in
-# Python; no JS mirror needed since it's never re-set per-point client-side)
+# dotplot gap lines only -- lighter than the ring/zoom panel's black markers
 GAP_LINE_COLOR = '#AAAAAA'
 
 MAX_COLORS = 10
 DEFAULT_COLORS = MAX_COLORS
 # the "Min sequence length (Mb)" spinner's floor and starting value -- the
-# pipeline's default --min_seq_size (10 kb), see min_seq_size_spinner
+# pipeline's default --min_seq_size (10 kb)
 MIN_SEQ_SIZE_FLOOR_MB = 0.01
 
-# fraction of each axis's total span given to the dotplot's chromosome-ruler
-# strips (see SHARED_JS's SYN.buildDotplotLayout) -- the clickable regions
-# standing in for x/y axis ticks, since Bokeh has no native "clickable tick
-# label"
+# fraction of each dotplot axis given to the clickable chromosome-ruler
+# strips that stand in for tick labels (Bokeh has no clickable ticks)
 DP_RULER_FRAC = 0.035
 
 ACCESSION_RE = re.compile(r'GC[AF]_\d+\.\d+')
@@ -307,13 +226,10 @@ def source_label(source):
 
 
 def default_labels(stats, target_subtitle, reference_subtitle, target_fallback, reference_fallback):
-    """The Target/Reference label inputs' starting values -- short species
+    """The Target/Reference label inputs' starting values: short species
     names when compute_alignment_stats.py knows them ('D. melanogaster'),
-    since those read at a glance where an assembly file name doesn't, and
-    they end up in every title and export filename. A pair of the same
-    species gets each genome's accession added so the two stay distinct. A
-    genome of unknown species is named by its accession/file name, then by
-    its role word."""
+    plus each accession when both are the same species; else the
+    accession/file name, else the role word."""
     stats = stats or {}
     sides = [(stats.get('query_species'), target_subtitle or stats.get('query_source'), target_fallback),
              (stats.get('subject_species'), reference_subtitle or stats.get('subject_source'), reference_fallback)]
@@ -380,11 +296,9 @@ HITS_TSV_HEADER = ['chrom', 'start', 'end', 'strand', 'positive', 'identity', 's
 
 
 def read_hits_tsv(raw_bytes):
-    """Parses one bin/extract_hits.py output (format: that script's
-    docstring), already read into memory as raw gzip bytes, into per-column
-    lists, in TSV row order (already sorted by (chrom, start, end, protein, rank),
-    see that script). `identity`/`score` aren't part of the in-memory
-    HitTable (bin/chain.js's HIT TABLE header) and are dropped here."""
+    """Parses one gzipped bin/extract_hits.py output into per-column lists,
+    in TSV row order (sorted by chrom, start, end, protein, rank).
+    `identity`/`score` aren't part of chain.js's HitTable and are dropped."""
     text = gzip.decompress(raw_bytes).decode('utf-8')
     lines = text.split('\n')
     header = lines[0].split('\t')
@@ -403,35 +317,30 @@ def read_hits_tsv(raw_bytes):
 
 
 def encode_hits_column(values, dtype):
-    """One GenomeColumns column (bin/chain.js's EMBEDDED PAYLOAD header): little-
-    endian typed array, gzip'd, base64'd. numpy is used only for the
-    explicit little-endian dtypes and fast bulk casting -- it ships with
-    bokeh in envs/bokeh.yml."""
+    """One GenomeColumns column (bin/chain.js's EMBEDDED PAYLOAD header):
+    little-endian typed array, gzip'd, base64'd."""
     np_dtype = {'u8': '<u1', 'u16': '<u2', 'u32': '<u4', 'f64': '<f8'}[dtype]
     data = np.asarray(values, dtype=np_dtype).tobytes()
     return {'dtype': dtype, 'data': base64.b64encode(gzip.compress(data, mtime=0)).decode('ascii')}
 
 
 def widened_dtype(values, narrow, wide, limit):
-    """bin/chain.js's EMBEDDED PAYLOAD header: startDelta/length are u32, f64 "if any value >= 2**32"
-    (a chromosome bigger than 4.29 Gb)."""
+    """`wide` if any value reaches `limit` (startDelta/length go f64 past
+    2**32, per bin/chain.js's EMBEDDED PAYLOAD header)."""
     return wide if values and max(values) >= limit else narrow
 
 
 def build_genome_columns(hits, chrom_names, prot_index):
     """One GenomeColumns dict (bin/chain.js's EMBEDDED PAYLOAD header) for a
-    single genome's parsed hit table (read_hits_tsv). chrom_names is that
-    genome's FULL chrom.sizes-order name list (Dataset's own *_chroms_natural,
-    not filtered by --min_seq_size or anything else) -- read_hits_tsv's rows
-    were already restricted to sequences in that same chrom.sizes by
-    bin/extract_hits.py, so every chrom here is guaranteed present."""
+    parsed hit table. chrom_names is the genome's full, unfiltered
+    chrom.sizes-order list; bin/extract_hits.py already restricted the hits
+    to those sequences."""
     chrom_index = {name: i for i, name in enumerate(chrom_names)}
     n = len(hits['chrom'])
     chrom_idx = [chrom_index[c] for c in hits['chrom']]
 
-    # startDelta (bin/chain.js's EMBEDDED PAYLOAD header): start minus the previous row's start on
-    # the same chrom, first row per chrom relative to 0 -- rows are already
-    # grouped by chrom (TSV row order, see read_hits_tsv's docstring)
+    # start minus the previous row's start on the same chrom (first row per
+    # chrom relative to 0); rows are already grouped by chrom
     start_delta = [0] * n
     prev_chrom, prev_start = None, 0
     for i in range(n):
@@ -462,13 +371,10 @@ def build_genome_columns(hits, chrom_names, prot_index):
 
 
 def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names, reference_chrom_names):
-    """SYN.hitsPayload (bin/chain.js's EMBEDDED PAYLOAD header) -- the one thing
-    Python ships instead of precomputed links/blocks. `reference:
-    'same_as_target'` (skipping a second, redundant copy of the same bytes)
-    only when both the raw hit tables AND the two genomes' chrom.sizes
-    orderings are byte-for-byte identical -- SYNCHAIN.decodePayload's
-    same_as_target path reuses the target table's chrom-index column
-    verbatim under the reference's own chromNames/chromSizes, which is only
+    """SYN.hitsPayload (bin/chain.js's EMBEDDED PAYLOAD header). The
+    reference is `'same_as_target'` only when both the hit tables and the
+    chrom.sizes orderings are identical: decodePayload reuses the target's
+    chrom-index column under the reference's chromNames, which is only
     correct if chromosome N means the same thing on both sides."""
     with open(target_hits_path, 'rb') as f:
         target_bytes = f.read()
@@ -480,9 +386,8 @@ def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names
     target_hits = read_hits_tsv(target_bytes)
     reference_hits = None if same_genome else read_hits_tsv(open(reference_hits_path, 'rb').read())
 
-    # union of both genomes' accessions, sorted lexicographically (bin/chain.js's
-    # HIT TABLE header) -- ASCII protein accessions sort identically under Python's
-    # code-point order and JS's default (UTF-16 code unit) Array.sort()
+    # sorted union of both genomes' accessions (bin/chain.js's HIT TABLE
+    # header); ASCII sorts the same in Python and JS's default Array.sort()
     all_proteins = set(target_hits['protein']) | (set(reference_hits['protein']) if reference_hits else set())
     proteins = sorted(all_proteins)
     prot_index = {p: i for i, p in enumerate(proteins)}
@@ -503,18 +408,10 @@ def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names
 class Dataset:
     def __init__(self, query_chrom_sizes, subject_chrom_sizes, query_gaps_path=None, subject_gaps_path=None,
                  query_lookup_path=None, subject_lookup_path=None):
-        # RENAME_SEQUENCES emits natural (FASTA) order now, not size order
-        # (see main.nf's own comment) -- self.query_chroms/subject_chroms
-        # stay the name used everywhere below (dotplot layout, color
-        # assignment) and represent whichever order is DEFAULT-active, which
-        # is size order (order_select defaults to "Size" in build_page() --
-        # kept in sync deliberately, same as every other Python/JS
-        # default-state pair in this file). The natural-order lists are kept
-        # alongside purely so build_page() can embed them for the
-        # client-side reorder engines (SYN.buildRingLayout, SYN.dpNaturalOrder)
-        # to switch back to when that toggle goes off, AND so SYN.startChainer
-        # has the full (unfiltered) chromosome name/size lists the embedded
-        # hit tables' chrom indices refer to (see build_hits_payload).
+        # chrom.sizes is in natural (FASTA) order. query_chroms/subject_chroms
+        # are size order, matching order_select's "Size" default; the natural
+        # lists are embedded for the "File order" mode and as the full,
+        # unfiltered lists the hit tables' chrom indices refer to.
         self.query_chroms_natural = read_chrom_sizes(query_chrom_sizes)
         self.subject_chroms_natural = read_chrom_sizes(subject_chrom_sizes)
         self.query_chroms = sorted(self.query_chroms_natural, key=lambda c: -c[1])
@@ -522,9 +419,7 @@ class Dataset:
         self.query_sizes = dict(self.query_chroms)
         self.subject_sizes = dict(self.subject_chroms)
 
-        # assembly gaps -- filtered to chroms actually present, same
-        # reasoning links used to get filtered by before blocks moved
-        # client-side
+        # assembly gaps, restricted to chroms actually present
         self.query_gaps = [g for g in read_gaps(query_gaps_path) if g['chrom'] in self.query_sizes]
         self.subject_gaps = [g for g in read_gaps(subject_gaps_path) if g['chrom'] in self.subject_sizes]
 
@@ -533,11 +428,8 @@ class Dataset:
 
 
 def group_gaps_by_chrom(gaps):
-    """{chrom: [{start, end}, ...]} -- the form the ring, the zoom panel, and
-    the dotplot's gap lines all need (per-chromosome lookup, not a flat
-    wedge-polygon list), embedded once and shared by all three client-side
-    (see SHARED_JS's targetGapsByChrom/referenceGapsByChrom usage, read by
-    SYN.buildGapRecords/SYN.gapsForChrom/SYN.buildDotplotGapLines)."""
+    """{chrom: [{start, end}, ...]}, embedded once and shared by all three
+    panels (SYN.data.targetGapsByChrom/referenceGapsByChrom)."""
     by_chrom = {}
     for g in gaps:
         by_chrom.setdefault(g['chrom'], []).append({'start': g['start'], 'end': g['end']})
@@ -545,20 +437,15 @@ def group_gaps_by_chrom(gaps):
 
 
 def build_overview_sources():
-    """The ring's four ColumnDataSources -- query/subject wedges, ribbons,
-    and chromosome labels -- created with their real columns but no rows.
-    Python computes no wedge/ribbon geometry at all any more (see module
-    docstring): SYN.init (SHARED_JS, run from build_page()'s
-    doc.js_on_event(DocumentReady, ...)) fills all four via
-    SYN.applyRingLayout as soon as the page's document is ready, through the
-    exact same function every later reorder/filter/recolor reuses."""
+    """The ring's ColumnDataSources (query/subject wedges, ribbons, self
+    ribbons, labels), with their columns but no rows -- SYN.init fills them
+    via SYN.applyRingLayout on DocumentReady."""
     q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], display_name=[]))
     s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[],
                                   display_name=[]))
     r_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[], palette_index=[],
                                   q_chrom=[], s_chrom=[], key=[]))
-    # self-links (homeologs) on their own renderer, styled apart from the
-    # cross-genome ribbons in r_src -- see SYN.buildOverviewRibbons
+    # self-links (homeologs) get their own renderer, styled apart from r_src
     r_self_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], line_color=[], alpha=[], label=[],
                                        q_chrom=[], s_chrom=[], key=[], genome=[]))
     label_src = ColumnDataSource(dict(x=[], y=[], text=[]))
@@ -566,14 +453,10 @@ def build_overview_sources():
 
 
 def build_dotplot_sources():
-    """The dotplot's order-dependent ColumnDataSources -- query/subject
-    ruler strips, block segments, boundary gridlines, and axis labels --
-    created with their real columns but no rows, same reasoning as
-    build_overview_sources() above. SYN.init fills all six via
-    SYN.applyDotplotOrder once the document is ready, which also sets the
-    figure's actual x_range/y_range (see build_page()'s placeholder
-    Range1ds) -- there is no longer an invisible grid-cell hit layer here at
-    all (see SYN.dpCellAt, which hit-tests by binary search instead)."""
+    """The dotplot's ColumnDataSources (query/subject ruler strips, block
+    segments, gridlines, axis labels), with their columns but no rows --
+    SYN.init fills them via SYN.applyDotplotOrder, which also sets the
+    figure's x_range/y_range."""
     dp_q_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], display_name=[]))
     dp_s_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], name=[], size_label=[], group=[], palette_index=[],
                                   display_name=[]))
@@ -585,101 +468,58 @@ def build_dotplot_sources():
     return dp_q_src, dp_s_src, dp_seg_src, dp_grid_src, dp_q_label_src, dp_s_label_src
 
 
-# JS port of the linear-layout math above (an angle-free version of the ring's
-# angular offsets + the bar/ribbon polygon construction), generalized so
-# either side can be the "pivot" (the chromosome that was clicked, drawn
-# alone on its own row) with the other side packed -- see module docstring
-# for why this is the only implementation of any of it any more.
+# All client-side layout, chaining glue, and interaction (see module docstring).
 SHARED_JS = r"""
 window.SYN = window.SYN || {};
-// selection is the one thing selected across all three panels (see
-// SYN.select), or null.
-// dpQueryOffsets/dpSubjectOffsets are the dotplot's *current* per-chromosome
-// axis offsets (natural order at load, replaced wholesale by the "order by
-// similarity" toggle -- see SYN.applyDotplotOrder) -- every dotplot redraw
-// that isn't a reorder itself (recoloring, the min-block-size filter) reads
-// these rather than recomputing an order, so it always draws whatever order
-// is currently active without needing to know which one that is.
-// targetLabel/referenceLabel are the viewer-editable display names (see
-// SYN.applyLabels) -- every title/bar-label that would otherwise show the
-// pipeline's literal "target"/"reference" role tags reads from these
-// instead, seeded to those same literal tags at load (see SYN.init) so
-// nothing changes on screen until a viewer actually types something into
-// the label inputs.
 SYN.state = {
+    // the one thing selected across all three panels (SYN.select), or null
     selection: null,
     // the min block size the viewer set, and the one SYN.applyChainResult
     // last fitted it to (a new longest block), until its callback has run
     minBlockWanted: null,
     minBlockFitted: null,
-    // panel -> what the click being handled hit, if anything (see
-    // SYN.onTapHit/SYN.resolveTap)
+    // panel -> what the click being handled hit (SYN.onTapHit/SYN.resolveTap)
     pendingTap: {},
+    // the dotplot's current per-chromosome axis offsets and orders (set only
+    // by SYN.applyDotplotOrder); redraws that aren't reorders reuse them, and
+    // SYN.dpCellAt binary-searches the orders to hit-test a tap
     dpQueryOffsets: null, dpSubjectOffsets: null,
-    // the dotplot's current per-axis chromosome order itself (not just the
-    // offsets above) -- SYN.dpCellAt binary-searches these to hit-test a tap
-    // without a per-cell renderer (see SYN.applyDotplotOrder, the only
-    // place either is ever set)
     dpQueryOrder: null, dpSubjectOrder: null,
+    // viewer-editable display names (SYN.applyLabels)
     targetLabel: null, referenceLabel: null,
-    // the zoom panel's own x_range/y_range are rewritten on every click (see
-    // SYN.applyDetail below), unlike the ring/dotplot's fixed ranges -- so
-    // its double-click-to-reset target has to track whatever was most
-    // recently set programmatically, not a single fixed value baked in at
-    // page load (see build_page()'s three DoubleTap handlers)
+    // the zoom panel's ranges change on every click, so its double-click
+    // reset tracks the last programmatic range (SYN.applyDetail)
     detailRange: null,
-    // the "Chromosome order" menu (order_select in build_page()), as two
-    // flags -- see ORDER_MODES. orderBySize is read by SYN.dpNaturalOrder:
-    // true = size order (SYN.data.queryNames/subjectNames), false = FASTA/
-    // natural order (SYN.data.queryNamesNatural/subjectNamesNatural).
-    // orderBySimilarity replaces that order with SYN.computeSimilarityOrder's,
-    // on the ring and the dotplot alike, and makes every re-chain and min-
-    // block-size change re-order both (similarity depends on which blocks
-    // are drawn). Both match order_select's default ("Size") -- kept in sync
-    // deliberately, same as every other default-state pair in this file.
+    // the "Chromosome order" menu as two flags (ORDER_MODES): size vs FASTA
+    // order (SYN.dpNaturalOrder), and similarity order on top, which makes
+    // every re-chain and min-block-size change re-order. Defaults must match
+    // order_select's ("Size"), as must the other Python/JS default pairs here.
     orderBySize: true,
     orderBySimilarity: false,
-    // read by SYN.applyDetail (gates whether a freshly built detail's gap
-    // ticks actually reach detail_gap_source) and by show_gaps_toggle's own
-    // callback (ring + dotplot gap visibility) -- matches show_gaps_toggle's
-    // default (see build_page()) -- kept in sync deliberately, same as
-    // every other default-state pair in this file.
+    // matches show_gaps_toggle's default
     showGaps: false,
-    // the "Original names" switch -- every label and tooltip shows each
-    // chromosome's own FASTA ID instead of its short plot name (see
-    // SYN.displayName). Display only: names stay the keys everywhere else.
+    // the "Original names" switch (SYN.displayName) -- display only; plot
+    // names stay the keys everywhere
     originalNames: false,
-    // bp floor read by SYN.filterBySize -- chromosomes shorter than this are
-    // dropped from every panel (see min_seq_size_spinner in build_page()).
-    // Starts at that spinner's own floor, 10 kb (MIN_SEQ_SIZE_FLOOR_MB), the
-    // pipeline's default --min_seq_size too -- so on a default run nothing
-    // embedded in the page is hidden until the viewer raises it.
+    // bp floor read by SYN.filterBySize; starts at min_seq_size_spinner's
+    // floor (MIN_SEQ_SIZE_FLOOR_MB), so a default run hides nothing
     minSeqSize: 10000,
-    // the dotplot's current total span and ruler-strip thickness -- the
-    // min-length filter above can shrink these (fewer/smaller chromosomes ->
-    // smaller total) even for the same order, so SYN.buildDotplotLayout
-    // recomputes them on every call and SYN.applyDotplotOrder refreshes
-    // these four alongside the offsets. Set for real by SYN.init's own
-    // first call to SYN.applyDotplotOrder, before the dotplot's
-    // DoubleTap-to-reset handler or SYN.buildDotplotGapLines can ever run.
+    // the dotplot's total span and ruler-strip thickness, which the min-length
+    // filter can change; refreshed by SYN.applyDotplotOrder
     dpTotalX: null, dpTotalY: null, dpRx: null, dpRy: null,
 };
 
-// The label TextInputs are free-text (see build_page()'s target_label_input/
-// reference_label_input) and, unlike chromosome names, are never validated
-// against anything -- every place their value gets interpolated into HTML
-// rendered via a Div's .text or a HoverTool's "{safe}" formatter (both raw
-// HTML, not escaped by Bokeh) runs it through this first, so a label
-// containing e.g. "<" can't break the page's markup.
+// The label inputs are free text, interpolated into raw HTML (Div .text and
+// HoverTool "{safe}" fields aren't escaped by Bokeh), so escape them first.
 SYN.escapeHtml = function(s) {
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 };
 
 // A block's look in every panel: its reference chromosome's palette colour,
-// lightened this much towards white, at an opacity rising with its anchor
-// count from LINK_ALPHA_MIN (the smallest) to LINK_ALPHA_MAX (the largest
-// block on the page, or in the detail panel)
+// lightened by LINK_LIGHTEN, at an opacity rising with its anchor count from
+// LINK_ALPHA_MIN to LINK_ALPHA_MAX (the largest block on the page, or in the
+// detail panel)
 SYN.LINK_LIGHTEN = 0.2;
 SYN.LINK_ALPHA_MIN = 0.35;
 SYN.LINK_ALPHA_MAX = 0.9;
@@ -714,13 +554,8 @@ SYN.paletteColor = function(index, k) {
     return SYN.data.palette[index % k];
 };
 
-// black or white, whichever contrasts better against a given ideogram fill
-// color -- needed because some palettes (e.g. Colorblind-safe/Okabe-Ito)
-// include near-black swatches, and the zoom panel draws each chromosome's
-// label centered on top of its own bar rather than beside it, so a fixed
-// text color would go invisible on those bars. Standard relative-luminance
-// threshold (WCAG's own formula, simplified without its gamma correction --
-// overkill for a two-way black/white pick where only the ranking matters).
+// black or white label text for a bar fill (some palettes include
+// near-black swatches); simplified relative luminance, no gamma correction
 SYN.textColorFor = function(hex) {
     const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
     const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
@@ -734,30 +569,17 @@ SYN.recolorSubjectWedges = function(k, subjectSource) {
     subjectSource.change.emit();
 };
 
-// SYN.data.ribbons holds EVERY ribbon (built by SYN.buildRingLayout from
-// whatever SYN.applyChainResult most recently put in SYN.data.linksByQuery/
-// targetHomeologLinks/referenceHomeologLinks -- the chainer is always run at
-// minBlock=3, the least strict floor rule 6 of bin/chain.js's CHAINING RULES allows), so
-// filtering by min block size, recoloring by the current color count, and
-// showing/hiding self-links (is_homeolog records -- a protein hitting two
-// loci within the SAME genome) all happen together here, client-side, on
-// every change of any of the three controls --
-// rebuilding from the same master list rather than mutating whatever
-// happens to be currently displayed keeps them from stepping on each other
-// (e.g. recoloring after a filter must recolor only the still-visible
-// subset, not silently undo the filter or un-hide self-links).
+// SYN.data.ribbons holds every ribbon (the chainer always runs at
+// minBlock=3, the least strict floor bin/chain.js's rule 6 allows), so the
+// min-block filter, recoloring and self-link visibility are all rebuilt
+// together from that master list rather than by mutating what's displayed,
+// which would let them undo each other.
 //
-// Returns {cross, self}: the cross-genome ribbons (r_src) and the self-links
-// (r_self_src) go to separate renderers so self-links can look different --
-// a dashed outline over a fainter fill -- rather than blending into the
-// synteny. A reference self-link keeps its chromosome's palette color; a
-// target one is dark grey (SYN.data.targetSelfGrey), matching the target's
-// own grey instead of borrowing palette colors that belong to reference
-// chromosomes.
+// Returns {cross, self} for separate renderers, so self-links (is_homeolog: a
+// protein hitting two loci in the same genome) can be drawn dashed over a
+// fainter fill. A target self-link is dark grey rather than a palette color,
+// which would read as a reference chromosome's.
 SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
-    // self-link (is_homeolog) records are governed by showSelfLinks alone;
-    // cross-genome records are governed by showSynteny alone -- the two
-    // switches compose independently rather than one overriding the other
     const cross = SYN.data.ribbons.filter((r) => !r.is_homeolog && showSynteny && r.score >= minScore);
     const self = SYN.data.ribbons.filter((r) => r.is_homeolog && showSelfLinks && r.score >= minScore);
     const selfColor = (r) => r.genome === 'target' ? SYN.data.targetSelfGrey : SYN.paletteColor(r.palette_index, k);
@@ -784,9 +606,8 @@ SYN.buildOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny) {
     };
 };
 
-// self-link fills this much fainter than a cross ribbon of the same score --
-// their dashed outline carries them, and a polyploid's many self-links
-// shouldn't drown out the synteny they sit under
+// self-link fill alpha relative to a cross ribbon of the same score, so a
+// polyploid's many self-links don't drown out the synteny
 SYN.SELF_LINK_ALPHA_SCALE = 0.6;
 
 // ribbonSource is the cross-genome one; the self-link source always comes
@@ -797,18 +618,11 @@ SYN.applyOverviewRibbons = function(minScore, k, showSelfLinks, showSynteny, rib
     SYN.ui.selfRibbonSource.data = built.self;
     SYN.ui.selfRibbonSource.change.emit();
     ribbonSource.change.emit();
-    // the rebuilt arrays' positions no longer match the old selection
-    // indices (a filter/recolor/self-links change can add, drop, or reorder
-    // records) -- work them out again from the selection itself
+    // rebuilt rows no longer match the old selection indices
     SYN.reapplySelection();
 };
 
-// ---- ring geometry: angle math and polygon construction for the wedges
-// and ribbons (point, arc, wedge, quadratic Bezier, angular chromosome
-// offsets, bp-to-angle), all the way up through SYN.buildRingLayout below,
-// which assembles them into a full ring for an arbitrary chromosome order --
-// see module docstring for why this is the only implementation of any of
-// this geometry. ----
+// ---- ring geometry, up through SYN.buildRingLayout ----
 
 SYN.point = function(angle, radius) {
     return [radius * Math.cos(angle), radius * Math.sin(angle)];
@@ -822,11 +636,8 @@ SYN.arcPoints = function(a0, a1, radius, n) {
     return pts;
 };
 
-// Like SYN.arcPoints, but walks a0 -> a1 exactly as given, never reordered
-// to a0<a1 -- SYN.arcPoints' reordering is fine for a closed wedge (outer
-// arc + reversed inner arc just need consistent winding either way), but
-// SYN.ribbonPolygonJS below needs to know which literal endpoint is which,
-// to hand each one to the correct Bezier crossing segment.
+// Like SYN.arcPoints, but walks a0 -> a1 as given, never reordered:
+// SYN.ribbonPolygonJS needs to know which endpoint is which.
 SYN.arcPointsOrdered = function(a0, a1, radius, n) {
     n = n || 24;
     const pts = [];
@@ -854,23 +665,16 @@ SYN.quadBezier = function(p0, p1, p2, n) {
     return pts;
 };
 
-// An inverted ('-') block runs the reference span the opposite way from the
-// target span, so its ribbon joins target start to reference END (and target
-// end to reference start): swapping the reference span's two ends makes the
-// ribbon's sides cross -- the twist that marks an inversion in the ring and
-// the zoom panel alike (the dotplot draws it as an anti-diagonal).
+// An inverted ('-') block joins target start to reference end: swapping the
+// reference span's ends twists the ribbon, marking the inversion.
 SYN.orientEnds = function(s1, s2, link) {
     return link.orientation === '-' ? [s2, s1] : [s1, s2];
 };
 
 SYN.ribbonPolygonJS = function(aq1, aq2, as1, as2, radius, n) {
     n = n || 24;
-    // Arc across the query span -- curved along the ring's own radius, not
-    // a straight chord, so it sits flush against the ideogram's own
-    // curvature where the ribbon meets it (radius == innerR) -- quadratic
-    // Bezier (control at the ring's center) over to the subject arc, arc
-    // across the subject span, Bezier back to the start -- the bowtie
-    // ribbon crossing through the middle of the ring.
+    // query arc, Bezier through the centre to the subject arc, subject arc,
+    // Bezier back
     const qArc = SYN.arcPointsOrdered(aq1, aq2, radius, n);  // q1 -> q2, in order
     const sArc = SYN.arcPointsOrdered(as2, as1, radius, n);  // s2 -> s1, in order (matches traversal below)
     const origin = [0, 0];
@@ -904,9 +708,7 @@ SYN.bpToAngleJS = function(chrom, bpPos, sizes, offsets) {
     return a0 + frac * (a1 - a0);
 };
 
-// min/max, not a0/a1 directly: a subject/reference chromosome's angle runs
-// DEcreasing with bp (see SYN.computeCircularOffsets), so a0 can be either
-// side of a1 depending on which genome this gap belongs to.
+// min/max, since a reference chromosome's angle decreases with bp
 SYN.widenGapAngle = function(a0, a1) {
     let lo = Math.min(a0, a1), hi = Math.max(a0, a1);
     if (hi - lo < SYN.data.minGapAngle) {
@@ -917,19 +719,9 @@ SYN.widenGapAngle = function(a0, a1) {
     return [lo, hi];
 };
 
-// Zoom-panel gap ticks -- a purely visual visibility fix, same idea as
-// SYN.widenGapAngle above
-// (a gap is typically a few hundred bp against a multi-Mb bar, so drawn at
-// true width most would render sub-pixel) but in linear bp/px space instead
-// of angular: refSpan is the caller's own best estimate of the panel's full
-// data-space width (pivotSize where that's all that's known yet, xMax once
-// it's computed -- see each call site), converted through the panel's fixed
-// SYN.data.detailFigWidth px size and the same x_range padding build_page()
-// uses (xMax * 1.08) to get an approximate bp-per-px, then floored to
-// SYN.GAP_MIN_PX pixels' worth of bp. Small on purpose: a gap tick spans the
-// bar's FULL height (no vertical inset -- see each addGapTicks call site's
-// own gapYs), so it should read as a thin needle across that height, not a
-// short wide block -- only the width needs flooring, not the height.
+// Zoom-panel counterpart of SYN.widenGapAngle: floors a gap tick to
+// GAP_MIN_PX. refSpan is the caller's estimate of the panel's data width;
+// 1.08 is the detail x_range's span (-0.03 to 1.05 of xMax).
 SYN.GAP_MIN_PX = 1.5;
 SYN.widenGapBp = function(start, end, refSpan) {
     const minBp = (refSpan * 1.08 / SYN.data.detailFigWidth) * SYN.GAP_MIN_PX;
@@ -940,33 +732,16 @@ SYN.widenGapBp = function(start, end, refSpan) {
     return [start, end];
 };
 
-// Rebuilds every ring-native source (query/subject wedges, chromosome
-// labels, and the ribbons master list SYN.data.ribbons itself -- NOT just
-// whatever subset is currently filtered into r_src, so a later mba/color/
-// self-links change still has correct fresh geometry to filter from) for an
-// arbitrary (queryOrder, subjectOrder). The only place any of this geometry
-// is built -- SYN.init (see build_page()) calls this for the page's very
-// first render too, through the same path as every later reorder.
-// Ribbon master list (SYN.data.ribbons) for the given ring offsets -- split out
-// of SYN.buildRingLayout so a re-chain (SYN.applyChainResult) can rebuild just
-// the ribbons: the wedges, labels and assembly-gap marks depend only on the
-// chromosome order, never on the chain result, and on a gappy draft
-// assembly the gap marks alone are the costliest part of a full layout.
+// Ribbon master list (SYN.data.ribbons) for the given ring offsets -- split
+// out of SYN.buildRingLayout so a re-chain can rebuild just the ribbons (on a
+// gappy draft assembly the gap marks are the costliest part of a layout).
 SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
-    // Each of the three groups below is sorted by score ascending (stable)
-    // before its ribbons are pushed, so within each group a higher-scoring
-    // ribbon always ends up later in the array -- and therefore drawn on
-    // top, Bokeh's own patches() convention -- regardless of what order
-    // SYN.data.linksByQuery/targetHomeologLinks/referenceHomeologLinks
-    // themselves happen to iterate in, and regardless of how many times the
-    // ring has been reordered since page load.
+    // each group sorted by score ascending, so higher-scoring ribbons are
+    // drawn on top
     const ribbons = [];
     const allCross = [].concat(...Object.values(SYN.data.linksByQuery)).sort((a, b) => a.score - b.score);
     for (const l of allCross) {
-        // either endpoint's chromosome may have been dropped by the min-
-        // length filter (see SYN.filterBySize) -- bpToAngleJS would throw
-        // destructuring offsets[chrom] === undefined, so skip rather than
-        // draw a ribbon to a chromosome no longer on the ring at all
+        // skip chromosomes dropped by the min-length filter
         if (!(l.q_chrom in queryOffsets) || !(l.s_chrom in subjectOffsets)) { continue; }
         const aq1 = SYN.bpToAngleJS(l.q_chrom, l.q_start, SYN.data.querySizes, queryOffsets);
         const aq2 = SYN.bpToAngleJS(l.q_chrom, l.q_end, SYN.data.querySizes, queryOffsets);
@@ -1012,12 +787,8 @@ SYN.buildRibbonRecords = function(queryOffsets, subjectOffsets) {
     return ribbons;
 };
 
-// What a chromosome is called on screen: its short plot name, or -- with
-// the "Original names" switch on -- the genome's own FASTA ID.
-// SYN.data.*OriginalNames only lists the names RENAME_SEQUENCES actually
-// changed, so anything missing kept its own. Every label, title and tooltip
-// goes through this; selection, links and hit-testing keep using the plot
-// names, so the switch never changes what anything IS, only what it says.
+// A chromosome's on-screen name: its plot name, or its original FASTA ID
+// with "Original names" on (*OriginalNames lists only changed names).
 SYN.displayName = function(genome, name) {
     if (!SYN.state.originalNames) { return name; }
     const names = genome === 'target' ? SYN.data.targetOriginalNames : SYN.data.referenceOriginalNames;
@@ -1055,8 +826,7 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
         s.display_name.push(SYN.displayName('reference', name));
     }
 
-    // wedges narrower than ringLabelMinAngle go unlabelled (see
-    // RING_LABEL_MIN_ANGLE's Python comment)
+    // wedges narrower than ringLabelMinAngle go unlabelled
     const labelR = SYN.data.outerR + 0.14;
     const label = {x: [], y: [], text: []};
     const addLabels = (order, offsets, genome) => {
@@ -1073,34 +843,18 @@ SYN.buildRingLayout = function(queryOrder, subjectOrder, k) {
 
     const ribbons = SYN.buildRibbonRecords(queryOffsets, subjectOffsets);
 
-    // Assembly-gap wedges for the current order -- always computed here
-    // regardless of show_gaps_toggle's current state (mirrors ribbons above:
-    // the toggle only ever filters what SYN.applyGapVisibility copies OUT of
-    // this master list into gap_src, same pattern as
-    // SYN.buildOverviewRibbons/SYN.applyOverviewRibbons for self-links).
+    // computed regardless of showGaps; SYN.applyGapVisibility filters
     const gaps = SYN.buildGapRecords(queryOffsets, subjectOffsets, SYN.GAP_ARC_SEGMENTS);
 
     return {q, s, label, ribbons, gaps, queryOffsets, subjectOffsets};
 };
 
-// A gap wedge is at most a fraction of a degree wide (see MIN_GAP_ANGLE's
-// own Python comment), so SYN.wedgePolygonJS's 48-segment default arc is
-// wasted precision -- 2 segments (a straight line across that width) reads
-// identically to a true arc at this scale, and cuts every gap wedge from
-// 98 vertices to 8. A parameter, not a hardcoded literal inside
-// buildGapRecords, so the page_geometry.mjs test can call it with 48 to
-// reproduce the old page's full-resolution gap geometry for comparison.
+// A gap wedge is a fraction of a degree wide, so 2 arc segments look the same
+// as wedgePolygonJS's default 48 and cut each wedge from 98 vertices to 8.
 SYN.GAP_ARC_SEGMENTS = 2;
 
-// Ring-wedge geometry for a genome's own assembly gaps -- same annular-
-// sector shape as a chromosome wedge, same full innerR-outerR radial span
-// too (SYN.wedgePolygonJS's own r0/r1 args below, no radial inset -- a gap
-// marker is exactly as tall as the ideogram it marks), just angularly
-// widened to SYN.data.minGapAngle if narrower (see that constant's own
-// Python comment) so it reads as a thin needle across that height rather
-// than a sub-pixel sliver. Pulled out of SYN.buildRingLayout so
-// page_geometry.mjs can call it directly at nSegments=48 to compare against
-// the old page's baked (also 48-segment) gap wedges.
+// Ring wedges for each genome's assembly gaps, full ideogram height,
+// widened to SYN.data.minGapAngle.
 SYN.buildGapRecords = function(queryOffsets, subjectOffsets, nSegments) {
     const gaps = [];
     for (const chrom in SYN.data.targetGapsByChrom) {
@@ -1126,12 +880,8 @@ SYN.buildGapRecords = function(queryOffsets, subjectOffsets, nSegments) {
     return gaps;
 };
 
-// Applies a full ring reorder: rebuilds wedge/label sources directly (never
-// filtered by anything), replaces the SYN.data.ribbons MASTER list with
-// fresh geometry (so mba/color/self-links/show-synteny keep working
-// correctly against the new order afterward), then re-runs the current
-// filter state on top of it via SYN.applyOverviewRibbons, which also
-// re-applies the selection to the rebuilt arrays (SYN.reapplySelection).
+// Applies a full ring reorder: rebuilds the wedges, labels and the ribbon
+// and gap master lists, then re-applies the current filters and selection.
 SYN.applyRingLayout = function(queryOrder, subjectOrder, sources) {
     const layout = SYN.buildRingLayout(queryOrder, subjectOrder, sources.k);
     sources.querySource.data = layout.q;
@@ -1149,11 +899,7 @@ SYN.applyRingLayout = function(queryOrder, subjectOrder, sources) {
     SYN.applyGapVisibility(sources.gapSource);
 };
 
-// SYN.data.gapRecords holds the CURRENT ring order's full wedge-polygon
-// list (every gap, replaced wholesale on a reorder -- see SYN.applyRingLayout
-// above), so this only ever needs to copy it into gap_src, or clear it, per
-// SYN.state.showGaps -- same "rebuild from a master list" idiom as
-// SYN.applyOverviewRibbons, just with no score/self-links filtering to do.
+// copies the current ring order's gap wedges into gap_src, or clears it
 SYN.applyGapVisibility = function(gapSource) {
     const records = SYN.state.showGaps ? SYN.data.gapRecords : [];
     gapSource.data = {
@@ -1162,13 +908,7 @@ SYN.applyGapVisibility = function(gapSource) {
     gapSource.change.emit();
 };
 
-// Every dotplot source that depends on chromosome order (rulers, grid,
-// labels, cells, and the block segments themselves) is rebuilt from raw
-// per-link data on every redraw, since the order can change at any time
-// after page load (the order menu, the min-length filter, and under
-// similarity order every re-chain). SYN.state.dpQueryOffsets/
-// dpSubjectOffsets hold whichever order is currently active; this and
-// buildDotplotLayout below are the only two places that read them.
+// Dotplot block segments for the given axis offsets.
 SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minScore, k) {
     const xs = [], ys = [], lineColor = [], alpha = [], label = [], paletteIndex = [];
     const qChrom = [], sChrom = [], key = [];
@@ -1176,17 +916,13 @@ SYN.buildDotplotSegmentsForLayout = function(queryOffsets, subjectOffsets, minSc
     for (const qName in SYN.data.linksByQuery) {
         for (const l of SYN.data.linksByQuery[qName]) {
             if (l.score < minScore) { continue; }
-            // either chromosome may be below the min-length filter (see
-            // SYN.filterBySize) and absent from this order's offsets
+            // skip chromosomes dropped by the min-length filter
             if (!(l.q_chrom in queryOffsets) || !(l.s_chrom in subjectOffsets)) { continue; }
             const x0 = queryOffsets[l.q_chrom] + l.q_start;
             const x1 = queryOffsets[l.q_chrom] + l.q_end;
             const yLo = subjectOffsets[l.s_chrom] + l.s_start;
             const yHi = subjectOffsets[l.s_chrom] + l.s_end;
-            // '-' (inverted) blocks run the reference span the opposite
-            // direction from the target span -- the same convention
-            // MCScanX/D-GENIES-style dotplots use to make inversions
-            // visually distinct from collinear blocks
+            // inverted blocks are drawn anti-diagonal
             const [y0, y1] = l.orientation !== '-' ? [yLo, yHi] : [yHi, yLo];
             xs.push([x0, x1]); ys.push([y0, y1]);
             const pIdx = SYN.data.subjectColorIndex[l.s_chrom];
@@ -1214,16 +950,8 @@ SYN.computeOffsets = function(order, sizes) {
     return offsets;
 };
 
-// The non-similarity order: target reads left-to-right, reference
-// bottom-to-top, both in whichever of {size, natural (FASTA)} order
-// SYN.state.orderBySize currently selects (see order_select) -- no
-// reversal (an earlier version reversed the reference list, putting the
-// first name at the top -- flipped per explicit request): SYN.computeOffsets
-// gives the first name in its list the lowest -- bottommost -- position,
-// same convention the x-axis already uses for the target's own offsets.
-// Named "natural" for what it's the alternative TO (similarity order, see
-// SYN.computeSimilarityOrder below) -- not because it always resolves to
-// FASTA order anymore.
+// The non-similarity order: size or FASTA order per SYN.state.orderBySize,
+// first name leftmost/bottommost on both axes.
 SYN.dpNaturalOrder = function() {
     const bySize = SYN.state.orderBySize;
     return {
@@ -1232,37 +960,17 @@ SYN.dpNaturalOrder = function() {
     };
 };
 
-// Drops any chromosome shorter than SYN.state.minSeqSize (see
-// min_seq_size_spinner in build_page()) from an order list -- composes with
-// whichever ordering is currently active rather than being its own separate
-// order, since min_seq_size_spinner's own callback (and every other control
-// that can change the active order) always re-derives its order through
-// SYN.activeOrder below, never the raw name lists directly.
+// Drops chromosomes shorter than SYN.state.minSeqSize from an order.
 SYN.filterBySize = function(order, sizes) {
     return order.filter((name) => sizes[name] >= SYN.state.minSeqSize);
 };
 
-// Maps each name in `order` to its 0-based position in it -- the mapping
-// SYN.data.subjectColorIndex holds, that SYN.paletteColor(index,
-// k) turns into an actual color for a chromosome's own wedge/ruler cell and
-// for every ribbon that touches it. `order` must cover every chromosome
-// that EXISTS, not just what's currently visible: a zoom panel can draw a
-// partner chromosome that's below the min-length filter (SYN.buildDetailData
-// doesn't apply that filter to a pivot's OTHER side, only minScore -- see its
-// own code), and that name still needs a real color, so order_select's
-// own callback below passes the full (unfiltered) size/natural list, never
-// SYN.activeOrder's already-filtered one. SYN.paletteColor wraps with `% k`,
-// so two chromosomes sharing a color are always exactly k apart IN THIS
-// ORDER -- never adjacent, for any k >= 2. That guarantee only holds for
-// whichever order the index was actually built from, so order_select's
-// callback rebuilds it whenever the size/natural choice changes: with file
-// order showing, a size-order index no longer matches what's on screen,
-// and two adjacent wedges can end up sharing a color. Similarity order
-// deliberately does NOT trigger a rebuild -- it's re-run on every re-chain,
-// and a chromosome's color should stay the same everywhere (ring wedge,
-// ribbons, dotplot ruler) while it does, not reshuffle on every
-// min-identity tweak. The price: under similarity order, two chromosomes
-// sharing a color can end up side by side.
+// name -> position in `order` (SYN.data.subjectColorIndex). `order` must be
+// the full, unfiltered list: the zoom panel can draw a partner below the
+// min-length filter. With `% k` wrapping, chromosomes sharing a color are k
+// apart in this order, so it's rebuilt when size/file order changes -- but
+// not for similarity order, which re-runs on every re-chain and shouldn't
+// reshuffle colors (so there, same-colored neighbours are possible).
 SYN.buildColorIndex = function(order) {
     const index = {};
     order.forEach((name, i) => { index[name] = i; });
@@ -1278,18 +986,13 @@ SYN.dpOrderFor = function(useSimilarity) {
     };
 };
 
-// The one order both panels show: the ring's halves run left to right
-// (reference over the top, target under the bottom -- see
-// SYN.buildRingLayout), like the dotplot's axes, so the same similarity
-// order that makes the dotplot a diagonal also untangles the ring's ribbons.
+// The one order both panels show: the ring's halves run left to right like
+// the dotplot's axes, so similarity order also untangles the ring.
 SYN.activeOrder = function() {
     return SYN.dpOrderFor(SYN.state.orderBySimilarity);
 };
 
-// Lays out the ring and the dotplot again for SYN.activeOrder -- after the
-// order menu, the min-length filter, or (under similarity order) a re-chain
-// or min-block-size change. The ring's wedges, labels and gap wedges are
-// rebuilt too, not just its ribbons: the order is what moved.
+// Lays out the ring and the dotplot again for SYN.activeOrder.
 SYN.applyOrder = function() {
     const ui = SYN.ui;
     const order = SYN.activeOrder();
@@ -1306,19 +1009,11 @@ SYN.applyOrder = function() {
     });
 };
 
-// Reorders both axes to make shared synteny read as a diagonal: each
-// chromosome is placed at the score-weighted average position, in bp along
-// the other axis's current layout, of the blocks it shares with it -- not
-// just the rank of the chromosome those blocks land on, so two chromosomes
-// matching different ends of the same partner (e.g. chr3L and chr3R both on
-// one chr3) are ordered along it instead of tying. The axes alternate a few
-// times, each reordered against the other's latest order, so the two
-// converge together rather than one being optimized against a now-stale
-// copy of the other. Only what's actually drawn counts: blocks below the
-// min block size and chromosomes below the min sequence length are left
-// out, so a chromosome whose blocks are all hidden sorts to the end rather
-// than being placed by blocks the dotplot doesn't show -- there's no
-// visible similarity signal to place it by.
+// Reorders both axes so shared synteny reads as a diagonal: each chromosome
+// goes at the score-weighted mean bp position of its blocks along the other
+// axis (so chr3L and chr3R on one chr3 are ordered along it, not tied). The
+// axes alternate a few times so they converge together. Only drawn blocks
+// and chromosomes count; one with no visible blocks sorts to the end.
 SYN.computeSimilarityOrder = function() {
     const natural = SYN.dpNaturalOrder();
     let queryOrder = SYN.filterBySize(natural.queryOrder, SYN.data.querySizes);
@@ -1340,9 +1035,7 @@ SYN.computeSimilarityOrder = function() {
                 }
                 return {name, i, avgPos: totalW > 0 ? weightedPos / totalW : Infinity};
             })
-            // the index tiebreak keeps a stable, deterministic order among
-            // chromosomes with no signal, instead of leaving their relative
-            // order up to the sort algorithm's whim
+            // index tiebreak: deterministic order among chromosomes with no signal
             .sort((a, b) => (a.avgPos - b.avgPos) || (a.i - b.i))
             .map((r) => r.name);
     };
@@ -1356,18 +1049,10 @@ SYN.computeSimilarityOrder = function() {
     return {queryOrder, subjectOrder};
 };
 
-// Full rebuild of every order-dependent dotplot source for an arbitrary
-// (queryOrder, subjectOrder) pair -- the only implementation of any of this
-// geometry (see module docstring), called for every reorder, recolor, or
-// refilter, and for the page's very first render too (see SYN.init).
-// rx/ry/totalX/totalY are recomputed on every call rather than assumed
-// constant: a pure reorder never changes them, but the min-length filter
-// (see SYN.filterBySize) can DROP chromosomes between calls, which does
-// change the total span.
+// Every order-dependent dotplot source for (queryOrder, subjectOrder).
+// Totals are recomputed each call: the min-length filter changes them.
 SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
-    // the `|| 1` floor mirrors SYN.computeCircularOffsets' own totalBp
-    // fallback -- keeps the figure/ruler math sane (not NaN/zero-width) in
-    // the degenerate case where the filter has emptied one whole side
+    // `|| 1` keeps the math finite when the filter empties a whole side
     const totalX = queryOrder.reduce((sum, name) => sum + SYN.data.querySizes[name], 0) || 1;
     const totalY = subjectOrder.reduce((sum, name) => sum + SYN.data.subjectSizes[name], 0) || 1;
     const rx = totalX * SYN.data.dpRulerFrac, ry = totalY * SYN.data.dpRulerFrac;
@@ -1394,8 +1079,7 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
         const x0 = queryOffsets[name];
         gridXs.push([x0, x0]); gridYs.push([-ry, totalY]);
     }
-    // the min-length filter (see SYN.filterBySize) can empty one whole side
-    // -- nothing to draw a trailing boundary line for in that case
+    // the min-length filter can empty a whole side
     if (queryOrder.length) {
         const lastQ = queryOrder[queryOrder.length - 1];
         gridXs.push([queryOffsets[lastQ] + SYN.data.querySizes[lastQ], queryOffsets[lastQ] + SYN.data.querySizes[lastQ]]);
@@ -1435,22 +1119,13 @@ SYN.buildDotplotLayout = function(queryOrder, subjectOrder, k) {
     };
 };
 
-// Applies a full reorder: rebuilds every order-dependent dotplot source (via
-// buildDotplotLayout) and updates SYN.state's offsets so every later
-// recolor/refilter (color spinner, palette dropdown, min-block-size) draws
-// against the new order without needing to know a reorder happened.
-// sources.fig, if given, is the dotplot figure itself -- its x_range/y_range
-// are refreshed to the new totalX/totalY so a min-length filter (see
-// SYN.filterBySize) that shrinks the visible chromosome set doesn't leave a
-// stale range showing dead space beyond wherever the plot now actually ends;
-// a no-op for a pure reorder, since the total is unchanged then.
+// Applies a dotplot reorder and records the new order/offsets in SYN.state
+// for later redraws. sources.fig, if given, gets its ranges refit to the new
+// totals (the min-length filter can shrink them).
 SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources) {
     const layout = SYN.buildDotplotLayout(queryOrder, subjectOrder, k);
     SYN.state.dpQueryOffsets = layout.queryOffsets;
     SYN.state.dpSubjectOffsets = layout.subjectOffsets;
-    // the order arrays themselves (not just their offsets) -- SYN.dpCellAt
-    // binary-searches these to hit-test a dotplot tap without a per-cell
-    // renderer (see module docstring on why that layer is gone)
     SYN.state.dpQueryOrder = queryOrder;
     SYN.state.dpSubjectOrder = subjectOrder;
     SYN.state.dpTotalX = layout.totalX; SYN.state.dpTotalY = layout.totalY;
@@ -1461,18 +1136,9 @@ SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources)
     sources.queryLabel.data = layout.queryLabels; sources.queryLabel.change.emit();
     sources.subjectLabel.data = layout.subjectLabels; sources.subjectLabel.change.emit();
     if (sources.fig) {
-        // *3 (not just enough room for the ruler strip itself) leaves space
-        // for the chromosome-name labels drawn just outside each ruler (see
-        // buildDotplotLayout's own qLabelX/sLabelX -- text_align='right' for
-        // the reference labels means they extend further left from their
-        // anchor, so the range has to clear that too, not just the ruler).
-        // Confirmed against real data: *2.2 and *2.6 clip a 5-character name
-        // like "chr13" down to "13"/"hr13"; *3 leaves every label fully
-        // visible with a little room to spare while still keeping the dead
-        // margin well under half of what a much larger multiplier would waste.
-        // Longer names (the "Original names" switch -- accessions are often
-        // 10+ characters) get proportionally more room, at the same ~0.26
-        // rx per character that *3 works out to for those 5 characters.
+        // room for the right-aligned reference labels left of the ruler: *3
+        // fits a 5-character name like "chr13" (*2.6 clips it), and longer
+        // names (e.g. original accessions) get ~0.28 rx per character
         const longest = layout.subjectLabels.text.reduce((m, t) => Math.max(m, t.length), 0);
         const xMargin = Math.max(3, 1.7 + 0.28 * longest);
         sources.fig.x_range.start = -layout.rx * xMargin; sources.fig.x_range.end = layout.totalX * 1.02;
@@ -1482,13 +1148,9 @@ SYN.applyDotplotOrder = function(queryOrder, subjectOrder, k, minScore, sources)
     if (sources.gap) { SYN.applyDotplotGapVisibility(sources.gap); }
 };
 
-// Binary search for the one name in `order` (already position-sorted along
-// this axis by SYN.computeOffsets) whose [offset, offset+size) interval
-// contains pos -- the dotplot lays chromosomes flush end to end with no gap
-// (see SYN.computeOffsets), so this always resolves to exactly one name
-// inside [0, total), never a gap between two names. Returns null for a pos
-// outside every interval (caller's job to bounds-check against the total
-// first -- see SYN.dpCellAt).
+// Binary search for the name in `order` whose [offset, offset+size) contains
+// pos (dotplot chromosomes are laid flush, so any pos in [0, total) hits
+// one), or null.
 SYN.chromAtOffset = function(order, offsets, sizes, pos) {
     let lo = 0, hi = order.length - 1;
     while (lo <= hi) {
@@ -1502,15 +1164,9 @@ SYN.chromAtOffset = function(order, offsets, sizes, pos) {
     return null;
 };
 
-// Replaces the old per-(target, reference) invisible grid-cell renderer
-// (48,841 hidden polygons for axolotl -- see module docstring) with a plain
-// hit test: two binary searches, one per axis, against whichever dotplot
-// order is currently active (SYN.state.dpQueryOrder/dpSubjectOrder, kept
-// current by SYN.applyDotplotOrder). Returns null outside the grid entirely
-// (the ruler strips at negative x/y, and the dead margin beyond either axis'
-// total) -- see dotplot_fig's own Tap handler in build_page(), the only
-// caller, for why that's exactly the cases where a plain tap should fall
-// through to the rulers' own TapTool-driven selection instead.
+// The dotplot cell under (x, y), by binary search per axis (a hidden
+// polygon per cell would be ~49k for axolotl), or null outside the grid --
+// the ruler strips and margins, where a tap falls through to the rulers.
 SYN.dpCellAt = function(x, y) {
     if (x < 0 || y < 0 || x >= SYN.state.dpTotalX || y >= SYN.state.dpTotalY) { return null; }
     const targetName = SYN.chromAtOffset(SYN.state.dpQueryOrder, SYN.state.dpQueryOffsets, SYN.data.querySizes, x);
@@ -1519,21 +1175,14 @@ SYN.dpCellAt = function(x, y) {
     return {targetName, subjectName};
 };
 
-// Dotplot companion to SYN.buildRingLayout's gap wedges (nice-to-have, same
-// "Show gaps" switch) -- thin lines instead of a polygon per gap, same
-// bounds convention as SYN.buildDotplotLayout's own boundary gridlines --
-// entirely client-side, reading SYN.state.dpQueryOffsets/
-// dpSubjectOffsets/dpRx/dpRy/dpTotalX/dpTotalY directly (always current --
-// SYN.applyDotplotOrder sets all of them before this ever runs) rather than
-// taking offsets as parameters, so show_gaps_toggle's own callback can call
-// this without needing to know which order (or min-length filter, see
-// SYN.filterBySize) is currently active.
+// Dotplot gap lines for the current order, read from SYN.state so
+// show_gaps_toggle's callback needn't know the order.
 SYN.buildDotplotGapLines = function() {
     const rx = SYN.state.dpRx, ry = SYN.state.dpRy;
     const totalX = SYN.state.dpTotalX, totalY = SYN.state.dpTotalY;
     const xs = [], ys = [], label = [];
     for (const chrom in SYN.data.targetGapsByChrom) {
-        // dropped by the min-length filter -- no offset to place this at
+        // dropped by the min-length filter
         if (!(chrom in SYN.state.dpQueryOffsets)) { continue; }
         for (const g of SYN.data.targetGapsByChrom[chrom]) {
             const mid = SYN.state.dpQueryOffsets[chrom] + (g.start + g.end) / 2;
@@ -1567,29 +1216,20 @@ SYN.buildOffsetsLinear = function(chroms, gap) {
     return [offsets, cum - gap];
 };
 
-// 'target' -> SYN.data.targetGapsByChrom, 'reference' -> ...GapsByChrom --
-// both the zoom panel builders below need this same per-chromosome lookup
-// (as opposed to the ring's flat wedge-polygon list, see SYN.buildRingLayout)
-// to know which genome's gap list a given bar's chromosome name belongs to,
-// since target and reference chromosomes can share names (see
-// Dataset.__init__'s own comment on this).
+// per genome, since target and reference chromosomes can share names
 SYN.gapsForChrom = function(role, name) {
     return (role === 'target' ? SYN.data.targetGapsByChrom : SYN.data.referenceGapsByChrom)[name] || [];
 };
 
-// shown in the empty detail panel (see detail_message in build_page()) --
-// two lines, since a Label doesn't wrap and one line runs past the panel
+// two lines, since a Label doesn't wrap
 SYN.EMPTY_DETAIL_MESSAGE = 'Click a chromosome on the ring or the dotplot,\nor a square in the dotplot, to see it here.';
 
-// "1 block" / "3 blocks"
 SYN.plural = function(n, noun) {
     return `${n} ${noun}${n === 1 ? '' : 's'}`;
 };
 
-// empty: true is the panel with nothing selected -- SYN.applyDetail hides
-// its axis, grid and row labels and shows SYN.EMPTY_DETAIL_MESSAGE instead.
-// The builders below start from this for their own zero-block cases too,
-// setting empty back to false (there are bars to show).
+// empty: true means nothing selected: SYN.applyDetail hides the axis, grid
+// and row labels and shows SYN.EMPTY_DETAIL_MESSAGE.
 SYN.emptyDetail = function(title) {
     return {
         bars: {xs: [], ys: [], fill_color: []},
@@ -1602,11 +1242,9 @@ SYN.emptyDetail = function(title) {
     };
 };
 
-// pivotSide is 'subject' (reference) or 'query' (target) -- whichever side
-// was clicked. That chromosome is drawn alone on its own row; the other
-// side's chromosomes involved in its links are packed on the opposite row.
-// Reference-associated bars/ribbons always end up on the top row, target-
-// associated ones on the bottom row, regardless of which side is the pivot.
+// pivotSide is 'subject' (reference) or 'query' (target), whichever was
+// clicked: that chromosome gets its own row, its partners are packed on the
+// other. Reference is always the top row.
 SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     if (!pivotName) { return SYN.emptyDetail(); }
     const isPivotSubject = pivotSide === 'subject';
@@ -1621,14 +1259,7 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
     const pivotRole = isPivotSubject ? 'reference' : 'target';
     const otherRole = isPivotSubject ? 'target' : 'reference';
 
-    // gap ticks for one bar -- same thin-rect-over-the-bar idea as the
-    // ring's wedge markers, just linear: x0 is the bar's own left edge (0
-    // for the pivot, which is never offset; otherOffsets[name] for a packed
-    // "other" bar), rowY/barH match whichever row that bar is drawn on
-    // (full bar height, no vertical inset -- a gap tick is exactly as tall
-    // as the bar it marks, same as the ring's gap wedges), and refSpan is
-    // the caller's best-known estimate of the panel's overall bp span (see
-    // SYN.widenGapBp).
+    // full-height gap ticks for the bar starting at x0 on row rowY
     const gapXs = [], gapYs = [], gapLabel = [];
     const addGapTicks = (role, name, x0, rowY, refSpan) => {
         for (const g of SYN.gapsForChrom(role, name)) {
@@ -1716,23 +1347,15 @@ SYN.buildDetailData = function(pivotSide, pivotName, k, minScore) {
         gaps: {xs: gapXs, ys: gapYs, label: gapLabel},
         x_range: [-xMax * 0.03, xMax * 1.05],
         y_range: [botY - 0.35, topY + barH + 0.35],
-        // which genome each row is comes from the row labels (see
-        // detail_reference_row_label in build_page()), so the title only
-        // names chromosomes and stays short enough not to be cut off
+        // the row labels name the genomes, keeping the title short
         title: `${SYN.displayName(pivotRole, pivotName)} · ${SYN.plural(links.length, 'block')} with ${SYN.plural(otherNames.length, 'chromosome')}`,
         empty: false,
     };
 };
 
-// One dotplot grid cell (a single target chromosome x single reference
-// chromosome pair) -- always exactly two bars, no packing needed since
-// there's only ever one chromosome per side. Unlike buildDetailData, this
-// has to handle the zero-link case as a normal, expected outcome (not an
-// edge case): the whole point of making grid cells clickable, including
-// empty ones, is that "no synteny between this pair" is itself an answer
-// worth showing rather than something the UI silently refuses to select.
-// Inverted ('-') blocks are drawn twisted, as in buildDetailData (see
-// SYN.orientEnds).
+// One dotplot cell (target x reference chromosome): always two bars. Zero
+// blocks is an expected outcome here -- "no synteny between this pair" is
+// worth showing.
 SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const allLinks = SYN.data.linksByQuery[targetName] || [];
     const links = allLinks.filter((l) => l.s_chrom === subjectName && l.score >= minScore);
@@ -1754,10 +1377,7 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
     const baseX = [-xMax * 0.03, xMax * 1.05];
     const baseY = [botY - 0.35, topY + barH + 0.35];
 
-    // both bars sit at x0=0 -- unlike buildDetailData's packed "other" row,
-    // there's only ever one chromosome per side here, so no per-bar offset.
-    // Same widen treatment as buildDetailData's addGapTicks -- see its own
-    // comment (full bar height, no vertical inset).
+    // both bars start at x=0
     const gapXs = [], gapYs = [], gapLabel = [];
     const addGapTicks = (role, name, rowY) => {
         for (const g of SYN.gapsForChrom(role, name)) {
@@ -1801,35 +1421,22 @@ SYN.buildPairDetailData = function(targetName, subjectName, k, minScore) {
         labels: {x: labelX, y: labelY, text: labelText, color: labelColor},
         gaps,
         x_range: baseX, y_range: baseY,
-        // reference first, matching the rows (reference on top) and every
-        // other title's "reference vs target" order
+        // reference first, matching the rows
         title: `${subjectLabel} × ${targetLabel} · ${SYN.plural(links.length, 'block')}`,
         empty: false,
     };
 };
 
-// mean_identity/anchor_density are null for links.tsv files predating those
-// columns -- omit that line rather than printing "null". topLabel/
-// bottomLabel default to the normal cross-genome case (s_chrom is always on
-// the reference genome, q_chrom always on target here) -- but a homeolog
-// link's two coordinates are BOTH from the same genome (see
-// SYN.buildRingLayout's targetHomeologLinks/referenceHomeologLinks loops),
-// so those callers pass both labels as that one genome's name instead of
-// the default Reference/Target pair, which would otherwise misattribute one
-// side to the wrong genome.
+// topLabel/bottomLabel default to reference over target; a homeolog link's
+// two sides are both in one genome, so its callers pass that genome twice.
 SYN.formatLinkLabel = function(l, topLabel, bottomLabel) {
     topLabel = topLabel || 'Reference';
     bottomLabel = bottomLabel || 'Target';
-    // homeolog links name the same genome on both rows (see
-    // SYN.buildOverviewRibbons); everything else is reference over target
     const sName = SYN.escapeHtml(SYN.displayName(topLabel.toLowerCase(), l.s_chrom));
     const qName = SYN.escapeHtml(SYN.displayName(bottomLabel.toLowerCase(), l.q_chrom));
-    let stats = `${l.score} anchors (distinct loci)  ·  orientation=${l.orientation}`;
-    if (l.mean_identity !== null && l.mean_identity !== undefined
-        && l.anchor_density !== null && l.anchor_density !== undefined) {
-        stats += `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
-            + `  ·  density: ${l.anchor_density.toFixed(1)} anchors/Mb`;
-    }
+    const stats = `${l.score} anchors (distinct loci)  ·  orientation=${l.orientation}`
+        + `<br>avg identity: ${(l.mean_identity * 100).toFixed(1)}%`
+        + `  ·  density: ${l.anchor_density.toFixed(1)} anchors/Mb`;
     const coords = `<table style="border-collapse:collapse">`
         + `<tr><td style="padding-right:6px">${topLabel}</td>`
         + `<td style="text-align:right">${sName}:${l.s_start.toLocaleString()}-${l.s_end.toLocaleString()}</td></tr>`
@@ -1844,12 +1451,7 @@ SYN.formatGapLabel = function(genome, chrom, start, end) {
         + ` (${(end - start).toLocaleString()} bp)`;
 };
 
-// gapSource is optional (the ring/dotplot's own DoubleTap/reset handlers
-// don't touch the zoom panel at all, so they never pass one) -- when given,
-// writes d.gaps only if SYN.state.showGaps is on, same gating
-// SYN.applyGapVisibility/SYN.applyDotplotGapVisibility use for their own
-// sources, so all three panels' gap markers stay in lockstep with the one
-// "Show gaps" switch.
+// gapSource is optional; when given, gets d.gaps only if showGaps is on
 SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, gapSource) {
     barSource.data = d.bars; barSource.change.emit();
     ribbonSource.data = d.ribbons; ribbonSource.change.emit();
@@ -1862,7 +1464,6 @@ SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, g
     detailFig.y_range.start = d.y_range[0]; detailFig.y_range.end = d.y_range[1];
     detailFig.title.text = d.title;
     SYN.state.detailRange = {x0: d.x_range[0], x1: d.x_range[1], y0: d.y_range[0], y1: d.y_range[1]};
-    // SYN.ui is set by SYN.init, before any tap or chain result can get here
     const ui = SYN.ui;
     for (const m of ui.detailAxisModels) { m.visible = !d.empty; }
     for (const m of ui.detailRowLabels) { m.visible = !d.empty; }
@@ -1877,17 +1478,13 @@ SYN.applyDetail = function(d, barSource, ribbonSource, labelSource, detailFig, g
 //   {kind: 'pair', target, subject}                  a dotplot grid square
 //   {kind: 'block', key, target, subject}            a synteny ribbon/segment
 //   {kind: 'selfblock', key, genome, a, b}           a self-link ribbon (ring only)
-// SYN.select is the only thing that changes it, and it shows it everywhere
-// at once: which ring wedges/ribbons, dotplot bands/segments and detail
-// ribbons are selected (Bokeh draws everything else in its dimmed
-// non-selection style, see build_page()), the dotplot's highlight
-// rectangle, and what the detail panel shows. Every rebuild of any of those
-// sources calls SYN.reapplySelection afterwards, so a selection survives
-// re-chains, filters and reorders for as long as it still exists.
+// SYN.select is its only writer and shows it everywhere at once: source
+// selections (Bokeh dims the rest), the dotplot highlight and the detail
+// panel. Every source rebuild calls SYN.reapplySelection, so a selection
+// survives re-chains, filters and reorders while it still exists.
 
-// a selection index no source ever has: selecting it dims every glyph of a
-// source (an EMPTY selection would draw them all normally instead) -- for
-// e.g. a chromosome with no blocks, whose ribbons should all dim
+// an index no source has: selecting it dims every glyph (an empty selection
+// would draw them all normally)
 SYN.DIM_ALL = [1000000000];
 
 // the selection, or what's left of it once the data changed under it: a
@@ -1928,8 +1525,7 @@ SYN.buildSelectionDetail = function(sel, k, minScore) {
     return SYN.buildPairDetailData(sel.target, sel.subject, k, minScore);
 };
 
-// [source, indices] for every selectable source -- see the table in
-// SYN.select's comment above
+// [source, indices] for every selectable source
 SYN.selectionIndices = function(sel) {
     const ui = SYN.ui;
     const byName = (src, names) => {
@@ -2037,15 +1633,11 @@ SYN.reapplySelection = function() {
     SYN.select(SYN.state.selection);
 };
 
-// ---- clicks. Every panel's TapTool only hit-tests (behavior='inspect',
-// see build_page()): it never changes a selection itself, so SYN.select is
-// the one writer of every source's selection and Bokeh's own click
-// selection logic (toggling, clearing the renderers it missed) never
-// fights it. A click is two events: the TapTool's callback, once per
-// renderer it hit (SYN.onTapHit, recording what was hit), and the figure's
-// own Tap event (SYN.resolveTap), which acts on it one tick later -- after
-// every hit callback of that click has run -- or on what the panel does
-// with a click that hit nothing.
+// ---- clicks. Every TapTool only hit-tests (behavior='inspect'), so Bokeh's
+// own selection logic never fights SYN.select. A click is two events: the
+// TapTool callback per renderer hit (SYN.onTapHit records it), and the
+// figure's Tap event (SYN.resolveTap), which acts one tick later, after all
+// hit callbacks have run.
 
 // the selection a click on `source` at its hit indices means (the last
 // index: the topmost glyph, since each source draws in increasing order)
@@ -2089,16 +1681,9 @@ SYN.resolveTap = function(panel, fallback) {
     }, 0);
 };
 
-// Bokeh 3.x renders each figure inside several levels of nested Shadow DOM
-// (for style encapsulation), so the actual <svg> a figure produces (with
-// output_backend="svg" -- see build_page()) isn't reachable by a plain
-// document.querySelector; shadow roots have to be pierced explicitly, one
-// level at a time. Toolbar icons are ALSO inline <svg> elements sitting in
-// the same subtree, so this collects every <svg> under the given root and
-// keeps the one with the largest rendered area -- the actual plot is always
-// far bigger than a ~24px icon, without needing to depend on Bokeh's
-// internal class names (which aren't part of its public API and could
-// change across versions).
+// A figure's <svg> sits inside nested shadow roots, which querySelector can't
+// pierce, alongside toolbar icon <svg>s -- so collect them all and keep the
+// largest (SYN.findMainSvg) rather than rely on Bokeh's internal class names.
 SYN.findAllSvgsDeep = function(node, out) {
     out = out || [];
     if (!node) { return out; }
@@ -2120,13 +1705,8 @@ SYN.findMainSvg = function(root) {
     return best;
 };
 
-// Bokeh.index only holds the *root* views (here: the outer Column layout,
-// plus an unrelated Notifications overlay) -- it does NOT index every nested
-// view by model id, despite the name suggesting a lookup table. Reaching a
-// specific Figure's view (the only way from a CustomJS callback, which only
-// ever gets a plain model reference, to the actual rendered DOM/<svg>) means
-// walking down from a root view through its child_views (a Map keyed by
-// model, not id) until a view whose own .model.id matches turns up.
+// Bokeh.index only holds root views, so a figure's view is found by walking
+// child_views (a Map keyed by model) down from each root.
 SYN.findViewByModelId = function(modelId) {
     function search(view) {
         if (!view) { return null; }
@@ -2149,15 +1729,7 @@ SYN.findViewByModelId = function(modelId) {
     return null;
 };
 
-// Exports a figure as a real, standalone .svg file -- no library needed at
-// all, since output_backend="svg" already gives every figure a genuine
-// vector <svg> DOM tree (see build_page()) rather than only ever being able
-// to rasterize a canvas. This is the vector original -- open it in Inkscape,
-// Illustrator, or any other vector tool to edit it or convert it to PDF. A
-// rasterized alternative (PNG or JPEG, for pasting into a slide or document)
-// is exported the same way via SYN.exportFigureAsRaster below, built on top
-// of this same SVG -- see SYN.exportFigure for the dispatcher both save
-// buttons call.
+// Exports a figure's live <svg> (output_backend="svg") as a standalone file.
 SYN.exportFigureAsSVG = function(figModel, filename) {
     const view = SYN.findViewByModelId(figModel.id);
     const svgEl = view && view.el ? SYN.findMainSvg(view.el) : null;
@@ -2165,10 +1737,8 @@ SYN.exportFigureAsSVG = function(figModel, filename) {
         console.error('SYN.exportFigureAsSVG: could not find a rendered <svg> for this figure.');
         return;
     }
-    // clone rather than serialize the live element directly, so the
-    // namespace attribute below can be added without touching the on-page
-    // original -- and so the exported file is a self-contained SVG document
-    // (a bare fragment plucked out of the page has no xmlns of its own)
+    // a clone, so xmlns (missing on an in-page fragment) and <desc> don't
+    // touch the original
     const clone = svgEl.cloneNode(true);
     if (!clone.getAttribute('xmlns')) {
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
@@ -2183,8 +1753,6 @@ SYN.exportFigureAsSVG = function(figModel, filename) {
     SYN.downloadBlob(new Blob([svgText], {type: 'image/svg+xml;charset=utf-8'}), filename);
 };
 
-// Shared by both export paths: builds a Blob URL, clicks a synthetic <a> to
-// trigger the browser's download, then revokes the URL.
 SYN.downloadBlob = function(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -2196,17 +1764,9 @@ SYN.downloadBlob = function(blob, filename) {
     URL.revokeObjectURL(url);
 };
 
-// Rasterizes the same SVG SYN.exportFigureAsSVG exports, via an offscreen
-// <canvas> -- no new runtime dependency, Image/Canvas are native browser
-// APIs. Shared by PNG and JPEG: same pipeline, just a different mimeType
-// (and, for JPEG, a quality factor -- canvas.toBlob ignores the 3rd arg for
-// PNG, so passing it unconditionally is harmless). `scale` (default 2)
-// renders at 2x the on-screen pixel size for a crisper-than-screen image
-// rather than exposing another UI control for it. The white fill before
-// drawImage matters for BOTH formats: PNG would otherwise get a transparent
-// margin if Bokeh's SVG doesn't already paint an opaque background, and
-// JPEG has no transparency channel at all -- without this, a transparent
-// area would silently render black instead.
+// PNG/JPEG: rasterizes the figure's SVG on a canvas at `scale` x screen
+// size. The white fill keeps transparent areas from going black in a JPEG
+// (toBlob's quality arg is ignored for PNG).
 SYN.exportFigureAsRaster = function(figModel, filename, mimeType, scale) {
     scale = scale || 2;
     const view = SYN.findViewByModelId(figModel.id);
@@ -2249,8 +1809,6 @@ SYN.exportFigureAsRaster = function(figModel, filename, mimeType, scale) {
     img.src = svgUrl;
 };
 
-// One dispatcher both save buttons' CustomJS calls, instead of near-duplicate
-// blocks each hardcoding a format.
 SYN.EXPORT_MIME = {PNG: 'image/png', JPEG: 'image/jpeg'};
 SYN.exportFigure = function(figModel, panel, format) {
     const filename = SYN.buildExportFilename(panel, format);
@@ -2262,14 +1820,8 @@ SYN.exportFigure = function(figModel, panel, format) {
     }
 };
 
-// Builds a save button's download filename from whatever labels are
-// currently active, instead of a fixed generic name, so an exported file is
-// self-describing without the viewer having to rename it -- sanitized since
-// the labels are free-text input and filenames can't contain arbitrary
-// characters (path separators in particular). JPEG gets the conventional
-// .jpg extension, not the literal (also valid, but less common) .jpeg.
-// Ends in the settings the blocks were drawn with (SYN.settingsTag), the
-// one record of them a PNG or JPEG keeps.
+// A self-describing export filename from the (sanitized, free-text) labels,
+// ending in SYN.settingsTag -- the only record of the settings a PNG/JPEG keeps.
 SYN.buildExportFilename = function(panel, format) {
     const sanitize = (s) => (s || '').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     const t = sanitize(SYN.state.targetLabel) || 'target';
@@ -2278,22 +1830,14 @@ SYN.buildExportFilename = function(panel, format) {
     return `${t}_vs_${r}_${panel}_${SYN.settingsTag()}.${ext}`;
 };
 
-// Every title/bar-label a viewer might export reads SYN.state.targetLabel/
-// referenceLabel rather than the pipeline's literal "target"/"reference"
-// role tags (see SYN.buildDetailData/SYN.buildPairDetailData above) -- this
-// is what actually changes those two values and refreshes the handful of
-// sources/titles that don't go through a rebuild-on-every-redraw path the
-// way the detail panel does (see build_page()'s label-input callback, which
-// also calls SYN.reapplySelection and SYN.applyStats after this). The 'group'
-// field feeds each ruler/wedge source's hover tooltip ("Group": "@group")
-// only -- nothing else reads it, so overwriting every entry is safe.
+// Sets the editable genome labels and refreshes the titles/annotations and
+// the 'group' column (hover tooltip only) that aren't rebuilt on redraw.
 SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
     SYN.state.targetLabel = targetLabel;
     SYN.state.referenceLabel = referenceLabel;
     ctx.overview.title.text = `${referenceLabel} (reference) vs ${targetLabel} (target)`;
     ctx.dotplotFig.title.text = `${referenceLabel} vs ${targetLabel}: whole-genome dotplot`;
-    // the in-panel genome names (ring corners, dotplot axis titles, detail
-    // row labels -- see build_page()), all annotations/axes that exports keep
+    // in-panel genome names, which exports keep
     const ui = SYN.ui;
     ui.ringReferenceLabel.text = `Reference · ${referenceLabel}`;
     ui.ringTargetLabel.text = `Target · ${targetLabel}`;
@@ -2311,14 +1855,7 @@ SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
     }
 };
 
-// The interactive HTML's replacement for the (removed) static plots' stats
-// inset -- see compute_alignment_stats.py and build_page()'s --stats. Lives
-// as a normal page element rather than baked into any one exportable figure,
-// since export is per-panel now (ring, zoom, or dotplot), not "the whole
-// image" the way a static render was.
-// truncates (not rounds) to 1 decimal place -- e.g. 99.96 -> 99.9, not
-// 100.0, so the panel never implies a percentage reached a round number it
-// didn't actually reach
+// truncates to 1 decimal place, so 99.96% never shows as 100.0%
 SYN.trunc1 = function(x) {
     return Math.floor(x * 10) / 10;
 };
@@ -2328,13 +1865,8 @@ SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     if (!s) { return ''; }
     const esc = SYN.escapeHtml;
     const pct = (n) => s.proteome_total ? SYN.trunc1(n / s.proteome_total * 100).toFixed(1) : '0.0';
-    // an input is named by its file name if the user supplied it, else the
-    // NCBI accession it was discovered from (compute_alignment_stats.py's
-    // *_source), with its species underneath in italics when known. The cell
-    // has a capped width (table-layout:fixed below) and cuts a long name
-    // off with an ellipsis instead of pushing the number columns out of the
-    // box; the full name is the cell's tooltip. Stats files from before *_source existed fall
-    // back to the editable labels / proteome_origin.
+    // each input's file name or accession (*_source), species in italics
+    // below; long names are ellipsized, full name in the tooltip
     const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
     const fg2 = SYN.data.theme.fg2;
     const nameCell = (source, species) => {
@@ -2350,10 +1882,7 @@ SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
             <td style="${td}">${nameCell(source, species)}</td>
             <td style="${num}">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
             <td style="${num};padding-right:0">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
-    // display:block + an explicit px width (SYN.data.statsPanelWidth, the
-    // same value as stats_div's own width=STATS_PANEL_WIDTH), so the box
-    // spans the zoom panel's drawn frame (not its full nominal width, which
-    // includes the toolbar strip -- see PLOT_TOOLBAR_WIDTH)
+    // width = STATS_PANEL_WIDTH, the zoom panel's drawn frame
     return `
         <div style="font-size:13px;color:${SYN.data.theme.fg};border:1px solid ${SYN.data.theme.line};
                     border-radius:12px;padding:10px 14px;display:block;box-sizing:border-box;
@@ -2378,18 +1907,13 @@ SYN.applyStats = function(targetLabel, referenceLabel, statsDiv) {
     statsDiv.text = SYN.buildStatsHtml(targetLabel, referenceLabel);
 };
 
-// ---- client-side chaining (bin/chain.js's header): decode the embedded
-// hit tables, chain them (in a Web Worker when available) at load and on
-// every min-identity/max-gap/hit-rank change, and hand the result to the
-// same buildRingLayout/buildDotplotSegmentsForLayout/buildDetailData
-// functions above -- no separate render path for "the first chain" vs
-// "a re-chain after a control change". ----
+// ---- client-side chaining (bin/chain.js): decode the embedded hit tables
+// and chain them (in a Web Worker when available) at load and on every
+// min-identity/max-gap/hit-rank change ----
 
-// the chainer is always run at this minBlock (bin/chain.js's
-// CHAINING RULES header, rule 6: extraction doesn't depend on it, so this is the least
-// strict floor that still excludes single/double-anchor noise) -- the min
-// block size control is a pure client-side filter on top of the reply (see
-// SYN.data.ribbons' own comment above), never a reason to re-chain.
+// the chainer always runs at this minBlock (bin/chain.js's CHAINING RULES,
+// rule 6: extraction doesn't depend on it); the min block size control only
+// filters the reply, never re-chains
 SYN.CHAIN_REQUEST_MIN_BLOCK = 3;
 
 SYN.HIT_RANK_MAP = {'best only': 1, '≤ 2': 2, '≤ 3': 3, all: SYNCHAIN.DEFAULTS.maxHitRank};
@@ -2398,10 +1922,7 @@ SYN.now = function() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
 };
 
-// Reads the three chain-affecting controls (min identity/max gap/hit rank)
-// off SYN.ui -- the min block size control is deliberately NOT here (see
-// SYN.CHAIN_REQUEST_MIN_BLOCK above): it never changes what gets requested,
-// only what SYN.applyChainResult's callers filter the reply down to.
+// the chain-affecting controls (not min block size, see above)
 SYN.currentChainParams = function() {
     return {
         minPositive: SYN.ui.minIdentitySpinner.value / 100,
@@ -2411,18 +1932,9 @@ SYN.currentChainParams = function() {
     };
 };
 
-// Runs inside the Worker, prepended with the inlined chain.js source (see
-// SYN.startChainer) and NOTHING else from this file -- a Worker gets its own
-// fresh global scope, with none of SHARED_JS's own SYN.* functions in it, so
-// this calls SYNCHAIN directly rather than through SYN.buildChainers/
-// SYN.runChainers below (the main-thread fallback's own equivalent, which
-// CAN use them since it runs in this same scope). The ${...} substitution
-// happens once, in SHARED_JS itself, when this string is built -- by the
-// time it reaches a Worker it's a plain literal, not a template needing
-// anything of SYN's still in scope. Kept as one string (rather than a named
-// function serialized via toString()) so it reads the same whichever path
-// runs it, and so a syntax error in it fails at page-build time (Python
-// would embed broken JS) rather than silently inside a Worker.
+// Runs inside the Worker after chain.js and nothing else: no SYN.* there, so
+// it mirrors SYN.buildChainers/SYN.runChainers (the main-thread fallback)
+// with SYNCHAIN calls. ${...} is substituted when this string is built.
 SYN.WORKER_SHIM_SRC = `
 let chainers = null;
 self.onmessage = function(e) {
@@ -2451,15 +1963,9 @@ self.onmessage = function(e) {
 };
 `;
 
-// Three chainers sharing the decoded tables: cross (target vs reference)
-// plus each genome's own self-comparison (homeologs), the latter two run
-// only while Show self-links is on (see SYN.dispatchChain) -- createChainer's own
-// per-stage caching (see createChainer in bin/chain.js)
-// means a min-identity/max-gap/hit-rank change that doesn't move the anchor
-// set at all (rare, but e.g. a repeated hit-rank click) costs next to
-// nothing on a later .run() call. Used only by SYN.startChainer's
-// main-thread fallback -- the Worker path above inlines the equivalent
-// logic itself, since it has no SYN.* of its own to call into.
+// Main-thread fallback only: cross (target vs reference) plus each genome's
+// self-comparison (homeologs), the latter run only while Show self-links is
+// on (SYN.dispatchChain).
 SYN.buildChainers = function(target, reference) {
     return {
         cross: SYNCHAIN.createChainer(target, reference, {}),
@@ -2482,15 +1988,9 @@ SYN.runChainers = function(chainers, params, seq, withSelf) {
     };
 };
 
-// Decodes the embedded payload and sets up however this browser will chain
-// it -- a Web Worker (built from the SAME inlined chain.js source text the
-// main thread already has, read back out of the inert <script
-// type="text/plain" id="synchain-src"> copy build_page() emits, plus
-// SYN.WORKER_SHIM_SRC) so a re-chain never blocks the UI thread, or, if
-// constructing the Worker throws (e.g. a `data:`/`file:` page in a browser
-// that restricts Worker creation there), a
-// synchronous main-thread fallback with exactly one console.warn, never a
-// hard failure.
+// Decodes the payload and starts a Worker from the #synchain-src copy of
+// chain.js plus SYN.WORKER_SHIM_SRC, falling back to chaining on the main
+// thread if the browser refuses to create one (e.g. on file: pages).
 SYN.startChainer = async function(payload) {
     const chroms = {
         target: {names: SYN.data.queryNamesNatural, sizes: SYN.data.queryNamesNatural.map((n) => SYN.data.querySizes[n])},
@@ -2515,22 +2015,16 @@ SYN.startChainer = async function(payload) {
     }
 };
 
-// While a request is pending and nothing is selected, the empty detail
-// panel's message doubles as a busy indicator -- restored by
-// SYN.applyChainResult's SYN.reapplySelection once the reply lands.
+// the empty detail panel's message doubles as a busy indicator, restored by
+// SYN.applyChainResult's SYN.reapplySelection
 SYN.showComputingStatus = function() {
     if (!SYN.state.selection) {
         SYN.ui.detailMessage.text = 'Computing synteny…';
     }
 };
 
-// At most one chain request in flight at a time -- while busy, only the
-// latest params are remembered (not queued), and sent the moment the
-// current reply arrives (see SYN.onChainMessage). seq is used to ignore any
-// reply older than the latest one actually applied, which can otherwise
-// happen if the main-thread fallback and a slow Worker reply somehow race
-// (they can't in practice -- one browser uses exactly one path -- but the
-// check is free).
+// At most one request in flight; while busy only the latest params are kept
+// and sent when the reply arrives (SYN.onChainMessage). seq drops stale replies.
 SYN.requestChain = function(params) {
     SYN.chain.seq++;
     const seq = SYN.chain.seq;
@@ -2542,11 +2036,8 @@ SYN.requestChain = function(params) {
     SYN.dispatchChain(seq, params);
 };
 
-// Sends one request to whichever chainer this browser uses. Self-links
-// (homeologs) only feed the ring and are hidden unless Show self-links is
-// on, so the two self-chainers run only while it is: the switch is read
-// here, at send time, so a request queued while another was in flight
-// still picks up a switch flipped in between.
+// Self-links only run while Show self-links is on, read at send time so a
+// queued request picks up a switch flipped meanwhile.
 SYN.dispatchChain = function(seq, params) {
     const withSelf = SYN.ui.selfLinksToggle.active;
     SYN.chain.busy = true;
@@ -2585,19 +2076,11 @@ SYN.groupLinksBy = function(links, key) {
     return g;
 };
 
-// Rebuilds SYN.data's link tables from a fresh chain result and re-renders
-// every panel through the exact same apply* functions every other control
-// change already uses (SYN.applyRingLayout, SYN.applyDotplotOrder/
-// SYN.applyDotplotSegmentsForCurrentLayout, SYN.reapplySelection) -- this is
-// the one place a chain result ever reaches SYN.data, whether it came from
-// the very first load or the Nth min-identity change.
+// The one place a chain result reaches SYN.data; re-renders every panel
+// through the same apply* functions other controls use.
 SYN.applyChainResult = function(msg) {
     const ui = SYN.ui;
-    // kept flat (sorted, chain.js's own compareBlocks order -- see
-    // bin/chain.js's OUTPUTS header) so SYN.exportBlocksTsv can filter
-    // and re-serialize it without needing to flatten linksByQuery back out
-    // in some arbitrary (and here, non-deterministic: Object.values order)
-    // order of its own.
+    // kept flat, in chain.js's sorted order, for SYN.exportBlocksTsv
     SYN.data.crossLinksFlat = msg.crossLinks;
     SYN.data.linksByQuery = SYN.groupLinksBy(msg.crossLinks, 'q_chrom');
     SYN.data.linksByReference = SYN.groupLinksBy(msg.crossLinks, 's_chrom');
@@ -2625,11 +2108,9 @@ SYN.applyChainResult = function(msg) {
                                   ui.showSyntenyToggle.active, ui.ribbonSource);
         SYN.applyDotplotSegmentsForCurrentLayout(ui.minBlockSpinner.value, ui.colorSpinner.value, ui.dpSegmentSource);
     }
-    // high is the longest block, never below low. Bokeh clamps a value
-    // above high down to it and keeps it there, so a strict re-chain would
-    // otherwise lose the viewer's min block size for good: the value is the
-    // viewer's own (SYN.state.minBlockWanted) whenever high allows it, set
-    // in whichever order keeps it within bounds at every step
+    // high is the longest block. Bokeh clamps a value above high for good,
+    // so the viewer's own value (minBlockWanted) is restored whenever high
+    // allows, setting value/high in whichever order stays in bounds
     const spinner = ui.minBlockSpinner;
     const floor = spinner.low;
     const high = Math.max(floor, maxAnyScore);
@@ -2638,9 +2119,7 @@ SYN.applyChainResult = function(msg) {
     // this value from a viewer's by the value itself, not by a flag
     if (value !== spinner.value) { SYN.state.minBlockFitted = value; }
     if (value <= spinner.high) { spinner.value = value; spinner.high = high; } else { spinner.high = high; spinner.value = value; }
-    // no block longer than the floor (or no blocks at all): nothing to
-    // filter, so the spinner is disabled and its note says why, instead of
-    // silently ignoring every edit
+    // nothing longer than the floor to filter: disable, and say why
     const stuck = maxAnyScore <= floor;
     spinner.disabled = stuck;
     const any = msg.crossLinks.length || msg.targetSelfLinks.length || msg.referenceSelfLinks.length;
@@ -2652,22 +2131,16 @@ SYN.applyChainResult = function(msg) {
             : 'No blocks to filter at these settings.';
         ui.minBlockNote.visible = stuck;
     }, 0);
-    // the selection against the new blocks (a selected block that's gone
-    // falls back to its pair), and the detail panel rebuilt for them --
-    // which also replaces SYN.showComputingStatus's message
+    // also replaces SYN.showComputingStatus's message
     SYN.reapplySelection();
 
     SYN.chain.lastMs = msg.ms;
     SYN.updateChainStatus();
 };
 
-// "N blocks": cross-genome blocks currently passing the min-block filter;
-// while Show self-links is on, also how many self-link blocks pass it --
-// or that there are none, so an empty-looking ring reads as an answer
-// rather than a switch that did nothing -- or that they're still being
-// chained. How long the last chain request took is in the hover title
-// only. Called after every chain result and request, every min-block
-// change (a pure filter that never re-chains) and every self-links toggle.
+// "N blocks" passing the min-block filter, plus the self-link count (or
+// "none", or still chaining) while Show self-links is on; the last chain's
+// time is in the hover title.
 SYN.updateChainStatus = function() {
     const ui = SYN.ui;
     if (!SYN.data.crossLinksFlat || !SYN.chain) { return; }
@@ -2687,23 +2160,16 @@ SYN.updateChainStatus = function() {
     ui.chainStatusDiv.text = `<span title="${ms}">${text}</span>`;
 };
 
-// The cross-genome blocks currently on screen: min block size AND min
-// sequence length filters applied (a block counts only if both its
-// chromosomes pass, the same test SYN.filterBySize uses for what's drawn).
-// SYN.data.crossLinksFlat is already sorted in the order bin/chain.js's
-// OUTPUTS header specifies (chain.js's own blocksToLinks output, untouched --
-// see SYN.applyChainResult), and filtering preserves that order, so with min
-// sequence length at its 10 kb floor (and the page built with --min_seq_size
-// at least that, and "Original names" off) this is byte-identical, settings
-// line included, to `node bin/chain_blocks.mjs --min_block <current value>`
-// with the same min-identity/max-gap/hit-rank.
+// The cross-genome blocks on screen (min block size and min sequence length
+// applied), in chain.js's sorted order. With the filters at their floors and
+// "Original names" off, this is byte-identical to
+// `node bin/chain_blocks.mjs` with the same settings.
 SYN.exportBlocksTsv = function() {
     const minScore = SYN.ui.minBlockSpinner.value;
     const minLen = SYN.state.minSeqSize;
     const filtered = (SYN.data.crossLinksFlat || []).filter((l) => l.score >= minScore
         && SYN.data.querySizes[l.q_chrom] >= minLen && SYN.data.subjectSizes[l.s_chrom] >= minLen);
-    // named the way the page currently shows them -- with "Original names"
-    // on, the blocks line up with the input FASTAs directly
+    // named as the page shows them
     const links = !SYN.state.originalNames ? filtered : filtered.map((l) => Object.assign({}, l, {
         q_chrom: SYN.displayName('target', l.q_chrom), s_chrom: SYN.displayName('reference', l.s_chrom),
     }));
@@ -2712,14 +2178,12 @@ SYN.exportBlocksTsv = function() {
     SYN.downloadBlob(new Blob([tsv], {type: 'text/tab-separated-values'}), SYN.buildBlocksExportFilename());
 };
 
-// What the blocks on screen were made with, for an export to record:
-// the chain parameters (min block size at its control's value, not the
-// looser one chain requests run at) and the page's own filters, the latter
-// only once moved off where they start.
+// The settings an export records: chain parameters (min block size at its
+// control's value) and the page's filters once moved off their defaults.
 SYN.currentSettings = function() {
     const params = Object.assign(SYN.currentChainParams(), {minBlock: SYN.ui.minBlockSpinner.value});
     const extra = [];
-    // the min sequence length spinner's 10 kb floor, where it starts
+    // 10 kb: the min sequence length spinner's floor
     if (SYN.state.minSeqSize > 10000) { extra.push(['min_seq_size', SYN.state.minSeqSize]); }
     if (SYN.state.originalNames) { extra.push(['names', 'original']); }
     return {params, extra};
@@ -2741,19 +2205,9 @@ SYN.buildBlocksExportFilename = function() {
     return `${t}_vs_${r}_blocks_${SYN.settingsTag()}.tsv`;
 };
 
-// The page's one entry point, run once from build_page()'s
-// doc.js_on_event(DocumentReady, ...) -- see that call for which
-// sources/figure/widget end up on `s`. Stashes `s` as SYN.ui (the registry
-// every later chain-related function above reads/writes through), does an
-// initial ring/dotplot render with zero links (through the exact same
-// functions every later control change reuses -- there is no separate
-// "initial render" code path, the way Python's direct geometry construction
-// used to be -- see module docstring), then kicks off the actual chaining:
-// decode the embedded hit tables, seed the min-identity/min-block controls
-// from --min_identity/--min_block if given or SYNCHAIN.DEFAULTS otherwise
-// (70 % identity, min block size 15)
-// (again, before a viewer could possibly have touched either), and request
-// the first real chain.
+// The page's entry point, on DocumentReady: stashes `s` as SYN.ui, renders
+// the ring/dotplot with zero links, seeds the min-identity/min-block controls
+// (--min_identity/--min_block or SYNCHAIN.DEFAULTS), and requests the first chain.
 SYN.init = function(s) {
     SYN.ui = s;
     SYN.state.targetLabel = SYN.data.targetLabelDefault;
@@ -2768,11 +2222,7 @@ SYN.init = function(s) {
         const init = SYN.data.initialParams;
         const minPositive = init.minPositive != null ? init.minPositive : SYNCHAIN.DEFAULTS.minPositive;
         const minBlock = init.minBlock != null ? init.minBlock : SYNCHAIN.DEFAULTS.minBlock;
-        // setting these fires min_identity_spinner/min_block_spinner's own
-        // change callbacks (see build_page()) -- harmless here: SYN.data
-        // still holds the empty placeholders the ring/dotplot render above
-        // already rendered from, and the real SYN.requestChain call right
-        // after this makes both redundant re-renders moot within a frame.
+        // fires both spinners' callbacks -- harmless before the first chain
         s.minIdentitySpinner.value = Math.round(minPositive * 100);
         s.minBlockSpinner.value = minBlock;
         // no change event when it already shows minBlock: the viewer's value
@@ -2790,12 +2240,7 @@ SYN.init = function(s) {
 def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtitle=None,
                alignment_stats=None, hits_payload=None, chain_js_src='',
                min_identity=None, max_gap=25, min_block=None):
-    # short species names where known, else accession/file name, else the
-    # role tag (see default_labels) -- the label inputs' starting values, and
-    # what every title starts out showing before a viewer edits them. The
-    # reference falls back to the literal "reference" rather than
-    # subject_name, which is the pipeline's role tag for the same genome
-    # (see main.nf).
+    # the reference falls back to "reference" rather than subject_name
     target_label_default, reference_label_default = default_labels(
         alignment_stats, query_subtitle, subject_subtitle, query_name, "reference")
     query_names = [n for n, _ in ds.query_chroms]
@@ -2804,23 +2249,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     q_src, s_src, r_src, r_self_src, label_src = build_overview_sources()
 
-    # Assembly-gap wedges (both genomes' own gaps, drawn on their own half of
-    # the ring): built once, client-side, by SYN.buildRingLayout at document-
-    # ready (see SYN.init below) into SYN.data.gapRecords, replaced wholesale
-    # on every reorder after that. gap_src itself starts empty --
-    # SYN.applyGapVisibility (also run from SYN.init) is what actually copies
-    # gapRecords into it, gated on show_gaps_toggle's own default (False, see
-    # below), so the two can never disagree the way a Python-rendered initial
-    # state could.
+    # ring gap wedges, filled by SYN.applyGapVisibility
     gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
 
     lim = OUTER_R + 0.22
-    # no 'tap' here -- that shorthand adds its own generic, unrestricted
-    # TapTool, which would sit in the toolbar (visible) alongside the
-    # renderer-scoped, hidden one added below via add_tools(), showing two
-    # redundant Tap buttons for the same gesture. The renderer-scoped one
-    # is the one actually driving clicks (see SYN.onTapHit and the Tap
-    # handlers below) and is the only one that needs to exist at all.
+    # no 'tap': it would add a second, unrestricted TapTool button next to
+    # the hidden renderer-scoped one added below
     overview = figure(width=620, height=620, match_aspect=True,
                        x_range=Range1d(-lim, lim), y_range=Range1d(-lim, lim),
                        title=f"{reference_label_default} (reference) vs {target_label_default} (target)",
@@ -2830,10 +2264,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     overview.grid.visible = False
     overview.toolbar.logo = None
 
-    # self-links first, so the cross-genome synteny draws over them -- dashed
-    # outlines over a faint fill (see SYN.buildOverviewRibbons)
-    # nonselection_*: how the rest looks while something is selected (see
-    # RIBBON_DIM_ALPHA/WEDGE_DIM_ALPHA)
+    # self-links first, so the cross-genome synteny draws over them
     self_ribbon_renderer = overview.patches('xs', 'ys', source=r_self_src, fill_color='fill_color',
                                              fill_alpha='alpha', line_color='line_color', line_alpha=0.9,
                                              line_width=0.8, line_dash='dashed',
@@ -2849,13 +2280,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                          line_color='black', line_width=0.5, **wedge_dim)
     overview.text('x', 'y', source=label_src, text_align='center', text_baseline='middle',
                   text_font_size='10px')
-    # which half is which genome, in the ring itself (not just its title) --
-    # annotations, so they're in every export of the ring. Top-left corner
-    # over the reference half, bottom-left under the target half: the
-    # corners sit at radius ~1.7, well clear of the chromosome labels
-    # (OUTER_R + 0.14). Data units, since the ring's range is fixed; they
-    # pan/zoom with the ring like everything else on it. Text rewritten by
-    # SYN.applyLabels.
+    # which half is which genome, as annotations so exports keep them; the
+    # corners are well clear of the chromosome labels
     ring_group_label_style = dict(text_font_size='11px', text_font_style='bold', text_color='#333333')
     ring_reference_label = Label(x=-lim + 0.03, y=lim - 0.03, text_baseline='top',
                                  text=f"Reference · {reference_label_default}", **ring_group_label_style)
@@ -2863,19 +2289,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                               text=f"Target · {target_label_default}", **ring_group_label_style)
     overview.add_layout(ring_reference_label)
     overview.add_layout(ring_target_label)
-    # drawn last (on top of the wedges) so a gap stripe is actually visible
-    # against the chromosome band it marks. Not part of overview_tap below --
-    # a gap marker isn't a clickable region (there's nothing to zoom into
-    # that the chromosome wedge underneath doesn't already offer), just a
-    # hover target -- and Bokeh hit-tests each TapTool renderer independently
-    # of paint order, so leaving it out doesn't block clicks to the wedge
-    # underneath either.
+    # drawn on top of the wedges; hover only, not in overview_tap, and it
+    # doesn't block clicks to the wedge underneath
     gap_renderer = overview.patches('xs', 'ys', source=gap_src, fill_color='#000000',
                                      fill_alpha=0.55, line_color=None)
 
-    # follow_mouse -- see detail_fig's identical HoverTool below for why: a
-    # ribbon can span most of the ring, so the default snap-to-center
-    # tooltip can land outside the current (zoomed/panned) view
+    # follow_mouse: a ribbon's centre can be outside a zoomed view
     overview.add_tools(HoverTool(renderers=[ribbon_renderer, self_ribbon_renderer], tooltips="@label{safe}",
                                   point_policy='follow_mouse'))
     overview.add_tools(HoverTool(renderers=[query_renderer, subject_renderer],
@@ -2883,68 +2302,37 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                             ("Group", "@group")]))
     overview.add_tools(HoverTool(renderers=[gap_renderer], tooltips="@label{safe}",
                                   point_policy='follow_mouse'))
-    # wedges (either genome), cross ribbons and self-link ribbons are all
-    # clickable, each selecting what it shows (see the click handlers below
-    # and SYN.onTapHit); one TapTool for all of them -- Bokeh hit-tests
-    # per-renderer within one TapTool just fine, and a second TapTool would
-    # mean a second toolbar button (see the "no 'tap' here" note above).
-    # visible=False hides its toolbar button -- clicking a wedge doesn't
-    # need one, it's not a mode you toggle on/off -- but a tool added via
-    # add_tools() (unlike one named in the tools= string above) is never
-    # auto-activated, hidden or not, so active_tap has to be set explicitly
-    # or the hidden tool would sit there never actually receiving clicks
-    # behavior='inspect': hit-test only, never select (SYN.onTapHit); last
-    # listed wins a click that hits several -- cross ribbons draw over
-    # self-links, so they win too
+    # One hidden TapTool for every clickable renderer. A tool added via
+    # add_tools() is never auto-activated, hence active_tap.
+    # behavior='inspect': hit-test only (SYN.onTapHit); the last listed wins
+    # a click that hits several -- cross ribbons draw over self-links, so
+    # they win too
     overview_tap = TapTool(renderers=[self_ribbon_renderer, subject_renderer, query_renderer, ribbon_renderer],
                            behavior='inspect', visible=False,
                            callback=CustomJS(code="SYN.onTapHit('ring', cb_data.source);"))
     overview.add_tools(overview_tap)
     overview.toolbar.active_tap = overview_tap
-    # double-click to reset pan/zoom -- a shortcut for the toolbar's own
-    # Reset button, since this ring never reprograms its own range after
-    # creation, the reset target is just its own original (fixed) extent.
-    # Also clears the selection -- a double-click reads as "reset this
-    # panel", which should include whatever is selected, not just pan/zoom.
+    # double-click resets pan/zoom and clears the selection
     overview.js_on_event(DoubleTap, CustomJS(args=dict(fig=overview), code=f"""
         fig.x_range.start = {-lim}; fig.x_range.end = {lim};
         fig.y_range.start = {-lim}; fig.y_range.end = {lim};
         SYN.select(null);
     """))
 
-    # Whole-genome dotplot: target along x, reference along y, each block
-    # drawn as the line segment its own (query, subject) span traces out --
-    # the standard synteny-dotplot convention (a diagonal streak per
-    # collinear block, anti-diagonal for an inversion). The chromosome-ruler
-    # strips along each axis are clickable, wired into the exact same
-    # zoom-pivot mechanism the ring wedges use below (same 'name' field, same
-    # tap callback) -- from SYN.buildDetailData's perspective, a click is a
-    # click regardless of which panel it came from.
+    # Whole-genome dotplot: target along x, reference along y, a segment per
+    # block. The ruler strips select chromosomes like the ring wedges do.
     (dp_q_src, dp_s_src, dp_seg_src, dp_grid_src, dp_q_label_src, dp_s_label_src) = build_dotplot_sources()
 
-    # Dotplot gap lines (nice-to-have companion to the ring's gap wedges,
-    # same "Show gaps" switch) -- entirely client-side, same as the segments
-    # themselves: SYN.buildDotplotGapLines rebuilds it from
-    # SYN.data.targetGapsByChrom/referenceGapsByChrom + whichever dotplot
-    # order is currently active whenever it's needed. Starts empty, matching
-    # the switch's default-off state.
+    # dotplot gap lines (SYN.applyDotplotGapVisibility)
     dp_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
 
-    # Placeholder extent -- SYN.init's first call to SYN.applyDotplotOrder
-    # (see build_page()'s doc.js_on_event(DocumentReady, ...) below) sets the
-    # real x_range/y_range before the page ever paints, the same way every
-    # later reorder/min-length-filter change does (see that function's own
-    # comment on the *3/*1.02 multipliers).
-    # no 'tap' here -- see overview's identical figure(...) above for why
+    # placeholder ranges, set by SYN.applyDotplotOrder before first paint
     dotplot_fig = figure(width=620, height=620,
                           x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
                           title=f"{reference_label_default} vs {target_label_default}: whole-genome dotplot",
                           tools="pan,wheel_zoom,reset",
                           output_backend="svg")
-    # the axes are there only for their titles (which genome runs along
-    # which axis, rewritten by SYN.applyLabels) -- the chromosome rulers and
-    # their labels stand in for ticks, so ticks, tick labels and axis lines
-    # are all hidden
+    # axes only for their titles: the rulers stand in for ticks
     dotplot_fig.xaxis.axis_label = f"Target · {target_label_default}"
     dotplot_fig.yaxis.axis_label = f"Reference · {reference_label_default}"
     dotplot_fig.axis.major_tick_line_color = None
@@ -2972,14 +2360,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dp_segment_hit_renderer = dotplot_fig.multi_line('xs', 'ys', source=dp_seg_src, line_width=8,
                                                       line_alpha=0, selection_line_alpha=0,
                                                       nonselection_line_alpha=0)
-    # thin, light-grey dotted lines, drawn above the segments/gridlines but
-    # below the ruler strips -- a gap line crossing the ruler itself would
-    # look like noise against the strip's own solid fill, not add
-    # information there. Deliberately subtle (thinner and lighter than the
-    # ring/zoom panel's own black gap markers): the dotplot is already the
-    # busiest panel, and a gap line here is a secondary "here's roughly
-    # where" cue, not the primary way to inspect one -- see GAP_LINE_COLOR's
-    # own comment.
+    # subtle dotted lines, above the segments but below the ruler strips
     dp_gap_renderer = dotplot_fig.multi_line('xs', 'ys', source=dp_gap_src, line_color=GAP_LINE_COLOR,
                                               line_dash='dotted', line_width=0.75)
     dp_query_renderer = dotplot_fig.patches('xs', 'ys', source=dp_q_src, fill_color='fill_color',
@@ -2991,75 +2372,39 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     dotplot_fig.text('x', 'y', source=dp_s_label_src, text_align='right', text_baseline='middle',
                       text_font_size='8px')
 
-    # follow_mouse -- see overview's identical HoverTool above for why
     dotplot_fig.add_tools(HoverTool(renderers=[dp_segment_hit_renderer], tooltips="@label{safe}",
                                      point_policy='follow_mouse'))
     dotplot_fig.add_tools(HoverTool(renderers=[dp_query_renderer, dp_subject_renderer],
                                      tooltips=[("Chromosome", "@display_name"), ("Size", "@size_label"),
                                                ("Group", "@group")]))
-    # line_policy='interp' (default is 'nearest', which -- since each gap
-    # line here is just 2 vertices, its own start and end -- would otherwise
-    # snap the tooltip to whichever of those two endpoints is closer, so it
-    # jumps between the top/bottom (or left/right) of the plot instead of
-    # tracking the mouse along the rest of the line's length; interp gives a
-    # continuously-interpolated position along the segment for
-    # point_policy='follow_mouse' to actually follow)
+    # line_policy='interp': with 'nearest' the tooltip snaps to one of the
+    # line's two endpoints
     dotplot_fig.add_tools(HoverTool(renderers=[dp_gap_renderer], tooltips="@label{safe}",
                                      point_policy='follow_mouse', line_policy='interp'))
-    # one TapTool covering both ruler renderers and the segments' hit
-    # renderer -- a single tool can span renderers backed by different data
-    # sources just fine, each click still only touches whichever
-    # renderer/glyph was actually hit. A grid-square tap (the pair
-    # selection) is handled separately, below, by a plain Tap event handler
-    # and SYN.dpCellAt -- there is no invisible per-cell renderer here for a
-    # TapTool to hit-test against (see module docstring).
-    # visible=False -- see overview's identical TapTool above for why.
-    # behavior='inspect' -- see overview_tap
+    # as overview_tap; a grid-square tap is handled by the figure's Tap
+    # event and SYN.dpCellAt instead
     dotplot_tap = TapTool(renderers=[dp_segment_hit_renderer, dp_query_renderer, dp_subject_renderer],
                           behavior='inspect', visible=False,
                           callback=CustomJS(code="SYN.onTapHit('dotplot', cb_data.source);"))
     dotplot_fig.add_tools(dotplot_tap)
     dotplot_fig.toolbar.active_tap = dotplot_tap
-    # Both double-click AND the toolbar's own Reset button need to land on
-    # the CURRENT full extent, not the figure's x_range=Range1d(-1, 1)
-    # placeholder above (see that Range1d's own comment): x_range/y_range
-    # are only rewritten to the real span in JS, after this figure already
-    # exists (SYN.init/SYN.applyDotplotOrder), so Bokeh's built-in Reset
-    # tool -- which restores whatever start/end the range had at FIGURE
-    # CREATION time, i.e. that still-unreplaced placeholder -- would
-    # otherwise snap the view down to [-1, 1], which against real bp-scale
-    # data reads as a hard zoom-IN rather than a reset. Reading SYN.state's
-    # CURRENT rx/ry/totalX/totalY (rather than a value fixed once here)
-    # matters for the same reason on both events: a reorder alone never
-    # changes them, but the min-length filter (see SYN.filterBySize) can
-    # shrink them, and resetting to the ORIGINAL (pre-filter) span would
-    # leave dead margin beyond wherever the plot now actually ends.
+    # Double-click and Reset go to the current full extent: Bokeh's Reset
+    # restores the Range1d(-1, 1) placeholder, and the min-length filter can
+    # change the extent after load.
     dotplot_reset_callback = CustomJS(args=dict(fig=dotplot_fig), code="""
         fig.x_range.start = -SYN.state.dpRx * 3; fig.x_range.end = SYN.state.dpTotalX * 1.02;
         fig.y_range.start = -SYN.state.dpRy * 3; fig.y_range.end = SYN.state.dpTotalY * 1.02;
     """)
     dotplot_fig.js_on_event(DoubleTap, dotplot_reset_callback)
-    # Runs AFTER Bokeh's own Reset tool has already reset x_range/y_range to
-    # that stale placeholder, correcting it in place -- see this callback's
-    # own comment above.
+    # runs after Bokeh's own reset to the placeholder
     dotplot_fig.js_on_event(Reset, dotplot_reset_callback)
 
     detail_bar_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[]))
     detail_rib_src = ColumnDataSource(dict(xs=[], ys=[], fill_color=[], alpha=[], label=[], key=[]))
     detail_label_src = ColumnDataSource(dict(x=[], y=[], text=[], color=[]))
     detail_gap_src = ColumnDataSource(dict(xs=[], ys=[], label=[]))
-    # x_range/y_range: an explicit Range1d placeholder (real values are set
-    # by SYN.applyDetail below, on every click), NOT the default figure()
-    # would otherwise pick (a DataRange1d, which keeps auto-fitting itself
-    # to whatever the bar/ribbon renderers currently span). That auto-fit
-    # runs asynchronously and OVERWRITES whatever SYN.applyDetail just set,
-    # shortly (well under a second) after each click, shrinking the panel's
-    # actual vertical/horizontal fill from what buildDetailData deliberately
-    # computed to Bokeh's own generic padded fit -- a real click's zoom
-    # visibly "flattens" a moment later even with no further interaction,
-    # most noticeably by the time a SECOND click (e.g. a double-click)
-    # lands. Range1d has no such auto-fit: once set, a value sticks until
-    # something else (a pan, or the code below) changes it again.
+    # Range1d placeholders (SYN.applyDetail sets them on every click), not
+    # the default DataRange1d, whose async auto-fit would overwrite them
     detail_fig = figure(width=DETAIL_FIG_WIDTH, height=302, x_axis_label='position (Mb)',
                          min_border_left=DETAIL_FRAME_LEFT,
                          x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
@@ -3071,11 +2416,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_fig.xaxis.visible = False
     detail_fig.grid.visible = False
     detail_fig.toolbar.logo = None
-    # which genome each row is, just above the reference row and just below
-    # the target row -- pinned to the frame's left edge (screen x) so a pan
-    # never slides them out of view, but at the rows' own data y. Annotations,
-    # so an exported panel keeps them. Text rewritten by SYN.applyLabels;
-    # hidden while the panel is empty (SYN.applyDetail).
+    # row labels: screen x so a pan never slides them away, data y at the
+    # rows; annotations so exports keep them
     detail_row_label_style = dict(x=4, x_units='screen', text_font_size='10px', text_color='#555555',
                                   visible=False)
     detail_reference_row_label = Label(y=DETAIL_TOP_Y + DETAIL_BAR_H + 0.04, text_baseline='bottom',
@@ -3084,15 +2426,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     text=target_label_default, **detail_row_label_style)
     detail_fig.add_layout(detail_reference_row_label)
     detail_fig.add_layout(detail_target_row_label)
-    # the empty panel's instructions (SYN.EMPTY_DETAIL_MESSAGE), centred in
-    # SYN.emptyDetail's own x/y range, in place of an axis full of zeros;
-    # also where "Computing synteny…" shows (SYN.showComputingStatus)
+    # the empty panel's message, centred in SYN.emptyDetail's range
     detail_message = Label(x=0, y=0.5, text='', text_align='center', text_baseline='middle',
                            text_font_size='12px', text_color='#888888', text_line_height=1.4)
     detail_fig.add_layout(detail_message)
-    # the underlying bar/ribbon coordinates stay in bp (same units build_page's
-    # other geometry uses) -- only the tick labels are rescaled for display,
-    # so nothing about the actual layout math needs to change
+    # coordinates are bp; ticks show Mb
     detail_fig.xaxis.formatter = CustomJSTickFormatter(code="""
         const mb = tick / 1e6;
         return (Math.round(mb * 10) / 10).toString();
@@ -3102,37 +2440,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                                  fill_alpha='alpha', nonselection_fill_alpha=RIBBON_DIM_ALPHA)
     detail_bar_renderer = detail_fig.patches('xs', 'ys', source=detail_bar_src,
                                               fill_color='fill_color', line_color='black', line_width=0.5)
-    # drawn after the bars so a gap tick is visible on top of the bar it
-    # marks -- see overview's identical gap_renderer above for why it's not
-    # part of any TapTool (nothing to zoom into beyond the bar underneath)
+    # drawn over the bars; hover only, as on the ring
     detail_gap_renderer = detail_fig.patches('xs', 'ys', source=detail_gap_src, fill_color='#000000',
                                               fill_alpha=0.55, line_color=None)
     detail_fig.text('x', 'y', source=detail_label_src, text_align='center', text_baseline='middle',
                      text_font_size='9px', text_color='color')
-    # point_policy='follow_mouse' (default is 'snap_to_data', anchored to
-    # the ribbon's geometric center) -- a ribbon can span the whole panel,
-    # so anchoring to its center means the tooltip can render outside the
-    # current view once someone's zoomed into one end of it
+    # follow_mouse: a ribbon's centre can be outside a zoomed view
     detail_fig.add_tools(HoverTool(renderers=[detail_ribbon_renderer], tooltips="@label{safe}",
                                     point_policy='follow_mouse'))
     detail_fig.add_tools(HoverTool(renderers=[detail_gap_renderer], tooltips="@label{safe}",
                                     point_policy='follow_mouse'))
-    # clicking one of the panel's ribbons selects that block everywhere
-    # (see detail_tap_callback); visible=False/active_tap as for the ring's
-    # own TapTool above
+    # clicking a ribbon selects that block everywhere; as overview_tap
     detail_tap = TapTool(renderers=[detail_ribbon_renderer], behavior='inspect', visible=False,
                          callback=CustomJS(code="SYN.onTapHit('detail', cb_data.source);"))
     detail_fig.add_tools(detail_tap)
     detail_fig.toolbar.active_tap = detail_tap
-    # Double-click AND the toolbar's own Reset button both need this: unlike
-    # the ring/dotplot above, this panel's range is rewritten on every click
-    # (see SYN.applyDetail), so the reset target has to be whatever
-    # SYN.applyDetail most recently stashed in SYN.state.detailRange rather
-    # than a value fixed at page load; a no-op before the first click, when
-    # there's nothing to reset to yet. Reset also has to correct Bokeh's own
-    # built-in reset behavior back to detailRange for the same reason the
-    # dotplot's own Reset handler does (see that one's comment) -- the
-    # figure's x_range/y_range=Range1d(-1, 1) above is only a placeholder.
+    # Double-click and Reset go to the range SYN.applyDetail last set, as
+    # for the dotplot
     detail_reset_callback = CustomJS(args=dict(fig=detail_fig), code="""
         const r = SYN.state.detailRange;
         if (!r) { return; }
@@ -3142,10 +2466,6 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_fig.js_on_event(DoubleTap, detail_reset_callback)
     detail_fig.js_on_event(Reset, detail_reset_callback)
 
-    # target_label_default/reference_label_default (see the top of this
-    # function) -- so a viewer sees which physical genome is which right in
-    # the box itself. A viewer can still retype either box to anything else
-    # before exporting a panel, see SYN.applyLabels.
     target_label_input = TextInput(title="Target label", value=target_label_default,
                                     width=TOP_CONTROL_WIDTH)
     reference_label_input = TextInput(title="Reference label", value=reference_label_default,
@@ -3155,19 +2475,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                              options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
     color_spinner = Spinner(title="Colors", low=1, high=MAX_COLORS,
                              step=1, value=DEFAULT_COLORS, width=TOP_CONTROL_WIDTH)
-    # Chain parameters (bin/chain.js's PARAMETERS header) -- min identity,
-    # max gap, and hit rank each trigger a fresh client-side re-chain
-    # (SYN.requestChain); min block size is a pure post-filter (see
-    # SYN.data.ribbons' own comment above) and never re-chains. SYN.init
-    # sets min_identity/min_block from --min_identity/--min_block if given,
-    # else from SYNCHAIN.DEFAULTS (0.7, 15), the moment the embedded hit
-    # tables are decoded (before a viewer could touch either control, same
-    # "no separate initial render" reasoning as every other control on this
-    # page). The values below are placeholders until then, equal to those
-    # defaults so nothing visibly changes.
-    # the "?" icon Bokeh draws next to a titled input's label; opens below the
-    # icon, as a wrapped box (a plain-text tooltip renders as one unwrapped
-    # line that runs off the page)
+    # Chain parameters (bin/chain.js's PARAMETERS header): min identity, max
+    # gap and hit rank re-chain; min block size only filters. SYN.init sets
+    # the real min identity/min block values; these placeholders equal
+    # SYNCHAIN.DEFAULTS so nothing visibly changes.
+    # the "?" icon next to a titled input's label, as a wrapped box (a
+    # plain-text tooltip is one unwrapped line that runs off the page)
     def help_tip(text, position='bottom'):
         return Tooltip(content=HTML(f"<div style='width:260px;white-space:normal;line-height:1.35'>"
                                     f"{text}</div>"), position=position)
@@ -3194,45 +2507,28 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                  "its 2nd/3rd best, and so on. 'best only' gives the cleanest one-to-one "
                                  "synteny; keep lower-ranked hits to see duplicated copies, such as "
                                  "paralogs or a polyploid's subgenomes."))
-    # low=3: bin/chain.js's MIN_CHAIN_LENGTH is 2, but a 2-anchor
-    # chain is barely evidence of anything -- 3 is this control's own floor,
-    # independent of the (always looser) minBlock=3 every chain request
-    # itself is run at (see SYN.data.ribbons' own comment above). high is a
-    # generous placeholder -- SYN.applyChainResult updates it to the actual
-    # largest block on every result, same "don't cap at an arbitrary round
-    # number" reasoning min_seq_size_spinner's high uses below.
+    # low=3: a 2-anchor chain is barely evidence. high is a placeholder;
+    # SYN.applyChainResult sets it to the largest block.
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
                                  step=1, value=min_block or 15, width=TOP_CONTROL_WIDTH,
                                  description=help_tip(
                                      "The minimum number of anchors for a syntenic block to be drawn."))
-    # shown, with the spinner disabled, when no block is longer than its
-    # floor and there's nothing to filter (SYN.applyChainResult)
+    # shown when there's nothing to filter (SYN.applyChainResult)
     min_block_note = Div(text="", visible=False, width=TOP_CONTROL_WIDTH, margin=(0, 5, 5, 5),
                          styles={'font-size': '11.5px', 'line-height': '1.35', 'color': THEME['fg2']})
-    # One-line status ("N blocks", plus self-link blocks while Show
-    # self-links is on -- see SYN.updateChainStatus), refreshed by every
-    # chain request and result -- lets a viewer tell a slow re-chain (a large
-    # genome, a loose max-gap) apart from "nothing matched".
+    # "N blocks" status (SYN.updateChainStatus), telling a slow re-chain
+    # apart from "nothing matched"
     chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5),
                            stylesheets=[f"span{{display:inline-block;padding:3px 10px;border-radius:999px;"
                                         f"background:{THEME['accent_tint']};color:{THEME['accent_tint_fg']};"
                                         f"font-size:12.5px;font-weight:600;white-space:nowrap;}}"])
-    # Post-hoc chromosome-length filter for the ring + dotplot, independent
-    # of --min_seq_size: that pipeline flag already dropped anything shorter
-    # than its own threshold before this script ever saw the data (see
-    # RENAME_SEQUENCES's chrom_sizes output, main.nf), so this control can
-    # only ever filter what actually made it into the page, never recover
-    # what didn't. In Mb, like the ruler size labels elsewhere on this page.
-    # Starts at, and never goes below, MIN_SEQ_SIZE_FLOOR_MB (10 kb, the
-    # pipeline's default --min_seq_size); above that it moves in 0.1 Mb
-    # steps -- the arrows go 0.01 -> 0.1 -> 0.2 -> 0.3, and a typed value is
-    # snapped to the nearest 0.1 Mb (11.74 -> 11.7) by min_seq_size_callback
-    # below, which also caps it at this dataset's own largest chromosome.
-    # Both bounds live in that callback, not in Spinner's low/high: Bokeh
-    # refuses an arrow step past `low` rather than clamping it (0.1 - 0.1 = 0
-    # would stick at 0.1 under low=0.01), and silently rejects a typed value
-    # above `high`, leaving the old value in effect under the typed text.
-    # low=0 lets the step to 0 through for the callback to lift to the floor.
+    # Client-side length filter on top of the pipeline's --min_seq_size, in
+    # Mb. Never below MIN_SEQ_SIZE_FLOOR_MB; 0.1 Mb steps (0.01 -> 0.1 ->
+    # 0.2), typed values snapped to 0.1 and capped at the largest chromosome
+    # by min_seq_size_callback. Both bounds live there, not in low/high:
+    # Bokeh refuses an arrow step past `low` rather than clamping, and
+    # silently rejects a typed value above `high`. low=0 lets the step to 0
+    # through for the callback to lift to the floor.
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
                                     step=0.1, value=MIN_SEQ_SIZE_FLOOR_MB, width=TOP_CONTROL_WIDTH,
@@ -3246,15 +2542,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     format='0[.][000]')
     reset_btn = Button(label="✕ Clear selection", button_type="default", width=150,
                         height=TOOLBAR_CONTROL_HEIGHT)
-    # label is just "save" (not "save ring"/"save zoom"/"save dotplot") and
-    # the button narrow to match -- which panel it saves is already obvious
-    # from its position directly under that panel, so the longer label was
-    # only ever spending width, not clarity
     SAVE_BUTTON_WIDTH = 70
-    # the ring's save button follows that panel's switches, so it gets the
-    # same divider the switches use between each other (a 1px line plus 6px
-    # padding on the leading edge), and is widened by that much so the
-    # button itself stays SAVE_BUTTON_WIDTH wide
+    # the ring's save button follows its switches, so it gets their divider
+    # and is widened by it
     SAVE_DIVIDER_PAD = 6
     SAVE_DIVIDER_CSS = f':host{{border-left:1px solid var(--divider-color);padding-left:{SAVE_DIVIDER_PAD}px;}}'
     save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
@@ -3263,18 +2553,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                             height=TOOLBAR_CONTROL_HEIGHT)
     save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
                                height=TOOLBAR_CONTROL_HEIGHT)
-    # Exports the cross blocks currently on screen (min block size filter
-    # applied) as a links.tsv (bin/chain.js's OUTPUTS header) -- lives on
-    # the dotplot row since that's the panel showing every cross-genome block
-    # at once, unlike the ring (also self-links) or the zoom panel (one
-    # pivot/pair at a time). See SYN.exportBlocksTsv.
+    # on the dotplot row, the panel showing every cross-genome block
     export_blocks_btn = Button(label="⬇ blocks TSV", button_type="default", width=110,
                                 height=TOOLBAR_CONTROL_HEIGHT)
-    # format choice lives next to each save button rather than as a second
-    # button per panel -- adds ~50px to a row instead of ~130px, which
-    # matters on the dotplot row (save button + blocks TSV). JPEG
-    # has no transparency channel -- SYN.exportFigureAsRaster fills white
-    # first regardless of format, so this doesn't need special-casing there.
     EXPORT_FORMATS = ["SVG", "PNG", "JPEG"]
     DEFAULT_EXPORT_FORMAT = "PNG"
     ring_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
@@ -3283,12 +2564,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                               height=TOOLBAR_CONTROL_HEIGHT)
     dotplot_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
                                  height=TOOLBAR_CONTROL_HEIGHT)
-    # One menu for the chromosome order of both the ring and the dotplot
-    # (see ORDER_MODES/SYN.activeOrder). Size is the default, matching
-    # this script's own default order (see Dataset.__init__); File order is
-    # each genome's FASTA order; Similarity (see SYN.computeSimilarityOrder)
-    # places chromosomes that share blocks next to each other -- most useful
-    # when the two genomes are close enough for a near-1:1 correspondence.
+    # the ring's and dotplot's chromosome order; "Size" matches Dataset's
     order_select = Select(title="Chromosome order", value="Size", options=list(ORDER_MODES),
                           width=TOP_CONTROL_WIDTH,
                           description=help_tip(
@@ -3299,55 +2575,25 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                               "weighted by their anchor counts. Only what is drawn counts: blocks below "
                               "Min block size and sequences below Min sequence length are ignored, and "
                               "chromosomes with no visible blocks go to the end."))
-    # every on/off switch on the page: a fixed 28px track (left to Bokeh it
-    # stretches to fill whatever the label leaves, so switches with longer
-    # labels got visibly shorter tracks), a tighter gap between track and
-    # label than Bokeh's own 6px, both centered vertically. :host is the
-    # styling entry point for every Bokeh widget's own shadow DOM -- see
-    # Switch.stylesheets' docstring. SWITCH_WIDTH fits the longest label
-    # ("Show self-links") on one line.
+    # every switch: a fixed 28px track (Bokeh's stretches with the label) and
+    # a tighter gap. SWITCH_WIDTH fits "Show self-links" on one line.
     SWITCH_WIDTH = 125
     SWITCH_CSS = ':host{gap:4px;align-items:center;}.bk-body{flex:0 0 28px;width:28px;}'
-    # same, plus a thin divider on the leading edge, in the small gap Bokeh
-    # already leaves between adjacent row items -- for a switch that follows
-    # another control in the same row. var(--divider-color) is Bokeh's own
-    # theme token for exactly this (already used between widgets in Bokeh's
-    # stock toolbars), not a hardcoded color of this file's own.
+    # plus a leading divider, for a switch following another control
     SWITCH_DIVIDER_CSS = SWITCH_CSS + ':host{border-left:1px solid var(--divider-color);padding-left:6px;}'
-    # Switch, not Toggle -- a checkbox-style on/off switch rather than a
-    # pressable button, like every on/off control on the page. off by default -- self-links can dominate/clutter the ring
-    # (e.g. a heavily-homeologous polyploid genome), so a viewer opts in
-    # rather than opting out. Lives with the ring's own save row (not the
-    # palette/colors/min-block-size row below) because self-links are
-    # drawn only on the ring -- SYN.buildDotplotSegmentsForLayout reads only
-    # SYN.data.linksByQuery, which never contains homeolog records, so they
-    # never appear on the zoom or dotplot panels either.
+    # off by default: self-links can clutter the ring (e.g. a polyploid).
+    # Under the ring, the only panel that draws them.
     self_links_toggle = Switch(label="Show self-links", active=False, width=SWITCH_WIDTH,
                                 stylesheets=[SWITCH_DIVIDER_CSS])
-    # on by default -- switching it off hides cross-genome synteny ribbons,
-    # leaving only self-links on screen if self_links_toggle is on (see the combined
-    # predicate in SYN.buildOverviewRibbons: is_homeolog records are governed
-    # by self_links_toggle regardless of this switch; non-homeolog records
-    # are governed by this switch regardless of self_links_toggle -- the two
-    # compose independently, including the "both off" case, which is a valid
-    # (if visually empty) combination, not specially prevented).
+    # hides the cross-genome ribbons, independently of self_links_toggle
     show_synteny_toggle = Switch(label="Show synteny", active=True, width=SWITCH_WIDTH,
                                   stylesheets=[SWITCH_CSS])
-    # off by default -- an assembly gap marker is a diagnostic/QC detail
-    # (see bin/rename_sequences.py's --out_gaps), not something every viewer
-    # needs on screen by default, and a draft-quality assembly can have
-    # thousands of them at the default 100bp threshold. The single on/off
-    # control for every panel's gap markers (see SYN.applyGapVisibility/
-    # SYN.applyDotplotGapVisibility/SYN.applyDetail's gap handling), so it
-    # lives with the other all-panel display controls, unlike
-    # self_links_toggle/show_synteny_toggle, which only affect the ring and
-    # sit under it. align='end' plus a taller bottom margin centres it on the
-    # titled inputs' boxes rather than their bottom edge.
+    # off by default: a draft assembly can have thousands of gaps. Covers
+    # all three panels. align='end' plus a taller bottom margin centres it
+    # on the titled inputs' boxes.
     show_gaps_toggle = Switch(label="Show gaps", active=False, width=SWITCH_WIDTH,
                                stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
-    # off by default -- labels every chromosome by its own FASTA ID instead
-    # of the short plot name bin/rename_sequences.py gave it (see
-    # SYN.displayName). Disabled when no name was changed in either genome.
+    # disabled when no name was changed in either genome
     original_names_toggle = Switch(label="Original names", active=False, width=SWITCH_WIDTH,
                                     disabled=not (ds.query_original_names or ds.subject_original_names),
                                     stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
@@ -3363,14 +2609,10 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """))
     export_blocks_btn.js_on_click(CustomJS(code="SYN.exportBlocksTsv();"))
 
-    # One re-layout of both panels for the new order (SYN.applyOrder). The
-    # color index follows the size/natural choice only (see
-    # SYN.buildColorIndex for why) and is rebuilt before the layout reads it.
+    # the color index follows the size/file choice only (SYN.buildColorIndex)
     order_callback = CustomJS(code="""
         const [bySize, bySimilarity] = SYN.data.orderModes[cb_obj.value];
         if (bySize !== SYN.state.orderBySize) {
-            // the FULL size/natural list, not the length-filtered order --
-            // see SYN.buildColorIndex's own comment
             SYN.data.subjectColorIndex = SYN.buildColorIndex(bySize ? SYN.data.subjectNames : SYN.data.subjectNamesNatural);
         }
         SYN.state.orderBySize = bySize;
@@ -3379,18 +2621,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     order_select.js_on_change('value', order_callback)
 
-    # Global, like show_gaps_toggle -- filters both the ring and the dotplot
-    # down to chromosomes at or above this length, composing with whichever
-    # order is active (SYN.activeOrder applies the filter). Any active pivot/
-    # pair zoom is cleared on change, same as reset_btn -- the chromosome it
-    # was zoomed into may no longer be visible at all.
     min_seq_size_callback = CustomJS(code=f"""
-        // snap to the nearest 0.1 Mb, never below the floor: an arrow step
-        // off the floor (0.01 + 0.1 = 0.11) lands on 0.1, a typed 11.74 on
-        // 11.7, and the arrows' float drift (0.30000000000000004) on 0.3.
-        // Never above the last 0.1 Mb step that still shows the largest
-        // chromosome, either. Setting the value re-runs this callback with
-        // the snapped one.
+        // snap to 0.1 Mb within [floor, largest chromosome]: 0.11 -> 0.1,
+        // 0.30000000000000004 -> 0.3. Setting the value re-runs this callback.
         const floor = {MIN_SEQ_SIZE_FLOOR_MB};
         const top = Math.max(floor, Math.floor({max_seq_size / 1e6} * 10) / 10);
         const snapped = Math.min(top, Math.max(floor, Math.round(cb_obj.value * 10) / 10));
@@ -3399,27 +2632,17 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             return;
         }}
         SYN.state.minSeqSize = Math.round(cb_obj.value * 1e6);  // whole bp, drops the float drift
-        // re-lays out both panels, which re-applies the selection -- dropped
-        // if its chromosome was just filtered out (SYN.validSelection)
         SYN.applyOrder();
     """)
     min_seq_size_spinner.js_on_change('value', min_seq_size_callback)
 
-    # ---- clicks: every one ends in SYN.select, which shows the selection in
-    # all three panels at once. Each panel's TapTool records what a click hit
-    # (SYN.onTapHit, see the TapTools above); each figure's Tap event then
-    # resolves the click (SYN.resolveTap) -- selecting what was hit, or
-    # doing what a click on nothing means in that panel:
+    # ---- each figure's Tap event resolves a click (SYN.resolveTap): select
+    # what was hit, or what a click on nothing means in that panel:
     # - ring: clear the selection
     ring_tap_callback = CustomJS(code="SYN.resolveTap('ring', () => null);")
     overview.js_on_event(Tap, ring_tap_callback)
-    # - dotplot: a grid square (outside the ruler strips and the margins)
-    #   selects that (target, reference) chromosome pair, including pairs
-    #   with no blocks at all ("no synteny here" is itself an answer).
-    #   SYN.dpCellAt hit-tests the square by binary search -- there is no
-    #   invisible per-cell renderer (see module docstring: that was 48,841
-    #   hidden polygons for axolotl alone). A click in the margins does
-    #   nothing.
+    # - dotplot: a grid square selects that chromosome pair, even with no
+    #   blocks; the margins do nothing
     dotplot_pair_tap_callback = CustomJS(code="""
         const cell = SYN.dpCellAt(cb_obj.x, cb_obj.y);
         SYN.resolveTap('dotplot', () => (cell ? {kind: 'pair', target: cell.targetName, subject: cell.subjectName}
@@ -3441,8 +2664,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
     ), code="""
-        // the ribbon/segment rebuilds re-apply the selection, which also
-        // rebuilds the detail panel in the new colors (SYN.reapplySelection)
+        // the rebuilds re-apply the selection, recoloring the detail panel too
         const k = cb_obj.value;
         SYN.recolorSubjectWedges(k, subject_source);
         SYN.recolorSubjectWedges(k, dp_subject_source);
@@ -3456,24 +2678,18 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src, color_spinner=color_spinner,
         self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
     ), code="""
-        // the viewer's own value, kept through re-chains that lower the
-        // spinner's high (see SYN.applyChainResult)
+        // the viewer's own value, kept through re-chains (SYN.applyChainResult)
         if (cb_obj.value === SYN.state.minBlockFitted) {
             SYN.state.minBlockFitted = null;
         } else {
             SYN.state.minBlockWanted = cb_obj.value;
         }
-        // every rebuild below re-applies the selection (dropping a block
-        // that no longer passes back to its pair) and the detail panel
         const minScore = cb_obj.value;
         const k = color_spinner.value;
         SYN.applyOverviewRibbons(minScore, k, self_links_toggle.active,
                                   show_synteny_toggle.active, overview_ribbon_source);
         if (SYN.state.orderBySimilarity) {
-            // the similarity order only counts blocks at or above the min
-            // block size (see SYN.computeSimilarityOrder), so it can change
-            // here -- re-lay out both panels (which also redraws the ribbons
-            // SYN.applyOverviewRibbons just filtered)
+            // similarity order depends on the min block size
             SYN.applyOrder();
         } else {
             SYN.applyDotplotSegmentsForCurrentLayout(minScore, k, dotplot_segment_source);
@@ -3482,28 +2698,18 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     min_block_spinner.js_on_change('value', min_block_callback)
 
-    # Min identity, max gap, and hit rank each need a fresh client-side
-    # re-chain (SYN.requestChain) rather than a re-filter/re-render of
-    # already-computed data -- unlike every control above. SYN.ui (set once
-    # by SYN.init, before any of these can fire) already holds every widget
-    # SYN.currentChainParams/SYN.applyChainResult need, so there's nothing
-    # to pass as CustomJS args here.
+    # these re-chain; SYN.ui holds every widget they need
     chain_params_callback = CustomJS(code="SYN.requestChain(SYN.currentChainParams());")
     min_identity_spinner.js_on_change('value', chain_params_callback)
     max_gap_spinner.js_on_change('value', chain_params_callback)
     hit_rank_select.js_on_change('value', chain_params_callback)
 
-    # Switch fires via js_on_change('active', ...), not js_on_click (which is
-    # Button/Toggle-specific) -- cb_obj is still the Switch itself either way,
-    # so cb_obj.active works the same as it did when this was a Toggle.
     self_links_toggle_callback = CustomJS(args=dict(
         overview_ribbon_source=r_src, color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         show_synteny_toggle=show_synteny_toggle,
     ), code="""
-        // self-links are only chained while this switch is on (see
-        // SYN.dispatchChain): if the ones on hand are stale, re-chain --
-        // SYN.applyChainResult redraws the ring when the reply lands. The
-        // cross chainer's own cache makes its share of that request free.
+        // self-links are only chained while this is on: if stale, re-chain
+        // (the cross chainer's cache makes its share free)
         if (cb_obj.active && !SYN.chain.selfFresh) {
             SYN.requestChain(SYN.currentChainParams());
             return;
@@ -3523,15 +2729,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     show_synteny_toggle.js_on_change('active', show_synteny_toggle_callback)
 
-    # Single on/off switch for every panel's gap markers at once (see
-    # show_gaps_toggle's own comment above for why it's not split per
-    # panel): flips SYN.state.showGaps, then rebuilds the ring's gap source
-    # from the current-order master list (SYN.data.gapRecords), the
-    # dotplot's gap lines from the current dotplot offsets, and re-renders
-    # whatever's currently in the detail panel (SYN.reapplySelection) so its gap ticks
-    # (already computed into every SYN.buildDetailData/buildPairDetailData
-    # result regardless of this switch -- see SYN.applyDetail) actually
-    # show or hide too.
+    # the detail panel's gap ticks show/hide via SYN.reapplySelection
     show_gaps_toggle_callback = CustomJS(args=dict(gap_source=gap_src, dp_gap_source=dp_gap_src), code="""
         SYN.state.showGaps = cb_obj.active;
         SYN.applyGapVisibility(gap_source);
@@ -3540,9 +2738,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     show_gaps_toggle.js_on_change('active', show_gaps_toggle_callback)
 
-    # Every name on the page is baked into some source's text/label column
-    # when it's built, so the switch re-runs the same full re-layout the
-    # order menu does, then redraws the detail panel for the selection.
+    # names are baked into every source, so re-lay out everything
     original_names_callback = CustomJS(code="""
         SYN.state.originalNames = cb_obj.active;
         SYN.applyOrder();
@@ -3550,19 +2746,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     """)
     original_names_toggle.js_on_change('active', original_names_callback)
 
-    # Swaps the active color array itself (SYN.data.palette -- every recolor
-    # function reads from it by reference, so nothing else needs to change)
-    # rather than the number of colors cycled through, which is what
-    # color_spinner controls -- the two are independent and compose (e.g.
-    # "Pastel" at a count of 4).
+    # swaps SYN.data.palette, which every recolor reads; composes with
+    # color_spinner's count
     palette_callback = CustomJS(args=dict(
         subject_source=s_src, dp_subject_source=dp_s_src,
         overview_ribbon_source=r_src, dotplot_segment_source=dp_seg_src,
         color_spinner=color_spinner, min_block_spinner=min_block_spinner,
         self_links_toggle=self_links_toggle, show_synteny_toggle=show_synteny_toggle,
     ), code="""
-        // the ribbon/segment rebuilds re-apply the selection and the detail
-        // panel, as in color_callback
         SYN.data.palette = SYN.data.palettes[cb_obj.value];
         const k = color_spinner.value;
         SYN.recolorSubjectWedges(k, subject_source);
@@ -3583,9 +2774,6 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     right_col = column(dotplot_fig,
                         row(save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
 
-    # static -- the tool's own name/tagline, not this run's target/reference
-    # (that's the target/reference label inputs' job) -- unlike those, never
-    # rewritten by label_callback
     header_title_div = Div(text="<h1>quick_synteny</h1><p>Fast and annotation-free synteny "
                                  "visualisation using spliced protein alignments</p>",
                            margin=(0, 0, 14, 2),
@@ -3593,35 +2781,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                         f"color:{THEME['fg']};}}"
                                         f"p{{margin:4px 0 0;font-size:14px;color:{THEME['fg2']};}}"])
 
-    # No separate "target: <file>" / "reference: <file>" line here any more --
-    # target_label_input/reference_label_input above default to exactly that
-    # (query_subtitle/subject_subtitle, falling back to the role tag), so
-    # showing the input file name a second time in its own Div would just be
-    # the same information twice. That does mean the file name is no longer
-    # visible once a viewer *retypes* a label -- accepted tradeoff, since the
-    # box itself is still right there labeled "Target label"/"Reference label".
-
-    # filled client-side by SYN.buildStatsHtml, from SYN.init (and again on
-    # every label edit, see label_callback) -- empty/invisible if no --stats
-    # was given. width=STATS_PANEL_WIDTH makes
-    # the box itself (SYN.buildStatsHtml's markup, which is
-    # `display:block` precisely so it stretches to fill this rather than
-    # shrink-wrapping its content) as wide as the zoom panel's drawn frame
-    # above it -- detail_fig's own width minus its toolbar strip (see
-    # PLOT_TOOLBAR_WIDTH), not the full nominal figure width (which would run
-    # this box's right edge out under the toolbar icons) and not the
-    # narrower reset/save/format row under it either.
-    # margin: none except DETAIL_FRAME_LEFT on the left, so the box starts at
-    # the zoom panel's drawn frame rather than the figure's outer edge
-    # (Bokeh's own default 5px margin on every side would also push the right
-    # edge past the frame). The vertical breathing room that default margin used to provide is
-    # already there regardless, from SYN.buildStatsHtml's own inline
-    # `margin:4px 0 8px 0` on the box itself.
+    # filled by SYN.applyStats (empty without --stats); width and left margin
+    # line it up with the zoom panel's drawn frame
     stats_div = Div(text='', width=STATS_PANEL_WIDTH, margin=(0, 0, 0, DETAIL_FRAME_LEFT))
 
-    # placed under the zoom panel specifically (not a full-width bar under
-    # all three panels) -- fills the otherwise-empty space under the
-    # narrower middle column, since the ring/dotplot are taller
+    # under the zoom panel, the shortest column
     mid_col = column(detail_fig, row(reset_btn, save_zoom_btn, zoom_format_sel), stats_div)
 
     label_callback = CustomJS(args=dict(
@@ -3641,14 +2805,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     target_label_input.js_on_change('value', label_callback)
     reference_label_input.js_on_change('value', label_callback)
 
-    # The page-wide controls, grouped by what they do: which genomes (labels),
-    # how synteny is detected (these re-chain), which blocks/sequences are
-    # drawn (pure filters), and how everything looks. A small section title
-    # over each group; a divider on each group's leading edge except the
-    # first in its row.
-    # margin-left clears the "?" icon of the group to its left, which can run
-    # past its input's width when the title is long ("Min sequence length
-    # (Mb)")
+    # a titled group of page-wide controls, with a leading divider except
+    # first in its row; margin-left clears the "?" icon of the group to its
+    # left, which can overflow a long title
     def control_group(title, *children, divider=True):
         css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:14px;}'
                if divider else '')
@@ -3670,10 +2829,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     layout = column(
         header_title_div,
         controls,
-        # spacing -- row()'s default is 0, so without this the three
-        # panels would sit flush against each other (or worse, apart by
-        # whatever a child happens to overflow to, see left_col's own
-        # comment above) rather than by a deliberate, equal gap
+        # row()'s default spacing is 0
         row(left_col, mid_col, right_col, spacing=10),
         spacing=12,
     )
@@ -3688,21 +2844,11 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         fig.title.text_color = THEME['fg']
         fig.outline_line_color = THEME['line']
 
-    # The page is built as an explicit Document (rather than handing `layout`
-    # straight to file_html) so SYN.init can be wired to fire once, from the
-    # browser's own "document ready" event, rather than needing Python to
-    # pre-render any initial geometry (see module docstring). DocumentReady
-    # fires after Bokeh has finished constructing every model client-side,
-    # confirmed against both bokeh 3.9 and 3.10 (see this stream's plan) --
-    # well before a viewer could touch a control, so SYN.init always wins
-    # the race to set up SYN.state and every source's first render.
+    # An explicit Document so SYN.init can run on DocumentReady, which fires
+    # once Bokeh has built every model and before a viewer can touch a
+    # control. Its args become SYN.ui, the registry later code reads through.
     doc = Document()
     doc.add_root(layout)
-    # every widget/source SYN.init stashes into SYN.ui (see that function's
-    # own comment) -- new code (SYN.requestChain, SYN.applyChainResult,
-    # SYN.exportBlocksTsv) reads/writes through that registry instead of
-    # each getting its own CustomJS args=dict(...), unlike the older
-    # callbacks above.
     doc.js_on_event(DocumentReady, CustomJS(args=dict(
         q_src=q_src, s_src=s_src, r_src=r_src, r_self_src=r_self_src, label_src=label_src, gap_src=gap_src,
         dp_q_src=dp_q_src, dp_s_src=dp_s_src, dp_grid_src=dp_grid_src,
@@ -3741,9 +2887,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         });
     """))
 
-    # INLINE, not CDN: BokehJS is embedded (~1.6 MB, only the bundles this
-    # page uses) so the page renders with no network -- offline laptops, HPC
-    # nodes without internet access -- rather than opening blank
+    # INLINE, not CDN, so the page renders offline
     page_html = file_html(doc, INLINE, title=f"{query_name} vs {subject_name} -- interactive synteny")
     # right after the opening <head>, which comes before any script: the
     # inlined BokehJS contains the literal text "</head>" too
@@ -3756,52 +2900,33 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'palettes': PALETTES,
         'targetGrey': TARGET_GREY,
         'targetSelfGrey': TARGET_SELF_GREY,
-        'targetName': query_name,
-        'referenceName': subject_name,
-        # the *editable* labels' own defaults -- the same values
-        # target_label_input/reference_label_input start with (see
-        # default_labels)
+        # the label inputs' starting values
         'targetLabelDefault': target_label_default,
         'referenceLabelDefault': reference_label_default,
         'queryNames': query_names,
         'subjectNames': subject_names,
-        # natural (FASTA) order -- what SYN.dpNaturalOrder/SYN.buildRingLayout
-        # use under the "File order" choice of the order menu. queryNames/
-        # subjectNames above are already size order (see Dataset.__init__).
+        # natural (FASTA) order, for "File order"; queryNames/subjectNames
+        # are size order
         'queryNamesNatural': [n for n, _ in ds.query_chroms_natural],
         'subjectNamesNatural': [n for n, _ in ds.subject_chroms_natural],
         'querySizes': ds.query_sizes,
         'subjectSizes': ds.subject_sizes,
         'subjectColorIndex': subject_index,
-        # Placeholders, replaced the moment the first client-side chain
-        # result comes back (SYN.applyChainResult, called from
-        # SYN.startChainer -- see SYN.init) -- Python computes no synteny at
-        # all any more (see module docstring). Left as real (empty, not
-        # missing) keys so SYN.init's own first ring/dotplot render, which
-        # runs before that first chain result exists, has something safe to
-        # read: zero ribbons/segments, not a crash.
+        # empty until the first chain result (SYN.applyChainResult); SYN.init's
+        # first render runs before it and reads these
         'linksByReference': {}, 'linksByQuery': {},
         'targetHomeologLinks': [], 'referenceHomeologLinks': [],
         'maxScore': 1,
-        # per-chromosome assembly-gap lookup, one genome's own gaps each --
-        # separate dicts (not a single by-name lookup) since target and
-        # reference chromosomes can share names. Read by SYN.buildGapRecords
-        # (ring wedges), SYN.buildDotplotGapLines (dotplot lines), and
-        # SYN.gapsForChrom (zoom panel bars) -- one source of raw gap data,
-        # three different geometries built from it.
+        # one dict per genome, since target and reference chromosomes can
+        # share names
         'targetGapsByChrom': group_gaps_by_chrom(ds.query_gaps),
         'referenceGapsByChrom': group_gaps_by_chrom(ds.subject_gaps),
-        # renamed chromosome -> the genome's own sequence ID, for the
-        # "Original names" switch (SYN.displayName) -- only names that actually changed, and
-        # only chromosomes in chrom.sizes, so a fragmented assembly's
-        # thousands of filtered-out scaffolds add nothing to the page
+        # renamed chromosome -> original sequence ID, for the "Original names"
+        # switch -- only changed names of chromosomes in chrom.sizes, so a
+        # fragmented assembly's filtered-out scaffolds add nothing
         'targetOriginalNames': ds.query_original_names,
         'referenceOriginalNames': ds.subject_original_names,
-        # ring geometry constants -- embedded (not duplicated as separate JS
-        # literals) so SYN.buildRingLayout can never numerically drift from
-        # the fixed figure extent build_page() already committed to at
-        # Python-render time (see OUTER_R/INNER_R/LINK_R/GROUP_GAP/CHROM_GAP
-        # module constants above)
+        # embedded so the JS geometry matches the figure extents set here
         'outerR': OUTER_R, 'innerR': INNER_R, 'linkR': LINK_R,
         'groupGap': GROUP_GAP, 'chromGap': CHROM_GAP, 'minGapAngle': MIN_GAP_ANGLE,
         'ringLabelMinAngle': RING_LABEL_MIN_ANGLE,
@@ -3810,37 +2935,20 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'detailRows': {'barH': DETAIL_BAR_H, 'topY': DETAIL_TOP_Y, 'botY': DETAIL_BOT_Y},
         'statsPanelWidth': STATS_PANEL_WIDTH,
         'dpRulerFrac': DP_RULER_FRAC,
-        # None (-> JSON null, falsy in JS) if --stats wasn't given -- every
-        # reader of this (SYN.buildStatsHtml) already treats that as "no
-        # panel to show"
+        # null without --stats: no stats panel
         'alignmentStats': alignment_stats,
-        # --min_identity/--min_block as given on the CLI, or None (-> JSON
-        # null) meaning "use SYNCHAIN.DEFAULTS" (identity 0.7, min block
-        # 15) -- read once, by SYN.init,
-        # the moment the embedded hit tables are decoded (see that
-        # function's own comment). --max_gap always has a concrete value
-        # (nextflow.config itself defaults it to 25), so max_gap_spinner's
-        # own Python-side value= is already correct and this is only here
-        # for SYN.currentChainParams' sake, not any JS-side "is it auto?"
-        # branch the other two need.
+        # --min_identity/--min_block, or null for SYNCHAIN.DEFAULTS; read once
+        # by SYN.init. --max_gap always has a value.
         'initialParams': {'minPositive': min_identity, 'maxGap': max_gap, 'minBlock': min_block},
     }
-    # bin/chain.js ahead of SHARED_JS (see module docstring): the one
-    # implementation of the chaining algorithm, run in a Web Worker (or, if
-    # that fails, synchronously on the main thread -- see SYN.startChainer).
-    # A second, inert copy goes in its own <script type="text/plain"> tag
-    # (before this one) purely so SYN.startChainer can read the raw source text
-    # back out at runtime to build the Worker's own Blob -- a Worker can't
-    # share the main thread's already-parsed <script>, and this avoids a
-    # runtime fetch()/XHR of bin/chain.js, which wouldn't work at all from a
-    # file:// page.
+    # bin/chain.js ahead of SHARED_JS. A second, inert text/plain copy lets
+    # SYN.startChainer build the Worker's Blob from source, since a Worker
+    # can't share a parsed <script> and fetch() fails on file:// pages.
     synchain_src_tag = f'<script type="text/plain" id="synchain-src">{chain_js_src}</script>\n'
     injected = (synchain_src_tag + "<script>\n" + chain_js_src + "\n" + SHARED_JS
                 + "\nSYN.data = " + json.dumps(syn_data) + ";\nSYN.hitsPayload = "
                 + json.dumps(hits_payload) + ";\n</script>\n</body>")
-    # the document's own (last) </body> -- the inlined BokehJS widgets bundle
-    # (see file_html's INLINE above) contains the literal text "</body>" too,
-    # so the first occurrence can be inside that script
+    # the last </body>: the inlined BokehJS contains the literal text too
     head, _, tail = page_html.rpartition("</body>")
     return head + injected + tail
 
@@ -3894,8 +3002,8 @@ def main():
     ds = Dataset(args.query_chrom_sizes, args.subject_chrom_sizes, args.target_gaps, args.reference_gaps,
                  args.target_lookup, args.reference_lookup)
     if not ds.query_chroms or not ds.subject_chroms:
-        sys.exit("ERROR: no chromosomes to plot -- check --min_seq_size isn't "
-                  "filtering out everything")
+        sys.exit("ERROR: no chromosomes to plot -- check the pipeline's --min_seq_size "
+                  "isn't filtering out every sequence")
 
     alignment_stats = None
     if args.stats:

@@ -30,8 +30,7 @@ test('a nested inversion is its own block, inside the bridging block', () => {
     // 100 genes, 36-65 inverted (loci 35..64)
     const tables = genomes(100, (i) => (i >= 35 && i <= 64 ? 99 - i : i));
     // the + chain bridges through the inversion's middle gene at either gap,
-    // and the other 29 inverted genes stay one - block (VERSION 1 gave
-    // -5, -5 at 25 and lost the inversion at 31)
+    // and the other 29 inverted genes stay one - block
     for (const maxGap of [25, 31]) {
         assert.deepEqual(blocks(tables, {maxGap, minBlock: 5}), ['+71', '-29'], `maxGap ${maxGap}`);
     }

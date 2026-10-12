@@ -9,8 +9,7 @@ Priority order:
   1. explicit "chromosome N" / "linkage group N" / "LGN" in the header, an
      Ensembl "chromosome:<assembly>:N:..." description, or a chromosome-style
      ID (chr1, Chr01, chromosome_1, SUPER_1, ...) -> chrN (unlocalized/
-     unplaced scaffolds tied to a chromosome get a _u<n> suffix, matching
-     the original awk script's convention).
+     unplaced scaffolds tied to a chromosome get a _u<n> suffix).
   2. mitochondrion -> chrM, chloroplast/plastid -> chrPltd (by description,
      or by an ID like chrM/MT/Pltd).
   3. the rest is decided per GENOME, not per sequence, so one plot never
@@ -22,19 +21,11 @@ Priority order:
 Every new name is unique: a name already taken gets the original ID
 appended, and scafN numbering skips any number already in use.
 
-Always writes a lookup TSV (original_id, new_id, length, type) alongside the
-size/gap tables, since the current pipeline has no other mapping and renamed
-plot labels are otherwise untraceable back to source accessions.
-
-No FASTA is rewritten. Earlier versions of this pipeline wrote a renamed copy
-of the genome, then read that copy twice more (faSize, then a separate
-assembly-gap scan) -- three full passes over data that can be tens of GB.
-This script reads the ORIGINAL fasta exactly once and emits the lookup plus
-the size table (--out_sizes, replacing faSize -detailed | awk) and the gap
-table (--out_gaps, replacing the old find_assembly_gaps.py) directly, keyed
-by the renamed IDs; nothing downstream needs a renamed FASTA at all -- the
-GFF from aligning against the ORIGINAL fasta is renamed in place instead
-(see rename_gff.py).
+Writes a lookup TSV (original_id, new_id, length, type) -- the only way to
+trace plot labels back to source accessions -- plus the size and gap tables
+keyed by the renamed IDs, in one pass over the ORIGINAL fasta (genomes can
+be tens of GB). No renamed FASTA is written; the aligner's GFF is renamed
+instead (rename_gff.py).
 """
 import argparse
 import gzip
@@ -67,8 +58,7 @@ N_RUN_RE = re.compile(rb'[Nn]+')
 
 
 def _opener_for(fasta_path):
-    """Gzip is detected by magic bytes, not extension -- a caller may hand us
-    a gzipped file under any name."""
+    """Gzip is detected by magic bytes: a gzipped file may have any name."""
     with open(fasta_path, 'rb') as f:
         magic = f.read(2)
     return gzip.open if magic == GZIP_MAGIC else open
@@ -77,22 +67,12 @@ def _opener_for(fasta_path):
 def scan_fasta(fasta_path):
     """The only full read of the genome. Returns:
       records: [(seq_id, description, length), ...] in file order
-      gaps: {seq_id: [(start, end), ...]} in position order, using the
-            ORIGINAL sequence ids (renamed by the caller after assign_names())
+      gaps: {seq_id: [(start, end), ...]} in position order, ORIGINAL ids
 
-    Gap semantics match the old find_assembly_gaps.py exactly: 0-based,
-    half-open runs of [Nn] of any length (the --min_gap floor is applied by
-    the caller at output time), contiguous across line wraps, measured on
-    each line stripped of surrounding whitespace -- same as the old script's
-    `line.strip()`, which is also what makes a CRLF input transparent here
-    without any special-casing (bytes.strip() drops a trailing b'\\r' same
-    as text-mode universal-newline translation would have already dropped
-    it for the old script).
-
-    Reads in binary mode (required to detect gzip by magic bytes rather than
-    extension, and to scan for N-runs without a text-decoding detour); only
-    header lines are decoded, as UTF-8 with errors='replace', since only
-    those are ever split into an id/description.
+    Gaps are 0-based, half-open runs of [Nn] of any length (--min_gap is
+    applied at output), contiguous across line wraps, on whitespace-stripped
+    lines (so CRLF input is transparent). Binary mode avoids decoding
+    sequence data; only headers are decoded (UTF-8, errors='replace').
     """
     opener = _opener_for(fasta_path)
     records = []
@@ -126,10 +106,8 @@ def scan_fasta(fasta_path):
                 continue
 
             line_len = len(line)
-            # Most lines have no N at all -- skip the regex scan entirely for
-            # those (this `in` check is what gets this past 100 MB/s; a
-            # per-character Python loop over a whole chromosome is what took
-            # the old find_assembly_gaps.py 57 minutes on axolotl).
+            # most lines have no N: this `in` check skips the regex for them
+            # (>100 MB/s; a per-character loop took 57 min on axolotl)
             if b'N' in line or b'n' in line:
                 matches = list(N_RUN_RE.finditer(line))
                 if run_start is not None and (not matches or matches[0].start() != 0):

@@ -1,9 +1,7 @@
 // Runs the pipeline as a child `nextflow run` and reports progress.
 //
-// Progress comes from Nextflow's own weblog: it POSTs one
-// JSON event per workflow/task state change to a URL we listen on, so we
-// get structured task states without scraping the console log. The console
-// log is still streamed for the user to read.
+// Task states come from Nextflow's weblog, which POSTs a JSON event per
+// state change to a local server here; the console log is streamed as-is.
 
 const { spawn } = require('node:child_process');
 const http = require('node:http');
@@ -13,7 +11,7 @@ const { CONDA_CACHE, WEBLOG_PLUGIN, pipelinePlugins } = require('./runtime');
 const { ErrorCollector, withNetwork } = require('./nferror');
 const { checkNetwork } = require('./network');
 
-// form field -> --param, in the order they appear in `--help`
+// form fields passed as --params, in `--help` order
 const PARAMS = ['taxid', 'assembly', 'reference', 'proteome', 'reference_taxid', 'reference_accession', 'max_rank', 'min_seq_size', 'exclude_target',
     'min_asm_gap', 'miniprot_m', 'miniprot_chunk_gb'];
 
@@ -33,15 +31,12 @@ function buildArgs(pipelineDir, form, guiConfig) {
     return args;
 }
 
-// config the app layers over the pipeline's for each run. The weblog is
-// set here because -with-weblog is deprecated in favor of its config scope,
-// with its plugin pinned so runs work offline (see runtime.js). A plugins
-// block in a -c config replaces the pipeline's rather than adding to it, so
-// it repeats the pipeline's own pins (nf-schema) too: otherwise Nextflow
-// loads those unpinned, asking the registry for the latest version.
-// The conda engine uses the runtime's micromamba (on PATH, see
-// runtime.runtimeEnv) and keeps its environments under the runtime root,
-// shared across runs.
+// The -c config layered over the pipeline's for each run. The weblog is set
+// here since -with-weblog is deprecated, its plugin pinned so runs work
+// offline (see runtime.js). A plugins block in a -c config replaces the
+// pipeline's, so it repeats the pipeline's pins (nf-schema) too: otherwise
+// Nextflow loads those unpinned and asks the registry for the latest.
+// Conda envs are shared across runs under the runtime root.
 function guiConfigText(form, weblogUrl) {
     const plugins = [WEBLOG_PLUGIN, ...pipelinePlugins()].map((id) => `    id '${id}'\n`).join('');
     let text = `plugins {\n${plugins}}\nweblog {\n    enabled = true\n    url = '${weblogUrl}'\n}\n`;
@@ -74,13 +69,11 @@ function findResults(outdir) {
     }
 }
 
-// What discovery picked, from main.nf's own log lines:
+// What discovery picked, from main.nf's log lines:
 //   quick_synteny: reference accession=GCA_056824455.1 (Saccharomyces pastorianus) rank=genus (Saccharomyces) from 47 candidate(s)
 //   quick_synteny: proteome accession=GCA_011022315.1 (Saccharomyces pastorianus) rank=genus (Saccharomyces) annotated=true [REFERENCE SPECIES] from 20 candidate(s)
 // A rank can be several words ("species group (virilis group)", "no rank").
-// -> { kind, accession, species, rank, rankName, candidates, sameSpecies }
-// When a run finishes, record.js also reads the selections pipeline_info/
-// holds, so a line this misses doesn't leave the run without them.
+// record.fillFound backfills from pipeline_info/ anything this misses.
 function parseFound(line) {
     const m = line.match(/^quick_synteny: (reference|proteome) accession=(\S+) \((.*?)\) rank=(.+?) \((.*?)\)(.*?) from (\d+) candidate/);
     if (!m) return null;
@@ -111,12 +104,10 @@ class Run {
         this.child.on('exit', (code, signal) => this.finish(code, signal));
     }
 
-    // Both streams go to the log as-is, and line by line to the error
-    // collector (lib/nferror.js). The weblog never reports tasks that -resume
-    // skips, so take those from the log's "[4a/3f058f] Cached process > NAME"
-    // lines. It doesn't report conda env builds either (minutes, on a first
-    // run): "Creating env using micromamba: <yml> [cache <dir>]" starts one,
-    // and the next submitted task means it's done.
+    // The weblog never reports tasks -resume skips, so those come from the
+    // log's "[4a/3f058f] Cached process > NAME" lines. Nor conda env builds
+    // (minutes, on a first run): "Creating env using micromamba: <yml>"
+    // starts one, and the next submitted task means it's done.
     onOutput(stream, text) {
         this.send('run:log', text);
         const lines = (this.partial[stream] + text).split('\n');
@@ -136,13 +127,8 @@ class Run {
     }
 
     onWeblog(ev) {
-        if (ev.trace) {
-            const t = ev.trace;
-            this.send('run:task', { id: t.task_id, name: t.name, process: t.process, status: t.status, exit: t.exit,
-                duration: t.realtime, peakRss: t.peak_rss, workdir: t.workdir });
-        } else {
-            this.send('run:event', { event: ev.event, runName: ev.runName });
-        }
+        const t = ev.trace;
+        if (t) this.send('run:task', { id: t.task_id, name: t.name, process: t.process, status: t.status });
     }
 
     async finish(code, detail) {
@@ -154,11 +140,10 @@ class Run {
             const error = code === -1 ? { title: 'Nextflow could not be started', message: detail } : this.errors.result(code);
             this.send('run:error', { ...withNetwork(error, await checkNetwork()), log: path.join(this.form.outdir, '.nextflow.log') });
         }
-        this.send('run:done', { code, detail, cancelled: !!this.cancelled, results: code === 0 ? findResults(this.form.outdir) : [] });
+        this.send('run:done', { code, cancelled: !!this.cancelled, results: code === 0 ? findResults(this.form.outdir) : [] });
     }
 
-    // SIGINT is what Ctrl-C sends: nextflow then kills its tasks (and their
-    // containers) and exits on its own
+    // like Ctrl-C: nextflow kills its tasks (and containers) and exits itself
     cancel() {
         if (!this.child || this.done) return;
         this.cancelled = true;
@@ -166,4 +151,4 @@ class Run {
     }
 }
 
-module.exports = { Run, buildArgs, findResults, guiConfigText, parseFound, PARAMS };
+module.exports = { Run, findResults, guiConfigText, parseFound, PARAMS };

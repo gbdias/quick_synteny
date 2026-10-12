@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
-"""Rewrite a GFF's column 1 (seqid) from original sequence IDs to the short,
-renamed IDs rename_sequences.py assigned -- streaming, so a multi-GB GFF
-never needs to fit in memory. Comment/directive lines (and any other line
-with no tab in it) pass through untouched; every other line is byte-
-identical to the input except for its seqid field, so source, type,
-coordinates, score, strand, phase and attributes can't drift even by
-whitespace.
+"""Rewrite a GFF's column 1 (seqid) from original sequence IDs to the
+renamed IDs rename_sequences.py assigned, streaming. Lines without a tab
+(comments, directives) pass through; every other line is byte-identical
+apart from its seqid.
 
-miniprot now runs on the ORIGINAL genome fasta (see miniprot_align.nf), not
-a renamed copy, so its GFF still carries the genome's original sequence
-names. This is the one place those get swapped for the plot-friendly
-chr1/chr2/... labels everything downstream (build_synteny.nf, the
-interactive plot) expects.
+miniprot aligns against the ORIGINAL genome fasta, so this is where its
+seqids become the chr1/chr2/... labels everything downstream expects.
 """
 import argparse
 import sys
@@ -22,7 +16,7 @@ def load_lookup(path):
     one header line."""
     lookup = {}
     with open(path) as f:
-        next(f, None)  # header
+        next(f, None)
         for line in f:
             if not line.strip():
                 continue

@@ -1,12 +1,9 @@
-// A run as the plain-language steps the progress screen lists, worked out
-// from Nextflow's tasks (their process names and states). Up to three steps
-// come before "prepare", each only when the run does it: looking up your
-// genome's organism (when --taxid is given), getting the reference (unless
-// it's your file: discovered, or the one you chose on NCBI), and finding
-// the proteome (unless it's your file).
+// Nextflow's tasks -> the progress screen's plain-language steps. The three
+// before "prepare" appear only when the run does them: looking up the
+// organism (--taxid given), getting the reference and finding the proteome
+// (each unless it's the user's file).
 //
-// Steps can overlap: the target genome is prepared while NCBI is still
-// being searched for a reference, so two steps may be running at once.
+// Steps can overlap: the target is prepared while NCBI is still searched.
 
 const STEPS = [
     { id: 'lookup', discovery: true, match: /^RESOLVE_TAXONOMY:/ },
@@ -16,7 +13,7 @@ const STEPS = [
     { id: 'prepare', match: /^(RENAME_SEQUENCES|MINIPROT_INDEX|SPLIT_GENOME)$/ },
     { id: 'align', match: /^(MINIPROT_ALIGN|MINIPROT_ALIGN_CHUNK|MERGE_MINIPROT_GFF|RENAME_GFF)$/ },
     { id: 'synteny', match: /^BUILD_SYNTENY:/ },
-    { id: 'plot', match: /^PYGENOMEVIZ_PLOT:/ },
+    { id: 'plot', match: /^PLOT_SYNTENY:/ },
 ];
 
 const ACTIVE = new Set(['NEW', 'SUBMITTED', 'RUNNING']);
@@ -30,19 +27,16 @@ function stepOf(task) {
     return s ? s.id : null;
 }
 
-// Which of the first three steps a run has, from its form: { lookup,
-// reference, proteome } (see above)
+// which of the first three steps the form's run has
 function planOf(form) {
     return { lookup: !!form.taxid, reference: !form.reference, proteome: !form.proteome };
 }
 
-// tasks: iterable of { process|name, status }; plan: planOf(form), or for
-// records from before it existed `discovery` (all three steps, or none);
+// tasks: iterable of { process|name, status }; plan: planOf(form);
 // outcome: null while running, else 'finished'|'failed'|'cancelled'.
 // Returns [{ id, state }], state one of pending|running|done|failed|stopped.
-function computeSteps(tasks, { plan, discovery, outcome = null }) {
-    const has = plan || { lookup: !!discovery, reference: !!discovery, proteome: !!discovery };
-    const steps = STEPS.filter((s) => !s.discovery || has[s.id]);
+function computeSteps(tasks, { plan, outcome = null }) {
+    const steps = STEPS.filter((s) => !s.discovery || plan[s.id]);
     const byStep = new Map(steps.map((s) => [s.id, []]));
     for (const t of tasks) {
         const id = stepOf(t);
@@ -55,9 +49,8 @@ function computeSteps(tasks, { plan, discovery, outcome = null }) {
         let state = 'pending';
         if (states.some((st) => st === 'FAILED' || st === 'ABORTED')) state = 'failed';
         else if (states.some((st) => ACTIVE.has(st))) state = outcome ? 'stopped' : 'running';
-        // done once its tasks have all finished and a later step has started:
-        // a step's tasks don't all exist up front (the reference is indexed
-        // only after it's downloaded), so "nothing running" alone isn't enough
+        // done only once a later step has started too: a step's tasks don't
+        // all exist up front (the reference is indexed after its download)
         else if (states.length && (outcome === 'finished' || later.some(started))) state = 'done';
         else if (states.length) state = outcome ? 'stopped' : 'running';
         if (outcome === 'finished' && state === 'pending') state = 'done';
@@ -65,4 +58,4 @@ function computeSteps(tasks, { plan, discovery, outcome = null }) {
     });
 }
 
-module.exports = { STEPS, stepOf, computeSteps, planOf };
+module.exports = { stepOf, computeSteps, planOf };

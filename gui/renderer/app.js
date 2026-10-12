@@ -1,12 +1,9 @@
-// The window: the sidebar of runs, and one view at a time beside it -- New
-// run (form.js), a run (its steps in plain language, what was found, and
-// once finished its plot's thumbnail and numbers), first-launch setup, and
-// Settings. Runs are records the main process keeps (lib/record.js); this
-// only draws them.
+// The sidebar of runs and one view beside it: New run (form.js), a run,
+// first-launch setup, or Settings. Runs are records the main process keeps
+// (lib/record.js); this only draws them.
 
 const fileStem = (p) => baseName(p).replace(/\.gz$/, '').replace(/\.(fa|fasta|fna|fas|faa|fsa)$/i, '');
 const num = (n) => Number(n).toLocaleString('en-US');
-const cleanIpcError = (e) => String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 
 // ---------- views ----------
 
@@ -434,7 +431,6 @@ async function showUpdate() {
 // ---------- start ----------
 
 (async () => {
-    document.body.classList.add(`platform-${window.qs.platform}`);
     loadSettings();
     applySchema();
     updateEngineHint();

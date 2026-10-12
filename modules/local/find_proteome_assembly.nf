@@ -1,11 +1,9 @@
-// Same ladder-walk as find_reference_assembly.nf, filtered for annotation
-// availability instead of assembly level -- a scaffold-level annotated
-// assembly is fine here since only its proteins are used. Unlike that
-// query, this one has no --assembly-level filter of its own, so
-// find_closest_assembly.py's chromosome-level gate on same-species
-// candidates (see that script) is the only thing enforcing it here. The
-// preferred (reference) species is also queried on its own, since it may
-// join the lineage above the taxon where the climb stops.
+// Same ladder walk as find_reference_assembly.nf, filtered for annotation
+// instead of assembly level: only the proteins are used, so scaffold-level
+// is fine (same-species candidates still need chromosome level -- see
+// find_closest_assembly.py). The preferred (reference) species is also
+// queried on its own, since it may join the lineage above where the climb
+// stops.
 
 process QUERY_GENOME_LADDER_PROTEOME {
     tag "max_rank=${max_rank}"

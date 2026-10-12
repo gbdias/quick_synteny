@@ -61,7 +61,7 @@ def parse_gff(path, chrom_index):
     n_dropped = 0
     with open(path) as f:
         for line in f:
-            if not line or line[0] == '#':
+            if line.startswith('#'):
                 continue
             fields = line.rstrip('\n').split('\t')
             if len(fields) < 9:
@@ -95,10 +95,8 @@ def parse_gff(path, chrom_index):
 
 
 def assign_loci(hits, cds):
-    """Connected components of same-(chrom, strand) hits with overlapping
-    CDS intervals (an mRNA without CDS rows falls back to its own span).
-    hits must already be in row order; returns one locus id per row,
-    numbered by (chrom, locus min start, locus max end, smallest row)."""
+    """Locus ids (see the module docstring) for hits already in row order
+    -> (locus id per row, number of loci)."""
     n = len(hits)
     parent = list(range(n))
 
@@ -152,9 +150,8 @@ def main():
     chrom_names = sorted(chrom_index, key=chrom_index.get)
     hits, cds, n_dropped = parse_gff(args.gff, chrom_index)
 
-    # row order (see the module docstring): chrom, start, end, protein, rank --
-    # then score and original position so the order is total even for
-    # degenerate duplicates
+    # row order (see the module docstring), then score and input position so
+    # the order is total even for degenerate duplicates
     order = sorted(range(len(hits)), key=lambda i: (hits[i][0], hits[i][1], hits[i][2], hits[i][8],
                                                     hits[i][7], -hits[i][6], i))
     rows = [hits[i] for i in order]

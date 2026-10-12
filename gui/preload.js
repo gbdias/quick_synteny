@@ -1,7 +1,6 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('qs', {
-    platform: process.platform,
     checkEnv: () => ipcRenderer.invoke('env:check'),
     setupRuntime: () => ipcRenderer.invoke('runtime:setup'),
     checkDocker: () => ipcRenderer.invoke('docker:check'),
