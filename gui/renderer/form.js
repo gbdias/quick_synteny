@@ -288,12 +288,16 @@ $('#btn-ref-accession').addEventListener('click', () => {
 // ---------- where to save ----------
 
 // Documents/quick_synteny/<target>_vs_<taxid or reference>, unless the user
-// has picked a folder; a new one per run
+// has picked a folder; a new one per run. Each suggestion is numbered: one
+// that comes back after a newer one was asked for, a folder was picked or
+// the form was cleared is dropped, so it can't replace the user's choice.
 let suggestTimerOut = null;
+let suggestSeq = 0;
 const PATH_EMPTY = $('#path-outdir').textContent;
 function suggestOutdir(force = false) {
     if (outdirChosen && !force) return;
     clearTimeout(suggestTimerOut);
+    const seq = ++suggestSeq;
     suggestTimerOut = setTimeout(async () => {
         if (!files.assembly) return;
         // named after what it's compared with: the taxid it climbs from,
@@ -304,14 +308,22 @@ function suggestOutdir(force = false) {
             taxid: mode() === 'auto' ? $('#taxid').value.trim() : mode() === 'chosen' ? chosen : '',
             reference: mode() === 'manual' ? files.reference?.path : '',
         });
+        if (seq !== suggestSeq) return;
         applyOutdir(d);
     }, 150);
+}
+
+// stops any suggestion still on its way (suggestOutdir)
+function dropSuggestion() {
+    clearTimeout(suggestTimerOut);
+    suggestSeq++;
 }
 
 $('#pick-outdir').addEventListener('click', async () => {
     const d = await window.qs.pickDir({ title: 'Save the run in…' });
     if (!d) return;
     outdirChosen = true;
+    dropSuggestion();
     applyOutdir(d);
 });
 
@@ -594,7 +606,7 @@ function resetForm() {
     for (const sel of ['#taxon-results', '#ref-results']) $(sel).hidden = true;
     for (const sel of ['#search-status', '#ref-search-status']) setStatus(sel, null);
     showAccessionRow(false);
-    clearTimeout(suggestTimerOut);
+    dropSuggestion();
     outdir = null;
     outdirInfo = null;
     outdirChosen = false;
