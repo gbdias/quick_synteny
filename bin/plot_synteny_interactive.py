@@ -493,7 +493,8 @@ def build_hits_payload(target_hits_path, reference_hits_path, target_chrom_names
 
     proteins_gz = gzip.compress('\n'.join(proteins).encode('utf-8'), mtime=0)
     return {
-        'version': 1,
+        # bin/chain.js's VERSION: decodePayload refuses any other
+        'version': 2,
         'proteins': base64.b64encode(proteins_gz).decode('ascii'),
         'genomes': {'target': target_cols, 'reference': reference_cols},
     }
