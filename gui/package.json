@@ -1,6 +1,6 @@
 {
   "name": "quick-synteny-gui",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "productName": "quick_synteny",
   "desktopName": "quick_synteny.desktop",
