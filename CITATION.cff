@@ -8,13 +8,15 @@ abstract: >-
   and proteome on NCBI from a taxid when none is given.
 type: software
 authors:
-  - family-names: Dias
+  - family-names: Borges Dias
     given-names: Guilherme
+    orcid: "https://orcid.org/0000-0002-1459-3148"
 repository-code: "https://github.com/gbdias/quick_synteny"
+license: MIT
 keywords:
   - synteny
   - comparative genomics
   - genome assembly
   - nextflow
-version: 0.1.0
-date-released: 2026-11-05
+version: 0.1.1
+date-released: 2026-11-18
