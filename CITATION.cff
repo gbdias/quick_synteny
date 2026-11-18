@@ -11,6 +11,7 @@ authors:
   - family-names: Borges Dias
     given-names: Guilherme
     orcid: "https://orcid.org/0000-0002-1459-3148"
+doi: 10.5281/zenodo.24339745
 repository-code: "https://github.com/gbdias/quick_synteny"
 license: MIT
 keywords:

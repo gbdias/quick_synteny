@@ -1,5 +1,7 @@
 # quick_synteny
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24339745.svg)](https://doi.org/10.5281/zenodo.24339745)
+
 Plot synteny between two genome assemblies, with no annotation needed. The
 result is one self-contained HTML page: a Circos-style ring, a detail panel
 and a whole-genome dotplot.
@@ -112,9 +114,10 @@ memory, at some cost to sensitivity.
 
 ## Citation
 
-If you use quick_synteny, please cite it: the **Cite this repository** button
-on the GitHub page gives APA or BibTeX (from [CITATION.cff](CITATION.cff)).
-Please also cite:
+If you use quick_synteny, please cite it
+([doi:10.5281/zenodo.24339745](https://doi.org/10.5281/zenodo.24339745)). The
+**Cite this repository** button on the GitHub page gives APA or BibTeX (from
+[CITATION.cff](CITATION.cff)). Please also cite:
 
 - **miniprot**: Li H. (2023) Protein-to-genome alignment with miniprot.
   *Bioinformatics* 39(1):btad014.
