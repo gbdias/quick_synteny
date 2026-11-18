@@ -10,3 +10,8 @@ __pycache__/
 # local notes and plans
 /scratch/
 docs/
+
+# desktop app build outputs
+gui/node_modules/
+gui/dist/
+gui/vendor/
