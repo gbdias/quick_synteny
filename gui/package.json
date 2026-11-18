@@ -1,11 +1,12 @@
 {
   "name": "quick-synteny-gui",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "productName": "quick_synteny",
   "desktopName": "quick_synteny.desktop",
   "description": "A desktop app for the quick_synteny Nextflow pipeline (prototype)",
   "author": "Guilherme Dias",
+  "license": "MIT",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
