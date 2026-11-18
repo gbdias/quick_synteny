@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use quick_synteny, please cite it as below."
+title: quick_synteny
+abstract: >-
+  Whole-genome synteny plots based on alignment of protein-coding genes.
+  quick_synteny aligns one proteome to two genome assemblies with miniprot
+  and chains the matches into syntenic blocks, finding a reference genome
+  and proteome on NCBI from a taxid when none is given.
+type: software
+authors:
+  - family-names: Dias
+    given-names: Guilherme
+repository-code: "https://github.com/gbdias/quick_synteny"
+keywords:
+  - synteny
+  - comparative genomics
+  - genome assembly
+  - nextflow
+version: 0.1.0
+date-released: 2026-11-05
