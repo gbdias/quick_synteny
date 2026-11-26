@@ -5,9 +5,14 @@ the pipeline's only plot output; each panel exports itself as SVG/PNG
 (SYN.exportFigure).
 
 Three panels: a Circos-style ring, a linear zoom panel, and a whole-genome
-dotplot. Clicking a chromosome (ring wedge or dotplot ruler) zooms the middle
-panel into it, with its partners on the other side packed alongside; clicking
-a dotplot cell zooms into that one chromosome pair (the only way to select a
+dotplot. The ring and dotplot share one square plot slot on the left,
+switched by a Circos / Dotplot toggle; on the right are a card with the page
+title, the alignment summary as tiles and the page-wide controls in tabs,
+then the zoom panel. The plot slot and the zoom panel's height follow the window
+(SYN.fitToWindow), so the page fits without scrolling, and the page centres
+on a screen wider than that. Clicking a chromosome (ring wedge or dotplot
+ruler) zooms the zoom panel into it, with its partners on the other side
+packed alongside; clicking a dotplot cell zooms into that one chromosome pair (the only way to select a
 pair with zero links, see SYN.buildPairDetailData). Reference chromosomes are
 always drawn on top.
 
@@ -40,8 +45,10 @@ from bokeh.embed import file_html
 from bokeh.events import DocumentReady, DoubleTap, Reset, Tap
 from bokeh.layouts import column, row
 from bokeh.models import (ColumnDataSource, HoverTool, TapTool, CustomJS, CustomJSTickFormatter,
-                           Button, Div, InlineStyleSheet, Label, Range1d, Select, Spinner, Switch,
-                           TextInput, Tooltip, UIElement)
+                           Button, Div, Dropdown, InlineStyleSheet, Label, RadioButtonGroup, Range1d,
+                           Select, Spinner,
+                           SVGIcon, Spacer, TabPanel, Tabs, TextInput, Toggle, Tooltip,
+                           UIElement)
 from bokeh.models.dom import HTML
 from bokeh.plotting import figure
 from bokeh.resources import INLINE
@@ -118,15 +125,14 @@ RING_LABEL_MIN_ANGLE = math.radians(2.5)
 # the ideogram's full radial height, so it should read as a thin needle.
 MIN_GAP_ANGLE = math.radians(0.2)
 
-# the zoom panel's pixel width -- embedded so SYN.widenGapBp's px-to-bp
-# conversion matches the actual figure
-DETAIL_FIG_WIDTH = 446
+# the zoom panel's pixel width, which is also the right-hand column's: three
+# CONTROL_WIDTH controls side by side. Embedded so SYN.widenGapBp's px-to-bp
+# conversion matches the actual figure. Only its height follows the window
+# (SYN.fitToWindow).
+DETAIL_FIG_WIDTH = 480
 
-# Bokeh's right-hand toolbar strip, which sits inside the figure's width
-PLOT_TOOLBAR_WIDTH = 30
-
-# detail_fig's min_border_left, set explicitly so the stats box can line up
-# with the drawn frame
+# detail_fig's min_border_left: a thin margin, since the panel hides its
+# y axis
 DETAIL_FRAME_LEFT = 5
 
 # the detail panel's two rows, in data units: reference bars span
@@ -136,15 +142,17 @@ DETAIL_BAR_H = 0.32
 DETAIL_TOP_Y = 1.2
 DETAIL_BOT_Y = 0.0
 
-# the stats box spans the zoom panel's drawn frame, not its nominal width
-STATS_PANEL_WIDTH = DETAIL_FIG_WIDTH - PLOT_TOOLBAR_WIDTH - DETAIL_FRAME_LEFT
-
 # shared height for every titleless toolbar control: left unset, buttons and
 # Selects auto-size to their own label/font metrics and don't line up
 TOOLBAR_CONTROL_HEIGHT = 32
 
-# the header row's titled controls
-TOP_CONTROL_WIDTH = 150
+# the settings tabs' titled controls, three to a row
+CONTROL_WIDTH = 150
+
+# the settings card's header line, beside the 45 px icon in the card's
+# DETAIL_FIG_WIDTH: the title, and the block count right-aligned after it
+HEADER_NAME_WIDTH = 160
+HEADER_STATUS_WIDTH = DETAIL_FIG_WIDTH - 45 - HEADER_NAME_WIDTH - 20
 
 # The desktop app's light tokens (gui/renderer/style.css). Figures stay
 # white so exports are unchanged; no dark mode for the same reason. Bokeh
@@ -156,6 +164,7 @@ THEME = {
     'ground': '#F4F5F1', 'card': '#FFFFFF', 'line': '#E2E4DC', 'field_line': '#C9CCC0',
     'fg': '#1C1E19', 'fg2': '#5A5F55', 'fg3': '#6C7166',
     'accent': '#95B540', 'accent_ink': '#46600F', 'accent_tint': '#EEF4DE', 'accent_tint_fg': '#3A500C',
+    'chip': '#F1F2EC', 'shadow': '0 1px 3px rgba(30, 40, 10, 0.12)',
 }
 THEME_CSS = f""":host {{
     --bokeh-base-font: {UI_FONT}; --base-font: {UI_FONT};
@@ -171,13 +180,61 @@ THEME_CSS = f""":host {{
     --default-hover: {THEME['ground']}; --default-hover-border: {THEME['field_line']};
     --default-active: {THEME['accent_tint']}; --default-active-border: {THEME['accent']};
 }}
-label {{ color: {THEME['fg2']}; }}"""
+label {{ color: {THEME['fg2']}; font-size: 12px; font-weight: 500; }}
+.bk-btn:focus {{ outline: none; }}
+.bk-btn:focus-visible {{ outline: 2px solid {THEME['accent']}; outline-offset: 1px; }}"""
+# (the two .bk-btn rules: Bokeh's dotted focus outline on every button and
+# toggle showed after each click; now only a keyboard focus gets a ring)
 # a panel or the controls, as the app draws a card
 CARD_CSS = (f":host{{background:{THEME['card']};border:1px solid {THEME['line']};border-radius:14px;"
             f"padding:8px 10px;box-shadow:0 1px 3px rgba(30,40,10,0.08);}}")
-# the page around the cards; `html body` outranks the `html, body` reset
-# file_html puts after it
-PAGE_CSS = (f"<style>:root{{color-scheme:light;}}html body{{margin:0;padding:20px 16px 32px;"
+# The settings tabs: underlined, the open one in the accent, on a hairline
+# across the card
+TABS_CSS = (f".bk-header{{border:0;border-bottom:1px solid {THEME['line']};margin:0 0 4px;}}"
+            ".bk-headers-wrapper{display:flex;gap:20px;}"
+            f".bk-tab{{padding:6px 1px;margin-bottom:-1px;border:0;border-bottom:2px solid transparent;"
+            f"border-radius:0;background:transparent;color:{THEME['fg2']};font-size:13px;cursor:pointer;}}"
+            f".bk-tab:hover{{color:{THEME['fg']};}}"
+            f".bk-tab.bk-active{{border:0;border-bottom:2px solid {THEME['accent']};background:transparent;"
+            f"color:{THEME['fg']};font-weight:600;}}"
+            # a focus ring for the keyboard only, not after every click
+            f".bk-tab:focus{{outline:none;}}"
+            f".bk-tab:focus-visible{{outline:2px solid {THEME['accent']};outline-offset:1px;}}")
+# A RadioButtonGroup as the app's segmented control: a grey track, the
+# chosen option a raised white chip. Every option visible, one click to pick.
+SEGMENTED_CSS = (f".bk-btn-group{{gap:2px;padding:3px;border-radius:10px;background:{THEME['chip']};}}"
+                 f".bk-btn-group > .bk-btn.bk-btn-default{{flex:1;height:26px;padding:0 6px;border:0;"
+                 f"border-radius:7px;background:transparent;color:{THEME['fg2']};font-size:12.5px;"
+                 "box-shadow:none;white-space:nowrap;}"
+                 f".bk-btn-group > .bk-btn.bk-btn-default:hover{{background:transparent;color:{THEME['fg']};}}"
+                 f".bk-btn-group > .bk-btn.bk-btn-default.bk-active{{background:{THEME['card']};"
+                 f"color:{THEME['fg']};font-weight:600;box-shadow:{THEME['shadow']};}}"
+                 ".bk-btn:focus{outline:none;}"
+                 f".bk-btn:focus-visible{{outline:2px solid {THEME['accent']};outline-offset:1px;}}")
+# a titled control's label and "?" for a widget that has no title of its
+# own, matching an input's: the same weight and colour, and Bokeh's own help
+# icon (its --bokeh-icon-help, defined on every element), the help text as
+# the tooltip
+FIELD_LABEL_CSS = (f".lbl{{display:flex;align-items:center;gap:4px;font-size:12px;font-weight:500;"
+                   f"color:{THEME['fg2']};}}"
+                   # the size and colour of Bokeh's own (.bk-description .bk-icon)
+                   f".q{{width:18px;height:18px;cursor:help;background-color:{THEME['fg']};"
+                   "mask-image:var(--bokeh-icon-help);-webkit-mask-image:var(--bokeh-icon-help);"
+                   "mask-size:100% 100%;-webkit-mask-size:100% 100%;}")
+# the app's icon (gui/build/icon.svg): two genome bars joined by a twisted
+# ribbon, on the accent green, rounded as the Dock draws it
+APP_ICON_SVG = ('<svg viewBox="0 0 100 100" width="34" height="34" aria-hidden="true">'
+                f'<rect width="100" height="100" rx="22" fill="{THEME["accent"]}"/>'
+                '<polygon points="18,34 82,34 18,66 82,66" fill="#201e1d"/>'
+                '<rect x="18" y="20" width="64" height="14" fill="#ffffff"/>'
+                '<rect x="18" y="66" width="64" height="14" fill="#ffffff"/></svg>')
+# the page around the cards, centred once the plot slot stops growing (it
+# fits the window's height first); "safe" so a page wider than the window
+# scrolls rather than spilling off the left edge. `html body` outranks the
+# `html, body` reset file_html puts after it. SYN.fitToWindow leaves the
+# same 12px below.
+PAGE_CSS = (f"<style>:root{{color-scheme:light;}}html body{{margin:0;padding:12px 16px;"
+            f"display:flex;flex-direction:column;align-items:safe center;"
             f"background:{THEME['ground']};color:{THEME['fg']};font-family:{UI_FONT};}}</style>")
 
 # "Chromosome order" options -> (order by size, order by similarity), as
@@ -1830,13 +1887,11 @@ SYN.buildExportFilename = function(panel, format) {
     return `${t}_vs_${r}_${panel}_${SYN.settingsTag()}.${ext}`;
 };
 
-// Sets the editable genome labels and refreshes the titles/annotations and
-// the 'group' column (hover tooltip only) that aren't rebuilt on redraw.
+// Sets the editable genome labels and refreshes the annotations and the
+// 'group' column (hover tooltip only) that aren't rebuilt on redraw.
 SYN.applyLabels = function(targetLabel, referenceLabel, ctx) {
     SYN.state.targetLabel = targetLabel;
     SYN.state.referenceLabel = referenceLabel;
-    ctx.overview.title.text = `${referenceLabel} (reference) vs ${targetLabel} (target)`;
-    ctx.dotplotFig.title.text = `${referenceLabel} vs ${targetLabel}: whole-genome dotplot`;
     // in-panel genome names, which exports keep
     const ui = SYN.ui;
     ui.ringReferenceLabel.text = `Reference · ${referenceLabel}`;
@@ -1864,42 +1919,45 @@ SYN.buildStatsHtml = function(targetLabel, referenceLabel) {
     const s = SYN.data.alignmentStats;
     if (!s) { return ''; }
     const esc = SYN.escapeHtml;
+    const t = SYN.data.theme;
     const pct = (n) => s.proteome_total ? SYN.trunc1(n / s.proteome_total * 100).toFixed(1) : '0.0';
-    // each input's file name or accession (*_source), species in italics
-    // below; long names are ellipsized, full name in the tooltip
-    const clip = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap';
-    const fg2 = SYN.data.theme.fg2;
-    const nameCell = (source, species) => {
-        const src = source ? `<div style="${clip}" title="${esc(source)}">${esc(source)}</div>` : '';
-        const sp = species
-            ? `<div style="${clip};color:${fg2};font-size:12px" title="${esc(species)}"><i>${esc(species)}</i></div>` : '';
-        return src + sp || '&mdash;';
+    const ident = (x) => SYN.trunc1(x * 100).toFixed(1);
+    // Saccharomyces paradoxus -> S. paradoxus: a tile is a third of the card
+    const shortSpecies = (sp) => sp.replace(/^(\S)\S*\s+(?=\S)/, '$1. ');
+    // One tile: its caption, one or two headline numbers side by side (each
+    // with its unit under it), and the name of what it describes, with the
+    // details in the tooltip
+    const tile = (caption, numbers, nameHtml, tooltip) => {
+        const nums = numbers.map(([value, unit]) => `
+            <div><div style="font-size:16px;font-weight:650;line-height:1.2;color:${t.fg}">${value}</div>
+                 <div style="font-size:11px;color:${t.fg2}">${unit}</div></div>`).join('');
+        return `
+            <div style="min-width:0;padding:5px 9px;border-radius:9px;background:${t.chip}" title="${esc(tooltip)}">
+                <div style="font-size:11px;color:${t.fg2}">${caption}</div>
+                <div style="display:flex;gap:12px;margin-top:1px">${nums}</div>
+                <div style="margin-top:1px;font-size:11.5px;font-weight:550;color:${t.fg};white-space:nowrap;
+                            overflow:hidden;text-overflow:ellipsis">${nameHtml}</div>
+            </div>`;
     };
-    const td = 'padding:2px 6px 2px 0;vertical-align:top';
-    const num = `${td};text-align:right;white-space:nowrap`;
-    const row = (role, source, species, aligned, identity) => `
-        <tr><td style="${td};color:${fg2}">${role}</td>
-            <td style="${td}">${nameCell(source, species)}</td>
-            <td style="${num}">${aligned.toLocaleString()} (${pct(aligned)}%)</td>
-            <td style="${num};padding-right:0">${SYN.trunc1(identity * 100).toFixed(1)}%</td></tr>`;
-    // width = STATS_PANEL_WIDTH, the zoom panel's drawn frame
+    // The genome tiles carry the editable labels (SYN.applyStats re-runs on
+    // every label edit), not the species from the stats file; the proteome
+    // tile, which has no label, its species
+    const genomeTile = (caption, label, source, species, aligned, identity) => tile(
+        caption, [[`${pct(aligned)}%`, 'aligned'], [`${ident(identity)}%`, 'avg identity']],
+        esc(label),
+        `${[source, species].filter(Boolean).join(' · ')}\n`
+        + `${aligned.toLocaleString()} of ${s.proteome_total.toLocaleString()} proteins aligned`);
+    const proteomeSource = s.proteome_source || s.proteome_origin;
     return `
-        <div style="font-size:13px;color:${SYN.data.theme.fg};border:1px solid ${SYN.data.theme.line};
-                    border-radius:12px;padding:10px 14px;display:block;box-sizing:border-box;
-                    width:${SYN.data.statsPanelWidth}px;margin:6px 0 4px 0">
-            <div style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
-                        color:${fg2}">Alignment summary</div>
-            <table style="border-collapse:collapse;margin-top:4px;width:100%;table-layout:fixed">
-                <colgroup><col style="width:66px"><col><col style="width:100px"><col style="width:74px"></colgroup>
-                <tr><td style="${td};color:${fg2}">Proteome</td>
-                    <td style="${td}">${nameCell(s.proteome_source || s.proteome_origin, s.proteome_species)}</td>
-                    <td colspan="2" style="${num};padding-right:0">${s.proteome_total.toLocaleString()} proteins</td></tr>
-                <tr style="color:${fg2}"><td></td><td></td>
-                    <td style="${num}">aligned</td><td style="${num};padding-right:0">avg identity</td></tr>
-                ${row('Target', s.query_source || targetLabel, s.query_species, s.query_aligned, s.query_mean_identity)}
-                ${row('Reference', s.subject_source || referenceLabel, s.subject_species,
-                      s.subject_aligned, s.subject_mean_identity)}
-            </table>
+        <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px">
+            ${tile('Proteome', [[s.proteome_total.toLocaleString(), 'proteins']],
+                   s.proteome_species ? `<i>${esc(shortSpecies(s.proteome_species))}</i>`
+                                      : esc(proteomeSource || '—'),
+                   [proteomeSource, s.proteome_species].filter(Boolean).join(' · '))}
+            ${genomeTile('Target', targetLabel, s.query_source, s.query_species,
+                         s.query_aligned, s.query_mean_identity)}
+            ${genomeTile('Reference', referenceLabel, s.subject_source, s.subject_species,
+                         s.subject_aligned, s.subject_mean_identity)}
         </div>`;
 };
 
@@ -2153,7 +2211,7 @@ SYN.updateChainStatus = function() {
         } else {
             const self = SYN.data.targetHomeologLinks.concat(SYN.data.referenceHomeologLinks)
                 .filter((l) => l.score >= minScore).length;
-            text += self ? ` · ${SYN.plural(self, 'self-link block')}` : ' · no self-links at these settings';
+            text += self ? ` · ${SYN.plural(self, 'self-link block')}` : ' · no self-links';
         }
     }
     const ms = `last computed in ${(SYN.chain.lastMs || 0).toFixed(0)} ms`;
@@ -2205,6 +2263,113 @@ SYN.buildBlocksExportFilename = function() {
     return `${t}_vs_${r}_blocks_${SYN.settingsTag()}.tsv`;
 };
 
+// ---- fitting the page to the window ----
+// The plot slot's two square figures and the zoom panel's height take
+// whatever the window leaves once everything around them is laid out, so the
+// page fits without scrolling; below the minimums it scrolls instead. The
+// plot's minimum is also its top bar's content (the bar less its spacer),
+// since the card can't get narrower than that. "What
+// is around them" is measured, not hard-coded: each column's rendered size
+// minus its figure's. Figure sizes are Bokeh properties, so setting them
+// re-lays out the page. PNG/JPEG exports follow, at the size on screen.
+SYN.FIT = {bottomPad: 12, minPlot: 420, minDetail: 180};
+SYN.fitToWindow = function() {
+    const ui = SYN.ui;
+    const rectOf = (model) => {
+        const view = SYN.findViewByModelId(model.id);
+        return view && view.el ? view.el.getBoundingClientRect() : null;
+    };
+    const plotRect = rectOf(ui.plotCol), rightRect = rectOf(ui.rightCol);
+    const toolbarRect = rectOf(ui.plotToolbar), spacerRect = rectOf(ui.plotToolbarSpacer);
+    if (!plotRect || !rightRect || !toolbarRect || !spacerRect) { return; }
+    // both figures always share one size; read whichever is on show
+    const shown = ui.overview.visible ? ui.overview : ui.dotplotFig;
+    const availH = window.innerHeight - plotRect.top - SYN.FIT.bottomPad;
+    // the body's width less its padding, not from the plot's left edge: the
+    // page is centred, so that edge moves as the plot resizes
+    const body = getComputedStyle(document.body);
+    const availW = document.documentElement.clientWidth - parseFloat(body.paddingLeft)
+        - parseFloat(body.paddingRight) - (rightRect.right - plotRect.right);
+    const plotSize = Math.max(SYN.FIT.minPlot, Math.ceil(toolbarRect.width - spacerRect.width), Math.floor(Math.min(
+        availH - (plotRect.height - shown.height), availW - (plotRect.width - shown.width))));
+    const detailHeight = Math.max(SYN.FIT.minDetail,
+                                  Math.floor(availH - (rightRect.height - ui.detailFig.height)));
+    for (const fig of [ui.overview, ui.dotplotFig]) {
+        if (fig.width !== plotSize || fig.height !== plotSize) {
+            fig.width = plotSize;
+            fig.height = plotSize;
+        }
+    }
+    if (ui.detailFig.height !== detailHeight) { ui.detailFig.height = detailHeight; }
+};
+
+// Fits once the first layout is on screen, then again whenever the window
+// or either column changes size -- e.g. Min block size's note appearing
+// makes the settings taller. Refitting after its own change is a no-op, so
+// the observer can't loop.
+SYN.startFitting = function() {
+    let timer = null;
+    const refit = function() {
+        clearTimeout(timer);
+        timer = setTimeout(SYN.fitToWindow, 100);
+    };
+    requestAnimationFrame(SYN.fitToWindow);
+    window.addEventListener('resize', refit);
+    if (typeof ResizeObserver === 'function') {
+        const observer = new ResizeObserver(refit);
+        for (const model of [SYN.ui.plotCol, SYN.ui.rightCol]) {
+            const view = SYN.findViewByModelId(model.id);
+            if (view && view.el) { observer.observe(view.el); }
+        }
+    }
+};
+
+// The palette swatches (a Div of buttons): a click sets the palette Select,
+// whose callback recolours everything, and marks the choice on the Div's
+// host (data-palette, which its stylesheet reads; set on the model too, so a
+// rebuilt view keeps it). Listened for on the document, through the event's
+// composed path into the Div's shadow root: Bokeh rebuilds a tab's views
+// when the tab opens, which would drop a listener on the Div itself.
+SYN.initPaletteSwatches = function() {
+    const ui = SYN.ui;
+    document.addEventListener('click', function(e) {
+        const path = e.composedPath();
+        const swatch = path.find((n) => n.classList && n.classList.contains('sw') && n.dataset && n.dataset.p);
+        if (!swatch) { return; }
+        const view = SYN.findViewByModelId(ui.paletteSwatches.id);
+        if (!view || !path.includes(view.el)) { return; }
+        const name = swatch.dataset.p;
+        ui.paletteSelect.value = name;
+        ui.paletteSwatches.html_attributes = {...ui.paletteSwatches.html_attributes, 'data-palette': name};
+        view.el.setAttribute('data-palette', name);
+    });
+};
+
+// A figure takes keyboard focus on its event layer (.bk-events, inside the
+// canvas's own shadow root, which no model's stylesheet reaches), and the
+// browser then draws a dotted outline round the plot after every click.
+// Nothing on a plot is keyboard-driven, so the outline is switched off on
+// each figure's layer directly -- at load and after a view switch, in case
+// Bokeh rebuilt the canvas -- and, as a backstop, on any layer the pointer
+// reaches or focus lands on.
+SYN.clearPlotFocusRings = function() {
+    const ui = SYN.ui;
+    for (const fig of [ui.overview, ui.dotplotFig, ui.detailFig]) {
+        const view = SYN.findViewByModelId(fig.id);
+        const layer = view && view.canvas_view ? view.canvas_view.events_el : null;
+        if (layer) { layer.style.outline = 'none'; }
+    }
+};
+SYN.suppressPlotFocusRing = function() {
+    SYN.clearPlotFocusRings();
+    const clear = function(e) {
+        const layer = e.composedPath().find((n) => n.classList && n.classList.contains('bk-events'));
+        if (layer && layer.style.outline !== 'none') { layer.style.outline = 'none'; }
+    };
+    document.addEventListener('pointerover', clear, true);
+    document.addEventListener('focusin', clear, true);
+};
+
 // The page's entry point, on DocumentReady: stashes `s` as SYN.ui, renders
 // the ring/dotplot with zero links, seeds the min-identity/min-block controls
 // (--min_identity/--min_block or SYNCHAIN.DEFAULTS), and requests the first chain.
@@ -2217,6 +2382,9 @@ SYN.init = function(s) {
     // also shows the empty selection (SYN.reapplySelection, via the ring's
     // ribbon rebuild), which puts the detail panel in its empty state
     SYN.applyOrder();
+    SYN.startFitting();
+    SYN.initPaletteSwatches();
+    SYN.suppressPlotFocusRing();
 
     SYN.startChainer(SYN.hitsPayload).then(function() {
         const init = SYN.data.initialParams;
@@ -2257,7 +2425,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # the hidden renderer-scoped one added below
     overview = figure(width=620, height=620, match_aspect=True,
                        x_range=Range1d(-lim, lim), y_range=Range1d(-lim, lim),
-                       title=f"{reference_label_default} (reference) vs {target_label_default} (target)",
+                       # no title: the corner labels name both genomes,
+                       # and the plot slot keeps the height
+                       title=None,
                        tools="pan,wheel_zoom,reset",
                        output_backend="svg")
     overview.axis.visible = False
@@ -2329,7 +2499,8 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # placeholder ranges, set by SYN.applyDotplotOrder before first paint
     dotplot_fig = figure(width=620, height=620,
                           x_range=Range1d(-1, 1), y_range=Range1d(-1, 1),
-                          title=f"{reference_label_default} vs {target_label_default}: whole-genome dotplot",
+                          # no title, as for the ring: the axis titles name both genomes
+                          title=None,
                           tools="pan,wheel_zoom,reset",
                           output_backend="svg")
     # axes only for their titles: the rulers stand in for ticks
@@ -2467,14 +2638,14 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     detail_fig.js_on_event(Reset, detail_reset_callback)
 
     target_label_input = TextInput(title="Target label", value=target_label_default,
-                                    width=TOP_CONTROL_WIDTH)
+                                    width=CONTROL_WIDTH)
     reference_label_input = TextInput(title="Reference label", value=reference_label_default,
-                                       width=TOP_CONTROL_WIDTH)
+                                       width=CONTROL_WIDTH)
 
     palette_select = Select(title="Color palette", value=DEFAULT_PALETTE_NAME,
-                             options=list(PALETTES.keys()), width=TOP_CONTROL_WIDTH)
+                             options=list(PALETTES.keys()), width=CONTROL_WIDTH)
     color_spinner = Spinner(title="Colors", low=1, high=MAX_COLORS,
-                             step=1, value=DEFAULT_COLORS, width=TOP_CONTROL_WIDTH)
+                             step=1, value=DEFAULT_COLORS, width=CONTROL_WIDTH)
     # Chain parameters (bin/chain.js's PARAMETERS header): min identity, max
     # gap and hit rank re-chain; min block size only filters. SYN.init sets
     # the real min identity/min block values; these placeholders equal
@@ -2487,21 +2658,21 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
 
     min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
                                     value=round((0.6 if min_identity is None else min_identity) * 100),
-                                    width=TOP_CONTROL_WIDTH,
+                                    width=CONTROL_WIDTH,
                                     description=help_tip(
                                         "A protein's hit counts only if at least this share of its aligned "
                                         "residues are identical or similar (miniprot's Positive score). Starts "
                                         "at 60%. Lower it for distant species; raise it to cut noise from "
                                         "paralogs. The alignment summary's avg identity is a guide."))
     max_gap_spinner = Spinner(title="Max gap (anchors)", low=1, high=100, step=1,
-                               value=max_gap, width=TOP_CONTROL_WIDTH,
+                               value=max_gap, width=CONTROL_WIDTH,
                                description=help_tip(
                                    "The most anchors a block may skip between two consecutive matched "
                                    "anchors, on either genome. Counted in anchors, not base pairs, so it means "
                                    "the same in a compact genome and a huge one. Larger values will join "
                                    "fragmented blocks; smaller values will split blocks at small rearrangements."))
     HIT_RANK_OPTIONS = ["best only", "≤ 2", "≤ 3", "all"]
-    hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=TOP_CONTROL_WIDTH,
+    hit_rank_select = Select(title="Hit rank", value="all", options=HIT_RANK_OPTIONS, width=CONTROL_WIDTH,
                              description=help_tip(
                                  "Which of each protein's alignments to use: only its best hit, or also "
                                  "its 2nd/3rd best, and so on. 'best only' gives the cleanest one-to-one "
@@ -2510,18 +2681,23 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # low=3: a 2-anchor chain is barely evidence. high is a placeholder;
     # SYN.applyChainResult sets it to the largest block.
     min_block_spinner = Spinner(title="Min block size", low=3, high=1000,
-                                 step=1, value=min_block or 15, width=TOP_CONTROL_WIDTH,
+                                 step=1, value=min_block or 15, width=CONTROL_WIDTH,
                                  description=help_tip(
                                      "The minimum number of anchors for a syntenic block to be drawn."))
     # shown when there's nothing to filter (SYN.applyChainResult)
-    min_block_note = Div(text="", visible=False, width=TOP_CONTROL_WIDTH, margin=(0, 5, 5, 5),
+    min_block_note = Div(text="", visible=False, width=CONTROL_WIDTH, margin=(0, 5, 5, 5),
                          styles={'font-size': '11.5px', 'line-height': '1.35', 'color': THEME['fg2']})
     # "N blocks" status (SYN.updateChainStatus), telling a slow re-chain
     # apart from "nothing matched"
-    chain_status_div = Div(text="", width=TOP_CONTROL_WIDTH, align='end', margin=(0, 5, 12, 5),
-                           stylesheets=[f"span{{display:inline-block;padding:3px 10px;border-radius:999px;"
+    # sits on the title's line, right-aligned (see the settings card's header)
+    chain_status_div = Div(text="", width=HEADER_STATUS_WIDTH, margin=(6, 5, 0, 5),
+                           stylesheets=[":host{text-align:right;}", f"span{{display:inline-block;padding:3px 10px;border-radius:999px;"
                                         f"background:{THEME['accent_tint']};color:{THEME['accent_tint_fg']};"
-                                        f"font-size:12.5px;font-weight:600;white-space:nowrap;}}"])
+                                        f"font-size:12.5px;font-weight:600;white-space:nowrap;}}"
+                                        # a status dot, as the app's tools status
+                                        f"span::before{{content:'';display:inline-block;width:7px;height:7px;"
+                                        f"margin-right:6px;border-radius:50%;background:{THEME['accent']};"
+                                        f"vertical-align:1px;}}"])
     # Client-side length filter on top of the pipeline's --min_seq_size, in
     # Mb. Never below MIN_SEQ_SIZE_FLOOR_MB; 0.1 Mb steps (0.01 -> 0.1 ->
     # 0.2), typed values snapped to 0.1 and capped at the largest chromosome
@@ -2531,7 +2707,7 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     # through for the callback to lift to the floor.
     max_seq_size = max(list(ds.query_sizes.values()) + list(ds.subject_sizes.values()), default=0)
     min_seq_size_spinner = Spinner(title="Min sequence length (Mb)", low=0,
-                                    step=0.1, value=MIN_SEQ_SIZE_FLOOR_MB, width=TOP_CONTROL_WIDTH,
+                                    step=0.1, value=MIN_SEQ_SIZE_FLOOR_MB, width=CONTROL_WIDTH,
                                     description=help_tip(
                                         "Hides chromosomes and scaffolds shorter than this, in Mb, from "
                                         "every panel and from the blocks TSV download. Typed values "
@@ -2540,33 +2716,45 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                         "(default 10 kb) were already left out of the page."),
                                     # at most 3 decimals, no trailing zeros: 0.01, 0.1, 0.2, 1
                                     format='0[.][000]')
-    reset_btn = Button(label="✕ Clear selection", button_type="default", width=150,
-                        height=TOOLBAR_CONTROL_HEIGHT)
-    SAVE_BUTTON_WIDTH = 70
-    # the ring's save button follows its switches, so it gets their divider
-    # and is widened by it
-    SAVE_DIVIDER_PAD = 6
-    SAVE_DIVIDER_CSS = f':host{{border-left:1px solid var(--divider-color);padding-left:{SAVE_DIVIDER_PAD}px;}}'
-    save_ring_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH + SAVE_DIVIDER_PAD + 1,
-                            height=TOOLBAR_CONTROL_HEIGHT, stylesheets=[SAVE_DIVIDER_CSS])
-    save_zoom_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
-                            height=TOOLBAR_CONTROL_HEIGHT)
-    save_dotplot_btn = Button(label="⬇ save", button_type="default", width=SAVE_BUTTON_WIDTH,
-                               height=TOOLBAR_CONTROL_HEIGHT)
-    # on the dotplot row, the panel showing every cross-genome block
-    export_blocks_btn = Button(label="⬇ blocks TSV", button_type="default", width=110,
-                                height=TOOLBAR_CONTROL_HEIGHT)
-    EXPORT_FORMATS = ["SVG", "PNG", "JPEG"]
-    DEFAULT_EXPORT_FORMAT = "PNG"
-    ring_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
-                              height=TOOLBAR_CONTROL_HEIGHT)
-    zoom_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
-                              height=TOOLBAR_CONTROL_HEIGHT)
-    dotplot_format_sel = Select(options=EXPORT_FORMATS, value=DEFAULT_EXPORT_FORMAT, width=80,
-                                 height=TOOLBAR_CONTROL_HEIGHT)
+    # toolbar icons, inline so the page needs no icon font and works offline
+    # (view_box: a tighter crop of the 24-unit grid makes the drawing fill
+    # more of the icon)
+    def svg_icon(paths, size=16, view_box="0 0 24 24", stroke=2):
+        return SVGIcon(size=size, svg=(
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="{view_box}" fill="none" stroke="currentColor" '
+            f'stroke-width="{stroke}" stroke-linecap="round" stroke-linejoin="round">{paths}</svg>'))
+    # an arrow into a tray
+    DOWNLOAD_ICON_PATHS = ('<path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2"/>'
+                           '<path d="M7 11l5 5l5 -5"/><path d="M12 4l0 12"/>')
+    reset_btn = Button(label="Clear selection", icon=svg_icon('<path d="M18 6L6 18"/><path d="M6 6l12 12"/>', 14),
+                       width=138, height=TOOLBAR_CONTROL_HEIGHT)
+    # Each figure's downloads: one icon button at the right of its top bar,
+    # opening a menu of formats (the dotplot's adds the blocks TSV). The
+    # menu's item value is the format, or 'blocks'.
+    IMAGE_MENU = [("SVG image", "SVG"), ("PNG image", "PNG"), ("JPEG image", "JPEG")]
+    # An icon-only square, no caret. The menu is its own element whose
+    # items sit in a shadow root these styles can't reach; from out here it
+    # can only be placed: under the button's right edge (Bokeh pins its left
+    # edge inline, hence !important) and as wide as its labels, not the
+    # 36 px button, which would wrap them.
+    DOWNLOAD_MENU_CSS = (".bk-btn{padding:0;justify-content:center;}.bk-caret{display:none;}"
+                         ".bk-Menu{left:auto !important;right:0;width:max-content;min-width:140px;"
+                         "font-size:13px;}")
+
+    def download_menu(fig, kind, with_blocks=False):
+        menu = IMAGE_MENU + ([None, ("Blocks table (TSV)", "blocks")] if with_blocks else [])
+        dropdown = Dropdown(label="", icon=svg_icon(DOWNLOAD_ICON_PATHS, 17), menu=menu,
+                            width=TOOLBAR_CONTROL_HEIGHT + 4, height=TOOLBAR_CONTROL_HEIGHT,
+                            html_attributes={'title': "Download"}, stylesheets=[DOWNLOAD_MENU_CSS])
+        # a menu click's cb_obj is the event, whose item is the value
+        dropdown.js_on_event('menu_item_click', CustomJS(args=dict(fig=fig), code=f"""
+            if (cb_obj.item === 'blocks') {{ SYN.exportBlocksTsv(); }}
+            else {{ SYN.exportFigure(fig, '{kind}', cb_obj.item); }}
+        """))
+        return dropdown
     # the ring's and dotplot's chromosome order; "Size" matches Dataset's
     order_select = Select(title="Chromosome order", value="Size", options=list(ORDER_MODES),
-                          width=TOP_CONTROL_WIDTH,
+                          width=CONTROL_WIDTH,
                           description=help_tip(
                               "Size: largest first. File order: as in each FASTA file. Similarity: "
                               "chromosomes that share blocks sit next to each other, which turns the "
@@ -2575,39 +2763,60 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                               "weighted by their anchor counts. Only what is drawn counts: blocks below "
                               "Min block size and sequences below Min sequence length are ignored, and "
                               "chromosomes with no visible blocks go to the end."))
-    # every switch: a fixed 28px track (Bokeh's stretches with the label) and
-    # a tighter gap. SWITCH_WIDTH fits "Show self-links" on one line.
-    SWITCH_WIDTH = 125
-    SWITCH_CSS = ':host{gap:4px;align-items:center;}.bk-body{flex:0 0 28px;width:28px;}'
-    # plus a leading divider, for a switch following another control
-    SWITCH_DIVIDER_CSS = SWITCH_CSS + ':host{border-left:1px solid var(--divider-color);padding-left:6px;}'
-    # off by default: self-links can clutter the ring (e.g. a polyploid).
-    # Under the ring, the only panel that draws them.
-    self_links_toggle = Switch(label="Show self-links", active=False, width=SWITCH_WIDTH,
-                                stylesheets=[SWITCH_DIVIDER_CSS])
-    # hides the cross-genome ribbons, independently of self_links_toggle
-    show_synteny_toggle = Switch(label="Show synteny", active=True, width=SWITCH_WIDTH,
-                                  stylesheets=[SWITCH_CSS])
-    # off by default: a draft assembly can have thousands of gaps. Covers
-    # all three panels. align='end' plus a taller bottom margin centres it
-    # on the titled inputs' boxes.
-    show_gaps_toggle = Switch(label="Show gaps", active=False, width=SWITCH_WIDTH,
-                               stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
-    # disabled when no name was changed in either genome
-    original_names_toggle = Switch(label="Original names", active=False, width=SWITCH_WIDTH,
-                                    disabled=not (ds.query_original_names or ds.subject_original_names),
-                                    stylesheets=[SWITCH_CSS], align='end', margin=(5, 5, 11, 5))
+    # The ring's two ribbon layers, as toggle chips in the plot's top bar: a
+    # pill with a status dot, green while on. Toggles, so .active and its
+    # change callbacks work as a Switch's would.
+    # The layer chips, glued into one pill (layer_chips): each a square
+    # segment, the pill's hairline border and its 1 px gaps as dividers.
+    # Inside the border, as tall as the view switch's buttons less 2 px.
+    # Each chip's width is its label's width in bold (the on state, so
+    # toggling never shifts the bar) at 12 px in the system UI font, measured
+    # on macOS, plus 8% for wider Linux fonts, plus the dot, gap and padding
+    # (CHIP_CHROME). Greyed out while disabled (the ring-only two, in the
+    # dotplot view).
+    CHIP_HEIGHT = TOOLBAR_CONTROL_HEIGHT - 6 - 2
+    CHIP_DOT, CHIP_DOT_GAP, CHIP_PAD_X = 6, 5, 7
+    CHIP_CHROME = CHIP_DOT + CHIP_DOT_GAP + 2 * CHIP_PAD_X
 
-    save_ring_btn.js_on_click(CustomJS(args=dict(fig=overview, fmt=ring_format_sel), code="""
-        SYN.exportFigure(fig, 'ring', fmt.value);
-    """))
-    save_zoom_btn.js_on_click(CustomJS(args=dict(fig=detail_fig, fmt=zoom_format_sel), code="""
-        SYN.exportFigure(fig, 'detail', fmt.value);
-    """))
-    save_dotplot_btn.js_on_click(CustomJS(args=dict(fig=dotplot_fig, fmt=dotplot_format_sel), code="""
-        SYN.exportFigure(fig, 'dotplot', fmt.value);
-    """))
-    export_blocks_btn.js_on_click(CustomJS(code="SYN.exportBlocksTsv();"))
+    def chip_width(bold_label_px):
+        return math.ceil(bold_label_px * 1.08) + CHIP_CHROME
+    CHIP_CSS = (f".bk-btn.bk-btn-default{{height:{CHIP_HEIGHT}px;padding:0 {CHIP_PAD_X}px;gap:{CHIP_DOT_GAP}px;"
+                f"border:0;border-radius:0;background:{THEME['card']};color:{THEME['fg2']};font-size:12px;"
+                "white-space:nowrap;box-shadow:none;}"
+                f".bk-btn.bk-btn-default:hover{{background:{THEME['ground']};color:{THEME['fg']};}}"
+                f".bk-btn.bk-btn-default.bk-active{{background:{THEME['accent_tint']};"
+                f"color:{THEME['accent_tint_fg']};font-weight:600;box-shadow:none;}}"
+                f".bk-btn::before{{content:'';flex:none;width:{CHIP_DOT}px;height:{CHIP_DOT}px;border-radius:50%;"
+                f"background:{THEME['field_line']};}}"
+                f".bk-btn.bk-active::before{{background:{THEME['accent']};}}"
+                ".bk-btn.bk-btn-default[disabled]{filter:grayscale(1);opacity:.45;cursor:default;}"
+                f".bk-btn.bk-btn-default[disabled]:hover{{background:{THEME['card']};color:{THEME['fg2']};}}"
+                f".bk-btn.bk-btn-default.bk-active[disabled]:hover{{background:{THEME['accent_tint']};}}")
+    CHIP_MARGIN = 0
+    # off by default: self-links can clutter the ring (e.g. a polyploid),
+    # the only panel that draws them
+    self_links_toggle = Toggle(label="Self-links", active=False, width=chip_width(56.1), height=CHIP_HEIGHT,
+                               margin=CHIP_MARGIN,
+                               html_attributes={'title': "Show each genome's links to itself (paralogs, homeologs)"},
+                               stylesheets=[CHIP_CSS])
+    # hides the cross-genome ribbons, independently of self_links_toggle
+    show_synteny_toggle = Toggle(label="Synteny", active=True, width=chip_width(48.1), height=CHIP_HEIGHT,
+                                 margin=CHIP_MARGIN,
+                                 html_attributes={'title': "Show the synteny ribbons between the two genomes"},
+                                 stylesheets=[CHIP_CSS])
+    # Two more chips beside them, shown in both views since they act on
+    # every panel. Off by default: a draft assembly can have thousands of
+    # gaps.
+    show_gaps_toggle = Toggle(label="Gaps", active=False, width=chip_width(30.2), height=CHIP_HEIGHT, margin=CHIP_MARGIN,
+                              html_attributes={'title': "Mark assembly gaps (runs of N) in every panel"},
+                              stylesheets=[CHIP_CSS])
+    # hidden when no name was changed in either genome: nothing to switch
+    original_names_toggle = Toggle(label="Original names", active=False, width=chip_width(88.3), height=CHIP_HEIGHT,
+                                   margin=CHIP_MARGIN,
+                                   visible=bool(ds.query_original_names or ds.subject_original_names),
+                                   html_attributes={'title': "Name chromosomes by their original FASTA sequence IDs"},
+                                   stylesheets=[CHIP_CSS])
+
 
     # the color index follows the size/file choice only (SYN.buildColorIndex)
     order_callback = CustomJS(code="""
@@ -2767,36 +2976,127 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     reset_callback = CustomJS(code="SYN.select(null);")
     reset_btn.js_on_click(reset_callback)
 
-    # under each panel, only what acts on that panel alone: the ring's two
-    # ribbon switches, then each panel's save button and format menu
-    left_col = column(overview,
-                       row(show_synteny_toggle, self_links_toggle, save_ring_btn, ring_format_sel))
-    right_col = column(dotplot_fig,
-                        row(save_dotplot_btn, dotplot_format_sel, export_blocks_btn))
+    # One plot slot for the ring and the dotplot. Its top bar: the view
+    # switch (two icon buttons as one segmented control, the settings tabs'
+    # look -- a RadioButtonGroup takes text labels only) on the left; on the
+    # right, the layer chips -- the ring's two ribbon layers, on show only
+    # with the ring, then gaps and original names for every panel -- and
+    # the figure's download menu. The hidden figure is still updated by every control and keeps
+    # its own pan/zoom, so switching back shows it as it would have been.
+    # The view icons fill their buttons: VIEW_ICON_SIZE is the button's
+    # height less 2 px each side, and each drawing is cropped to its own
+    # extent (strokes included), with a slightly lighter stroke to suit.
+    VIEW_ICON_SIZE = TOOLBAR_CONTROL_HEIGHT - 6 - 4
+    # Circos: the ring as 6 chromosome arcs with even gaps (the dash pattern
+    # divides the circumference exactly; rotated so an arc, not a gap, is
+    # centred at 3 o'clock), and two links bowing in from the arcs on top to
+    # those below, apart so they read as ribbons rather than a cross
+    circos_icon = svg_icon(
+        '<circle cx="12" cy="12" r="8.9" stroke-width="2.2" stroke-linecap="butt" '
+        'stroke-dasharray="7.720 1.6" transform="rotate(-24.85 12 12)"/>'
+        '<path d="M8.50 5.94Q12 12 8.50 18.06"/><path d="M15.50 5.94Q12 12 15.50 18.06"/>',
+        VIEW_ICON_SIZE, view_box="2 2 20 20", stroke=1.6)
+    # Dotplot: the chromosome grid -- a frame split into four cells, faint
+    # dividers, and a diagonal block in two of them
+    dotplot_icon = svg_icon(
+        '<rect x="3" y="3" width="18" height="18" rx="2"/>'
+        '<path d="M12 3v18M3 12h18" stroke-width="1" opacity=".55"/>'
+        '<path d="M5.5 18.5l4-4"/><path d="M14.5 9.5l4-4"/>',
+        VIEW_ICON_SIZE, view_box="2 2 20 20", stroke=1.8)
+    # .on marks the view on show
+    # (flex with no padding: Bokeh's block button with 6/12 px padding left
+    # the icon low and spilling out of the bottom)
+    VIEW_BUTTON_CSS = (f".bk-btn.bk-btn-default{{display:flex;align-items:center;justify-content:center;"
+                       f"padding:0;border:0;border-radius:8px;background:transparent;"
+                       f"color:{THEME['fg3']};box-shadow:none;}}"
+                       ".bk-SVGIcon{display:flex;}"
+                       f".bk-btn.bk-btn-default:hover{{background:transparent;color:{THEME['fg']};}}"
+                       f":host(.on) .bk-btn.bk-btn-default{{background:{THEME['card']};color:{THEME['fg']};"
+                       f"box-shadow:{THEME['shadow']};}}")
+    VIEW_BUTTON_HEIGHT = TOOLBAR_CONTROL_HEIGHT - 6
+    view_ring_btn = Button(label="", icon=circos_icon, width=38, height=VIEW_BUTTON_HEIGHT, margin=0,
+                           css_classes=['on'], html_attributes={'title': "Circos view"},
+                           stylesheets=[VIEW_BUTTON_CSS])
+    view_dotplot_btn = Button(label="", icon=dotplot_icon, width=38, height=VIEW_BUTTON_HEIGHT, margin=0,
+                              html_attributes={'title': "Dotplot view"}, stylesheets=[VIEW_BUTTON_CSS])
+    view_switch = row(view_ring_btn, view_dotplot_btn, margin=5, stylesheets=[
+        f":host{{padding:3px;gap:2px;border-radius:10px;background:{THEME['chip']};}}"])
+    # every chip in one pill: the row's line-coloured background shows
+    # through its 1 px gaps as dividers, between whichever chips are shown;
+    # centred on the bar, then a little air before the download icon
+    layer_chips = row(show_synteny_toggle, self_links_toggle, show_gaps_toggle, original_names_toggle,
+                      spacing=1, margin=(8, 8, 8, 5),
+                      stylesheets=[f":host{{border:1px solid {THEME['line']};border-radius:999px;overflow:hidden;"
+                                   f"background:{THEME['line']};}}"])
+    # the ring-only chips' tooltips, for each view
+    RING_ONLY_TIP = "The dotplot draws no ribbons; switch to the circos view to use this"
+    SYNTENY_TIP = show_synteny_toggle.html_attributes['title']
+    SELF_LINKS_TIP = self_links_toggle.html_attributes['title']
+    ring_save = download_menu(overview, 'ring')
+    dotplot_save = download_menu(dotplot_fig, 'dotplot', with_blocks=True)
+    dotplot_save.visible = False
+    dotplot_fig.visible = False
+    view_args = dict(overview=overview, dotplot_fig=dotplot_fig,
+                     synteny_chip=show_synteny_toggle, self_links_chip=self_links_toggle,
+                     ring_save=ring_save, dotplot_save=dotplot_save,
+                     ring_btn=view_ring_btn, dotplot_btn=view_dotplot_btn,
+                     tips=dict(synteny=SYNTENY_TIP, selfLinks=SELF_LINKS_TIP, ringOnly=RING_ONLY_TIP))
+    for btn, ring in ((view_ring_btn, 'true'), (view_dotplot_btn, 'false')):
+        btn.js_on_click(CustomJS(args=view_args, code=f"""
+            const ring = {ring};
+            overview.visible = ring;
+            // the ring-only chips stay, greyed out, in the dotplot view
+            synteny_chip.disabled = !ring;
+            self_links_chip.disabled = !ring;
+            synteny_chip.html_attributes = {{title: ring ? tips.synteny : tips.ringOnly}};
+            self_links_chip.html_attributes = {{title: ring ? tips.selfLinks : tips.ringOnly}};
+            ring_save.visible = ring;
+            dotplot_fig.visible = !ring;
+            dotplot_save.visible = !ring;
+            ring_btn.css_classes = ring ? ['on'] : [];
+            dotplot_btn.css_classes = ring ? [] : ['on'];
+            requestAnimationFrame(SYN.clearPlotFocusRings);
+        """))
+    # the spacer takes the bar's slack, so the chips and downloads sit at
+    # the far right; SYN.fitToWindow reads the bar's width less the
+    # spacer's as the narrowest the plot card can get
+    plot_toolbar_spacer = Spacer(sizing_mode='stretch_width')
+    plot_toolbar = row(view_switch, plot_toolbar_spacer, layer_chips, ring_save, dotplot_save,
+                       sizing_mode='stretch_width')
+    plot_col = column(plot_toolbar, overview, dotplot_fig)
 
-    header_title_div = Div(text="<h1>quick_synteny</h1><p>Fast and annotation-free synteny "
-                                 "visualisation using spliced protein alignments</p>",
-                           margin=(0, 0, 14, 2),
-                           stylesheets=[f"h1{{margin:0;font-size:24px;font-weight:650;letter-spacing:-0.01em;"
-                                        f"color:{THEME['fg']};}}"
-                                        f"p{{margin:4px 0 0;font-size:14px;color:{THEME['fg2']};}}"])
+    # The settings card's header line: the app's icon, the title, and the
+    # block count at the right; the tagline is the title's tooltip
+    header_icon_div = Div(text=APP_ICON_SVG, width=34, height=34, margin=(0, 6, 0, 5))
+    header_name_div = Div(text="<h1>quick_synteny</h1>", width=HEADER_NAME_WIDTH, margin=(5, 5, 0, 5),
+                          html_attributes={'title': "Fast and annotation-free synteny visualisation "
+                                                    "using spliced protein alignments"},
+                          stylesheets=[f"h1{{margin:0;font-size:18px;font-weight:650;letter-spacing:-0.01em;"
+                                       f"line-height:24px;color:{THEME['fg']};}}"])
+    settings_header = row(header_icon_div, header_name_div, chain_status_div, margin=(0, 0, 8, 0))
 
-    # filled by SYN.applyStats (empty without --stats); width and left margin
-    # line it up with the zoom panel's drawn frame
-    stats_div = Div(text='', width=STATS_PANEL_WIDTH, margin=(0, 0, 0, DETAIL_FRAME_LEFT))
+    # the alignment summary as three tiles under the header, filled by
+    # SYN.applyStats; not shown at all without --stats
+    # The card's full width, edge to edge with the tab bar under it; the
+    # wrapper Bokeh puts round a Div's content would shrink to fit the
+    # tiles, hence the 100%.
+    stats_div = Div(text='', width=DETAIL_FIG_WIDTH, margin=(0, 0, 6, 0),
+                    visible=alignment_stats is not None, stylesheets=[".bk-clearfix{width:100%;}"])
 
-    # under the zoom panel, the shortest column
-    mid_col = column(detail_fig, row(reset_btn, save_zoom_btn, zoom_format_sel), stats_div)
+    # the zoom panel under the settings, its top bar laid out as the plot's:
+    # Clear selection on the left, the download at the far right
+    zoom_toolbar = row(reset_btn, Spacer(sizing_mode='stretch_width'), download_menu(detail_fig, 'detail'),
+                       sizing_mode='stretch_width')
+    zoom_card = column(zoom_toolbar, detail_fig)
 
     label_callback = CustomJS(args=dict(
         target_label_input=target_label_input, reference_label_input=reference_label_input,
-        overview=overview, dotplot_fig=dotplot_fig, stats_div=stats_div,
+        stats_div=stats_div,
         q_src=q_src, dp_q_src=dp_q_src, s_src=s_src, dp_s_src=dp_s_src,
     ), code="""
         const targetLabel = target_label_input.value.trim() || 'target';
         const referenceLabel = reference_label_input.value.trim() || 'reference';
         SYN.applyLabels(targetLabel, referenceLabel, {
-            overview, dotplotFig: dotplot_fig,
             queryLikeSources: [q_src, dp_q_src], subjectLikeSources: [s_src, dp_s_src],
         });
         SYN.reapplySelection();  // the detail panel's titles and messages name the genomes
@@ -2805,43 +3105,120 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
     target_label_input.js_on_change('value', label_callback)
     reference_label_input.js_on_change('value', label_callback)
 
-    # a titled group of page-wide controls, with a leading divider except
-    # first in its row; margin-left clears the "?" icon of the group to its
-    # left, which can overflow a long title
-    def control_group(title, *children, divider=True):
-        css = (':host{border-left:1px solid var(--divider-color);padding-left:8px;margin-left:14px;}'
-               if divider else '')
-        header = Div(text=f"<span style='font-size:11px;font-weight:700;letter-spacing:.06em;"
-                          f"text-transform:uppercase;color:{THEME['fg2']}'>{title}</span>",
-                     margin=(4, 5, 0, 5))
-        return column(header, row(*children), stylesheets=[css] if css else [])
 
-    controls = column(
-        row(control_group("Genomes", reference_label_input, target_label_input, divider=False),
-            control_group("Synteny detection (recomputes)", min_identity_spinner, max_gap_spinner,
-                          hit_rank_select, chain_status_div)),
-        row(control_group("Filters", column(min_block_spinner, min_block_note), min_seq_size_spinner, divider=False),
-            control_group("Display", palette_select, color_spinner, order_select, show_gaps_toggle,
-                          original_names_toggle)),
-        stylesheets=[CARD_CSS])
-    for col in (left_col, mid_col, right_col):
-        col.stylesheets = [*col.stylesheets, CARD_CSS]
-    layout = column(
-        header_title_div,
-        controls,
-        # row()'s default spacing is 0
-        row(left_col, mid_col, right_col, spacing=10),
-        spacing=12,
+    # The settings tabs' rows, closer than Bokeh's 5 px margins leave them:
+    # the height goes to the zoom panel. The custom labels and segmented
+    # controls below use the same, so they stay level with the inputs.
+    FIELD_MARGIN_Y = 3
+    for field in (min_identity_spinner, max_gap_spinner, min_block_spinner, min_seq_size_spinner,
+                  color_spinner, reference_label_input, target_label_input):
+        field.margin = (FIELD_MARGIN_Y, 5, FIELD_MARGIN_Y, 5)
+
+    # A label for a control without a title of its own (see FIELD_LABEL_CSS)
+    def field_label(text, help_text, width):
+        return Div(text=f"<div class='lbl'>{text}<span class='q' title=\"{help_text}\"></span></div>",
+                   width=width, margin=(FIELD_MARGIN_Y, 5, 0, 5), stylesheets=[FIELD_LABEL_CSS])
+
+    # Segmented stand-ins for two Selects: every option on show. Each sets
+    # its Select, which stays out of the layout but keeps its callbacks
+    # (and SYN.ui's reads), so the rest of the page is unchanged.
+    def segmented(select, labels, values, width):
+        # no top margin: right under its field_label, level with the
+        # inputs beside it, as a titled input's box sits under its title
+        group = RadioButtonGroup(labels=labels, active=values.index(select.value), width=width,
+                                 height=TOOLBAR_CONTROL_HEIGHT, margin=(0, 5, FIELD_MARGIN_Y, 5),
+                                 stylesheets=[SEGMENTED_CSS])
+        group.js_on_change('active', CustomJS(args=dict(select=select, values=values),
+                                              code="select.value = values[cb_obj.active];"))
+        return group
+    hit_rank_group = segmented(hit_rank_select, ["Best", "≤ 2", "≤ 3", "All"], HIT_RANK_OPTIONS, CONTROL_WIDTH)
+    hit_rank_label = field_label(
+        "Hit rank", "Which of each protein's alignments to use: only its best hit, or also its 2nd/3rd "
+                    "best. Best gives the cleanest one-to-one synteny; keep lower-ranked hits to see "
+                    "duplicated copies, such as paralogs or a polyploid's subgenomes.", CONTROL_WIDTH)
+    ORDER_WIDTH = 2 * CONTROL_WIDTH + 10
+    ORDER_CHOICES = ["Size", "Similarity", "File order"]
+    order_group = segmented(order_select, ORDER_CHOICES, ORDER_CHOICES, ORDER_WIDTH)
+    order_label = field_label(
+        "Chromosome order", "Size: largest first. Similarity: chromosomes that share blocks sit next "
+                            "to each other, which turns the dotplot's synteny into a diagonal and untangles "
+                            "the ring; only what is drawn counts, and chromosomes with no visible blocks go "
+                            "to the end. File order: as in each FASTA file.", ORDER_WIDTH)
+
+    # The palette as swatches of its colours rather than names in a list:
+    # one click picks it (SYN.initPaletteSwatches sets palette_select). The
+    # chosen one is marked by the host's data-palette, so the mark survives
+    # Bokeh redrawing the Div.
+    PALETTE_SHORT_NAMES = {'Colorblind-safe': 'Colorblind'}
+    swatches_html = "".join(
+        f"<button class='sw' data-p='{name}' title='{name}'><span class='strip'>"
+        + "".join(f"<i style='background:{c}'></i>" for c in colors)
+        + f"</span><span class='nm'>{PALETTE_SHORT_NAMES.get(name, name)}</span></button>"
+        for name, colors in PALETTES.items())
+    swatch_on_css = "".join(
+        f":host([data-palette='{name}']) .sw[data-p='{name}']{{border-color:{THEME['accent']};"
+        f"box-shadow:0 0 0 1px {THEME['accent']};}}"
+        f":host([data-palette='{name}']) .sw[data-p='{name}'] .nm{{color:{THEME['fg']};font-weight:600;}}"
+        for name in PALETTES)
+    palette_swatches = Div(
+        text=f"<div class='pal'>{swatches_html}</div>", width=DETAIL_FIG_WIDTH - 10, margin=(0, 5, 4, 5),
+        html_attributes={'data-palette': DEFAULT_PALETTE_NAME},
+        stylesheets=[".bk-clearfix{width:100%;}"
+                     f".pal{{display:grid;grid-template-columns:repeat({len(PALETTES)},minmax(0,1fr));gap:6px;}}"
+                     f".sw{{display:flex;flex-direction:column;gap:4px;padding:5px;border:1px solid {THEME['line']};"
+                     f"border-radius:9px;background:{THEME['card']};font:inherit;cursor:pointer;}}"
+                     f".sw:hover{{border-color:{THEME['field_line']};}}"
+                     f".sw:focus-visible{{outline:2px solid {THEME['accent']};outline-offset:1px;}}"
+                     ".strip{display:flex;height:14px;border-radius:5px;overflow:hidden;}"
+                     ".strip i{flex:1;}"
+                     f".nm{{font-size:11px;color:{THEME['fg2']};text-align:center;white-space:nowrap;}}"
+                     + swatch_on_css])
+    palette_label = field_label("Color palette", "The colours of the reference chromosomes and their "
+                                                 "blocks; Colors sets how many are used before they repeat.",
+                                DETAIL_FIG_WIDTH - 10)
+
+    # The page-wide controls in tabs, so they fit above the zoom panel: what
+    # shapes the blocks, then how they are drawn.
+    # Synteny: detection, then the filters on what's drawn, then the order,
+    # whose Similarity mode follows the blocks those leave
+    synteny_tab = column(
+        row(min_identity_spinner, max_gap_spinner, column(hit_rank_label, hit_rank_group)),
+        row(min_block_spinner, min_seq_size_spinner),
+        min_block_note,
+        column(order_label, order_group),
     )
+    # Display: the palette, then Colors and the two genome labels in one
+    # row -- the tab card is as tall as its tallest tab, so this keeps it
+    # no taller than Synteny's and leaves the height to the zoom panel
+    display_tab = column(
+        palette_label, palette_swatches,
+        row(color_spinner, reference_label_input, target_label_input),
+    )
+    settings_tabs = Tabs(tabs=[TabPanel(child=synteny_tab, title="Synteny"),
+                               TabPanel(child=display_tab, title="Display")],
+                         stylesheets=[TABS_CSS])
+
+    # right of the plot slot: the settings card -- title, summary tiles,
+    # then the settings tabs -- and under it the zoom panel, which
+    # SYN.fitToWindow gives whatever height is left
+    settings_card = column(settings_header, stats_div, settings_tabs)
+    right_col = column(settings_card, zoom_card, spacing=10)
+    for card in (plot_col, settings_card, zoom_card):
+        card.stylesheets = [*card.stylesheets, CARD_CSS]
+    # roomier than the other cards: it's all text and fields
+    settings_card.stylesheets = [*settings_card.stylesheets, ":host{padding:10px 12px 6px;}"]
+    # row()'s default spacing is 0
+    layout = row(plot_col, right_col, spacing=12)
     # the app's look on every element (see THEME_CSS): first, so a
     # widget's own stylesheets still override it
     theme = InlineStyleSheet(css=THEME_CSS)
     for m in layout.references():
         if isinstance(m, UIElement):
             m.stylesheets = [theme, *m.stylesheets]
+    # the zoom panel's is the only figure title
+    detail_fig.title.text_font = UI_FONT
+    detail_fig.title.text_color = THEME['fg']
     for fig in (overview, detail_fig, dotplot_fig):
-        fig.title.text_font = UI_FONT
-        fig.title.text_color = THEME['fg']
         fig.outline_line_color = THEME['line']
 
     # An explicit Document so SYN.init can run on DocumentReady, which fires
@@ -2866,6 +3243,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         detail_axis_models=[detail_fig.xaxis[0], detail_fig.xgrid[0], detail_fig.ygrid[0]],
         detail_row_labels=[detail_reference_row_label, detail_target_row_label],
         detail_message=detail_message, dp_highlight_src=dp_highlight_src,
+        palette_select=palette_select, palette_swatches=palette_swatches,
+        overview=overview, plot_col=plot_col, plot_toolbar=plot_toolbar,
+        plot_toolbar_spacer=plot_toolbar_spacer, right_col=right_col,
     ), code="""
         SYN.init({
             statsDiv: stats_div,
@@ -2884,6 +3264,9 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
             dotplotXAxis: dotplot_x_axis, dotplotYAxis: dotplot_y_axis,
             detailAxisModels: detail_axis_models, detailRowLabels: detail_row_labels,
             detailMessage: detail_message, dpHighlightSource: dp_highlight_src,
+            paletteSelect: palette_select, paletteSwatches: palette_swatches,
+            overview, plotCol: plot_col, plotToolbar: plot_toolbar, plotToolbarSpacer: plot_toolbar_spacer,
+            rightCol: right_col,
         });
     """))
 
@@ -2933,7 +3316,6 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
         'orderModes': ORDER_MODES,
         'detailFigWidth': DETAIL_FIG_WIDTH,
         'detailRows': {'barH': DETAIL_BAR_H, 'topY': DETAIL_TOP_Y, 'botY': DETAIL_BOT_Y},
-        'statsPanelWidth': STATS_PANEL_WIDTH,
         'dpRulerFrac': DP_RULER_FRAC,
         # null without --stats: no stats panel
         'alignmentStats': alignment_stats,
