@@ -172,6 +172,7 @@ workflow {
     // each GFF's seqids with RENAME_SEQUENCES' lookup ----
     // null params are passed to processes as '' (see min_identity below)
     def miniprot_m = params.miniprot_m != null ? params.miniprot_m : ''
+    def miniprot_l = params.miniprot_l != null ? params.miniprot_l : ''
 
     def chunk_gb = chunkGb()
     if (chunk_gb) {
@@ -199,7 +200,7 @@ workflow {
         }
 
         align_chunk_in = chunk_rows.combine(proteome_fasta)
-        raw_gff_chunks = MINIPROT_ALIGN_CHUNK(align_chunk_in, miniprot_m).gff
+        raw_gff_chunks = MINIPROT_ALIGN_CHUNK(align_chunk_in, miniprot_m, miniprot_l).gff
 
         // groupTuple() without `size:` waits for the channel to close, so it
         // already gathers every chunk; the count check only guards against a
@@ -212,7 +213,7 @@ workflow {
         }
         raw_gff = MERGE_MINIPROT_GFF(grouped_gff).gff
     } else {
-        genome_index = MINIPROT_INDEX(genomes_in, miniprot_m).index
+        genome_index = MINIPROT_INDEX(genomes_in, miniprot_m, miniprot_l).index
         align_in = genome_index.combine(proteome_fasta)
         raw_gff = MINIPROT_ALIGN(align_in).gff
     }

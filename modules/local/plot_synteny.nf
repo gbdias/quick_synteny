@@ -14,7 +14,7 @@ process RENDER_SYNTENY_INTERACTIVE {
     tuple val(reference_name), path(reference_hits)
     path target_chrom_sizes
     path reference_chrom_sizes
-    val min_identity        // '' starts the page at chain.js's default (0.7); otherwise an explicit 0-1 floor
+    val min_identity        // '' starts the page at chain.js's default (0.6); otherwise an explicit 0-1 floor
     val max_gap
     val min_block           // '' starts the page at chain.js's default (15); otherwise the initial Min block size control value
     path stats               // compute_alignment_stats.py output, for the page's stats panel
@@ -51,7 +51,7 @@ workflow PLOT_SYNTENY {
     hits                   // tuple(name, path hits.tsv.gz) -- BUILD_SYNTENY's EXTRACT_HITS output, target and reference mixed together
     target_chrom_sizes     // tuple(name, path chrom.sizes)
     reference_chrom_sizes
-    min_identity           // '' means 0.7; otherwise an explicit 0-1 floor (the page's initial control value)
+    min_identity           // '' means 0.6; otherwise an explicit 0-1 floor (the page's initial control value)
     max_gap                // max rank step between consecutive chain members (the page's initial control value)
     min_block              // '' means 15; otherwise the page's initial Min block size control value
     stats                  // path -- compute_alignment_stats.py output

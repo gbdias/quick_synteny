@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Split a genome FASTA into size-capped chunks for MINIPROT_ALIGN_CHUNK
-(--miniprot_chunk_gb), capping peak alignment RAM (~10 GB per Gb of genome,
+(--miniprot_chunk_gb), capping peak alignment RAM (~3.5 GB per Gb of genome at -M 2 -L 45,
 dominated by the index).
 
 Greedily packs WHOLE sequences, in FASTA order, into chunk_000.fa,

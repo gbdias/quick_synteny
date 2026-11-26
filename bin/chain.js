@@ -22,7 +22,7 @@
 //
 // PARAMETERS:
 //   minPositive  0-1          a hit passes only if positive >= minPositive
-//                             (default 0.7)
+//                             (default 0.6)
 //   maxHitRank   int >= 1     ... and rank <= maxHitRank (default 255: all)
 //   maxGap       int (loci)   max rank step between consecutive chain
 //                             members, on both genomes (default 25)
@@ -103,7 +103,7 @@
 //   ordered by (target chrom index, target start, reference chrom index,
 //   reference start, orientation). Given the parameters, linksToTsv puts them
 //   on a first line ahead of the header, named after chain_blocks.mjs's
-//   flags: `# min_identity=0.7 max_gap=25 min_block=5 max_hit_rank=255
+//   flags: `# min_identity=0.6 max_gap=25 min_block=5 max_hit_rank=255
 //   max_lookback=50 gap_penalty=0`, then ` self=true` for a self chain and
 //   any further filters the caller names (the page's min_seq_size, names).
 //
@@ -127,7 +127,7 @@
     const COLLAPSE_WINDOW = 5;    // CHAINING RULES 2: MCScanX's default -w
 
     const DEFAULTS = {
-        minPositive: 0.7,
+        minPositive: 0.6,
         minBlock: 15,
         maxHitRank: 255,
         maxGap: 25,

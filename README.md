@@ -97,11 +97,17 @@ every parameter. Without internet, run
 
 ## Large genomes
 
-miniprot needs about 10 GB of RAM per Gb of genome. If that doesn't fit,
-`--miniprot_chunk_gb` aligns in chunks (1 Gb if given no value). This costs
-more CPU and results differ slightly (about 97% of blocks matched on
-*C. elegans*), so use the largest chunk that fits. `--miniprot_m` also lowers
-memory, at some cost to sensitivity.
+miniprot needs about 3.5 GB of RAM per Gb of genome. That's with the
+pipeline's sparser index (`--miniprot_m 2 --miniprot_l 45`, against
+miniprot's own 1 and 30), which halves the RAM: on rice and on two beetles
+80 My apart, large blocks were unchanged and small ones lost a few anchors.
+`--miniprot_m 1 --miniprot_l 30` gives miniprot's most sensitive index
+(about 7.5 GB per Gb); `--miniprot_m 3` cuts RAM by another third, but more
+hits are lost between distant species.
+
+If that doesn't fit, `--miniprot_chunk_gb` aligns in chunks (1 Gb if given
+no value). This costs more CPU and results differ slightly (about 97% of
+blocks matched on *C. elegans*), so use the largest chunk that fits.
 
 ## Profiles
 

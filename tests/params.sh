@@ -90,6 +90,7 @@ passes "every discovery and chaining option"    --assembly genome.fa --taxid 493
 passes "bare --miniprot_chunk_gb"               --assembly genome.fa --taxid 4932 --miniprot_chunk_gb
 passes "--miniprot_chunk_gb 0.5"                --assembly genome.fa --taxid 4932 --miniprot_chunk_gb 0.5
 passes "--miniprot_m 0"                         --assembly genome.fa --taxid 4932 --miniprot_m 0
+passes "--miniprot_l 30"                        --assembly genome.fa --taxid 4932 --miniprot_l 30
 
 echo
 echo "$pass passed, $fail failed"
