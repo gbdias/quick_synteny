@@ -44,7 +44,7 @@ process CHAIN_CROSS {
     input:
     tuple val(target_name), path(target_hits)
     tuple val(reference_name), path(reference_hits)
-    val min_identity  // '' takes chain.js's default (0.7); otherwise an explicit 0-1 floor
+    val min_identity  // '' takes chain.js's default (0.6); otherwise an explicit 0-1 floor
     val max_gap
     val min_block     // '' takes chain.js's default (15); the slider file always uses 5 (see top of file)
 
@@ -133,7 +133,7 @@ workflow BUILD_SYNTENY {
     target_chrom_sizes      // tuple(name, path chrom.sizes) -- hits on sequences not listed are dropped
     reference_chrom_sizes
     proteome                // path -- the proteome aligned against both genomes
-    min_identity            // '' takes chain.js's default (0.7); otherwise an explicit 0-1 floor
+    min_identity            // '' takes chain.js's default (0.6); otherwise an explicit 0-1 floor
     max_gap                 // max rank step between consecutive chain members
     min_block               // '' takes chain.js's default (15); minimum block size (distinct loci) for links.tsv
     input_sources           // tuple(query source, query species, subject source, subject species,

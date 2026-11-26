@@ -130,7 +130,7 @@
                     "type": "number",
                     "minimum": 0,
                     "maximum": 1,
-                    "description": "Per-hit identity (0-1) below which a protein hit is ignored; 0.7 when unset.",
+                    "description": "Per-hit identity (0-1) below which a protein hit is ignored; 0.6 when unset.",
                     "help_text": "Identity is the share of a hit's aligned residues that are identical or similar (miniprot's Positive score). Lower it for distant species; raise it to cut noise from paralogs. The result page can change it afterwards, so set it here only to pin links.tsv and the page's starting value.",
                     "hidden": true,
                     "fa_icon": "fas fa-percentage"
@@ -162,9 +162,18 @@
                 "miniprot_m": {
                     "type": "integer",
                     "minimum": 0,
-                    "description": "miniprot's -M: index only 1 in 2^M of each genome's k-mers; miniprot's own default when unset.",
-                    "help_text": "Higher values cut miniprot's peak RAM at some cost to sensitivity, which helps on RAM-constrained hardware (a laptop, a small VM) when a genome only just doesn't fit. Unset: miniprot's own default (1).",
+                    "default": 2,
+                    "description": "miniprot's -M: index only 1 in 2^M of each genome's k-mers.",
+                    "help_text": "Each step up roughly halves the k-mers indexed: miniprot's own default, 1, needs about 1.7 times the RAM of 2, and 3 about 35% less than 2, at some cost to sensitivity. At 2, large blocks matched miniprot's default on rice and on two beetles 80 My apart; small and homeolog blocks lost a few anchors. Lower it for the most sensitive search; raise it only when a genome doesn't fit, since at 3 about 9% of the more distant species' proteins lost all their hits.",
                     "fa_icon": "fas fa-compress"
+                },
+                "miniprot_l": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 45,
+                    "description": "miniprot's -L: index only open reading frames of at least this many amino acids.",
+                    "help_text": "Higher values leave short ORFs out of the index, cutting its RAM (45 instead of miniprot's own 30 saves about 20-25%) at the cost of seeds in very short exons. On rice and on two beetles, 45 lost under 0.5% of proteins' hits and left large blocks unchanged.",
+                    "fa_icon": "fas fa-ruler-horizontal"
                 },
                 "miniprot_chunk_gb": {
                     "type": [
@@ -174,15 +183,14 @@
                     "exclusiveMinimum": 0,
                     "errorMessage": "must be a positive number of Gb, or given without a value for 1 Gb",
                     "description": "Align against genome chunks of about this many Gb, in parallel, instead of one whole-genome index; a bare --miniprot_chunk_gb means 1 Gb.",
-                    "help_text": "Caps miniprot's peak RAM (about 10 GB per Gb of genome; with chunks, about 11 GB per Gb of chunk plus 4 GB) for genomes whose whole-genome index won't fit. Whole sequences are never split, so a chunk is never smaller than its longest sequence. NOT identical to a whole-genome run: miniprot filters seeds and ranks hits within each chunk, so about 2% of proteins get a different best hit, and weak or secondary hits, tied best hits and small blocks can differ (large blocks don't). More chunks drift further and cost more CPU, so leave it unset when the genome fits, otherwise use the largest size that does, and compare runs only at the same setting. Unset: one whole-genome alignment.",
+                    "help_text": "Caps miniprot's peak RAM (about 3.5 GB per Gb of genome at the default -M and -L; with chunks, --miniprot_gb_per_gb per Gb of chunk plus 4 GB) for genomes whose whole-genome index won't fit. Whole sequences are never split, so a chunk is never smaller than its longest sequence. NOT identical to a whole-genome run: miniprot filters seeds and ranks hits within each chunk, so about 2% of proteins get a different best hit, and weak or secondary hits, tied best hits and small blocks can differ (large blocks don't). More chunks drift further and cost more CPU, so leave it unset when the genome fits, otherwise use the largest size that does, and compare runs only at the same setting. Unset: one whole-genome alignment.",
                     "fa_icon": "fas fa-th-large"
                 },
                 "miniprot_gb_per_gb": {
                     "type": "number",
                     "exclusiveMinimum": 0,
-                    "default": 11,
-                    "description": "RAM (GB) to request per Gb of chunk with --miniprot_chunk_gb, plus a fixed 4 GB.",
-                    "help_text": "Multiplied by 1.5 per retry after an out-of-memory (137/140) exit. Only used with --miniprot_chunk_gb.",
+                    "description": "RAM (GB) to request per Gb of chunk with --miniprot_chunk_gb, plus a fixed 4 GB; set by --miniprot_m when unset.",
+                    "help_text": "Unset: 6 at --miniprot_m 2 or more (miniprot peaked at about 5.5 GB per Gb of chunk on rice and two beetles), 11 at 1 (about 12.5 measured, which the fixed 4 GB covers for chunks up to about 2.5 Gb) and 22 at 0. Multiplied by 1.5 per retry after an out-of-memory (137/140) exit. Only used with --miniprot_chunk_gb.",
                     "fa_icon": "fas fa-memory"
                 }
             }

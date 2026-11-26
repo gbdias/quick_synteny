@@ -13,8 +13,17 @@
 // The GFF carries the genome's original sequence names; RENAME_GFF swaps
 // in the renamed IDs.
 //
-// -M belongs on the -d line: the sampling is baked into the index, and
-// miniprot ignores -M when aligning against a prebuilt one.
+// -M and -L belong on the -d line: they decide what goes into the index,
+// and miniprot ignores them when aligning against a prebuilt one. The
+// pipeline's defaults (-M 2 -L 45, against miniprot's 1 and 30) cut the
+// index's peak RAM by about half; on rice and on two beetles 80 My apart,
+// large blocks were unchanged and small ones (homeologs most) lost a few
+// anchors.
+
+// '' keeps miniprot's own default; 0 is a real value (-M 0 indexes every k-mer)
+def indexFlags(miniprot_m, miniprot_l) {
+    [miniprot_m != '' ? "-M ${miniprot_m}" : '', miniprot_l != '' ? "-L ${miniprot_l}" : ''].findAll().join(' ')
+}
 
 // process_high sets memory and time; cpus is pinned to 1 in nextflow.config
 process MINIPROT_INDEX {
@@ -24,15 +33,15 @@ process MINIPROT_INDEX {
 
     input:
     tuple val(name), path(genome_fasta)
-    val miniprot_m   // '' keeps miniprot's own default; otherwise an int k-mer sampling exponent
+    val miniprot_m   // k-mer sampling exponent (-M), or ''
+    val miniprot_l   // shortest ORF to index in aa (-L), or ''
 
     output:
     tuple val(name), path("${name}.mpi"), emit: index
 
     script:
-    def mFlag = miniprot_m ? "-M ${miniprot_m}" : ''
     """
-    miniprot -t ${task.cpus} ${mFlag} -d ${name}.mpi ${genome_fasta}
+    miniprot -t ${task.cpus} ${indexFlags(miniprot_m, miniprot_l)} -d ${name}.mpi ${genome_fasta}
     """
 }
 
@@ -58,9 +67,10 @@ process MINIPROT_ALIGN {
 // (one task per chunk) -> MERGE_MINIPROT_GFF, emitting the same
 // tuple(name, gff) as MINIPROT_ALIGN.
 //
-// The point is peak RAM: miniprot's index is ~10 GB per Gb of genome, so
-// each task holds one chunk's index. MERGE_MINIPROT_GFF re-applies
-// --outs/-N across chunks, and -G comes from the whole genome's length.
+// The point is peak RAM: miniprot's index is ~3.5 GB per Gb of genome at
+// -M 2 -L 45 (~7.5 at miniprot's own -M 1 -L 30), so each task holds one
+// chunk's index. MERGE_MINIPROT_GFF re-applies --outs/-N across chunks, and
+// -G comes from the whole genome's length.
 //
 // Close to, but NOT identical to, a whole-genome run, and can't be without
 // changing miniprot: it decides per index (1) which k-mers are too
@@ -93,6 +103,19 @@ process SPLIT_GENOME {
     """
 }
 
+// RAM (GB) to request per Gb of chunk, on top of a fixed 4 GB for the
+// proteome's side (a few huge isoforms can need several GB each):
+// --miniprot_gb_per_gb, or else by -M. miniprot's peak per Gb of chunk,
+// 4 threads building the chunk's index then aligning: ~5.5 GB at -M 2 -L 45
+// (0.1-0.5 Gb chunks of rice, O. australiensis and two beetles; smaller
+// chunks add a fixed ~0.5 GB) and ~12.5 at -M 1 -L 30, which 11 + 4 still
+// covers up to ~2.5 Gb chunks. -M 0 is unmeasured: twice -M 1's.
+def chunkGbPerGb() {
+    if (params.miniprot_gb_per_gb != null) return params.miniprot_gb_per_gb
+    def m = params.miniprot_m != null ? params.miniprot_m as int : 1
+    m <= 0 ? 22 : m == 1 ? 11 : 6
+}
+
 // No label: the memory formula needs `chunk_bp`, a process input that a
 // config directive can't see, and a label's config memory would override
 // it. 4 cpus: the chunks already run in parallel, and a whole-genome job
@@ -101,24 +124,24 @@ process MINIPROT_ALIGN_CHUNK {
     tag "${name}:${chunk_fasta.baseName}"
     label 'env_miniprot'
     cpus 4
-    memory { "${Math.ceil((chunk_bp / 1e9 * params.miniprot_gb_per_gb + 4) * Math.pow(1.5, task.attempt - 1))} GB" }
+    memory { "${Math.ceil((chunk_bp / 1e9 * chunkGbPerGb() + 4) * Math.pow(1.5, task.attempt - 1))} GB" }
     errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
     maxRetries 2
 
     input:
     tuple val(name), path(chunk_fasta), val(chunk_bp), val(total_length), path(proteome_faa)
     val miniprot_m
+    val miniprot_l
 
     output:
     tuple val(name), path("${chunk_fasta.baseName}.raw.gff"), emit: gff
 
     script:
-    def mFlag = miniprot_m ? "-M ${miniprot_m}" : ''
     // -I would size max introns from the chunk's length: replicate its
     // formula (mp_mapopt_set_max_intron, a ceiling) on the whole genome's
     def G = Math.min(Math.max(Math.ceil(3.6 * Math.sqrt(total_length as double)) as long, 10000L), 300000L)
     """
-    miniprot -t ${task.cpus} ${mFlag} -G ${G} -N 5 --outs=0.7 --gff ${chunk_fasta} ${proteome_faa} > ${chunk_fasta.baseName}.raw.gff
+    miniprot -t ${task.cpus} ${indexFlags(miniprot_m, miniprot_l)} -G ${G} -N 5 --outs=0.7 --gff ${chunk_fasta} ${proteome_faa} > ${chunk_fasta.baseName}.raw.gff
     """
 }
 

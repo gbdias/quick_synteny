@@ -386,9 +386,26 @@ document.querySelectorAll('input[name=engine]').forEach((r) => {
     });
 });
 
-// miniprot's whole-genome index needs ~10 GB RAM per Gb of genome (README,
-// "Large genomes"); warn before a run that can't fit -- in Docker's VM, or
-// in this computer's RAM for the conda engine
+// RAM per Gb of genome for miniprot's whole-genome index, by -M: measured
+// peaks were ~3.5 GB at 2 (with -L 45), ~7.5 at 1 and ~3 at 3, rounded up
+// for headroom; 0 is unmeasured, so twice 1's (README, "Large genomes")
+function miniprotM() {
+    const v = $('[name=miniprot_m]').value.trim();
+    return v === '' ? (schema.miniprot_m?.default ?? 2) : Number(v);
+}
+function indexGbPerGb() {
+    const m = miniprotM();
+    return m <= 0 ? 20 : m === 1 ? 10 : m === 2 ? 5 : 4;
+}
+// what the pipeline requests per Gb of chunk (plus 4 GB): chunkGbPerGb()
+// in modules/local/miniprot_align.nf
+function chunkGbPerGb() {
+    const m = miniprotM();
+    return m <= 0 ? 22 : m === 1 ? 11 : 6;
+}
+
+// warn before a run that can't fit -- in Docker's VM, or in this
+// computer's RAM for the conda engine
 function updatePreflight() {
     const box = $('#preflight');
     const inDocker = engine() === 'docker';
@@ -398,9 +415,9 @@ function updatePreflight() {
     const gb = Math.max(...genomes.map((f) => (f.path.endsWith('.gz') ? 3.3 : 1) * f.bytes / 1e9));
     const memGb = mem / 2 ** 30;
     const chunk = parseFloat($('#chunk').value);
-    const need = chunk > 0 ? Math.min(chunk, gb) * 11 + 4 : gb * 10 + 4;
+    const need = chunk > 0 ? Math.min(chunk, gb) * chunkGbPerGb() + 4 : gb * indexGbPerGb() + 4;
     if (need <= memGb) { box.hidden = true; return; }
-    const fit = Math.floor(((memGb - 4) / 11) * 10) / 10;
+    const fit = Math.floor(((memGb - 4) / chunkGbPerGb()) * 10) / 10;
     box.hidden = false;
     box.textContent = `The largest genome is about ${gb.toFixed(2)} Gb: miniprot needs about ${need.toFixed(0)} GB of memory, `
         + `but ${inDocker ? 'Docker has' : 'this computer has'} ${memGb.toFixed(1)} GB. `
@@ -408,6 +425,7 @@ function updatePreflight() {
         + `of ${fit > 0 ? fit : 'a smaller size'} Gb or less (close to, but not identical to, a whole-genome run).`;
 }
 $('#chunk').addEventListener('input', updatePreflight);
+$('[name=miniprot_m]').addEventListener('input', updatePreflight);
 
 // ---------- the pipeline's parameter schema ----------
 
@@ -425,7 +443,7 @@ const GUI_HELP = {
     exclude_target: 'Off: a same-species reference or proteome is kept when it\'s chromosome-level or better, e.g. a second '
         + 'assembly of the same organism. On: always pick another species.',
     miniprot_chunk_gb: 'Align against pieces of the genome of about this many Gb, instead of all of it at once, to need less '
-        + 'memory (about 11 GB per Gb of chunk, plus 4 GB). Not identical to a whole-genome run: about 2% of proteins get a '
+        + 'memory (about 6 GB per Gb of chunk, plus 4 GB; 11 with index sparsity 1). Not identical to a whole-genome run: about 2% of proteins get a '
         + 'different best hit, and small blocks can differ. Leave it empty when the genome fits.',
 };
 
@@ -466,7 +484,7 @@ function checkNumber(name, value) {
 
 // the Options section's fields, each named after its pipeline parameter.
 // No chaining parameters: the result page re-chains with any values.
-const ADVANCED = ['min_seq_size', 'min_asm_gap', 'miniprot_m', 'miniprot_chunk_gb'];
+const ADVANCED = ['min_seq_size', 'min_asm_gap', 'miniprot_m', 'miniprot_l', 'miniprot_chunk_gb'];
 
 function collectForm() {
     const fd = new FormData($('#form'));

@@ -2486,12 +2486,12 @@ def build_page(ds, query_name, subject_name, query_subtitle=None, subject_subtit
                                     f"{text}</div>"), position=position)
 
     min_identity_spinner = Spinner(title="Min identity (%)", low=30, high=100, step=1,
-                                    value=round((0.7 if min_identity is None else min_identity) * 100),
+                                    value=round((0.6 if min_identity is None else min_identity) * 100),
                                     width=TOP_CONTROL_WIDTH,
                                     description=help_tip(
                                         "A protein's hit counts only if at least this share of its aligned "
                                         "residues are identical or similar (miniprot's Positive score). Starts "
-                                        "at 70%. Lower it for distant species; raise it to cut noise from "
+                                        "at 60%. Lower it for distant species; raise it to cut noise from "
                                         "paralogs. The alignment summary's avg identity is a guide."))
     max_gap_spinner = Spinner(title="Max gap (anchors)", low=1, high=100, step=1,
                                value=max_gap, width=TOP_CONTROL_WIDTH,
@@ -2966,7 +2966,7 @@ def main():
     parser.add_argument('--reference_hits', required=True, help='ditto, for the reference genome')
     parser.add_argument('--min_identity', type=float, default=None,
                          help='initial Min identity (%%) control value, as a 0-1 fraction -- '
-                              "default (unset): SYNCHAIN.DEFAULTS' 0.7")
+                              "default (unset): SYNCHAIN.DEFAULTS' 0.6")
     parser.add_argument('--max_gap', type=int, default=25,
                          help="initial Max gap (anchors) control value (bin/chain.js's PARAMETERS "
                               "header)")
