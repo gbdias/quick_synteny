@@ -56,9 +56,11 @@ Docker:
   settings, under Resources, so allow enough for your genomes (see
   [Large genomes](#large-genomes)).
 - **No Docker**: add `-profile conda` instead, with
-  [conda](https://docs.conda.io) or mamba installed. Each tool gets its own
-  environment, built on the first run, which takes a few minutes. The desktop
-  app works this way.
+  [conda](https://docs.conda.io), mamba or
+  [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
+  installed (whichever comes first on your `PATH` is used). Each tool gets
+  its own environment, built on the first run, which takes a few minutes.
+  The desktop app works this way.
 
 If Docker isn't reachable, the pipeline says so before starting any work.
 
@@ -148,8 +150,8 @@ blocks matched on *C. elegans*), so use the largest chunk that fits.
 ## Profiles
 
 - `standard`: Docker, on this machine.
-- `conda`: conda environments, no container engine (the desktop app uses
-  this). Results can differ slightly from the container profiles.
+- `conda`: conda environments, built with conda, mamba or micromamba; no
+  container engine (the desktop app uses this). Results can differ slightly from the container profiles.
 - `slurm`: Apptainer/Singularity on SLURM; `--slurm_queue` and
   `--singularity_cache_dir` set the partition and the image cache.
 - `test`: Docker with tiny resource limits.

@@ -82,7 +82,7 @@ def checkDocker() {
         "ERROR: Docker isn't reachable, and -profile ${workflow.profile} runs every tool in Docker.",
         "  docker said: ${problem}",
         "  ${fix}",
-        '  Or run without Docker: -profile conda (needs conda or mamba). See the README, "Before you start".',
+        '  Or run without Docker: -profile conda (needs conda, mamba or micromamba). See the README, "Before you start".',
     ].join('\n')
 }
 
