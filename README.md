@@ -3,8 +3,8 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24339745.svg)](https://doi.org/10.5281/zenodo.24339745)
 
 Plot synteny between two genome assemblies, with no annotation needed. The
-result is one self-contained HTML page: a Circos-style ring, a detail panel
-and a whole-genome dotplot.
+result is one self-contained HTML page: a Circos-style ring or a
+whole-genome dotplot, and a zoom panel for a closer look at any chromosome.
 
 ![The result page for S. cerevisiae against the hybrid S. pastorianus](assets/result-page.png)
 
@@ -58,12 +58,10 @@ Docker:
 - **No Docker**: add `-profile conda` instead, with
   [conda](https://docs.conda.io), mamba or
   [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
-  installed (whichever comes first on your `PATH` is used). It has to be on
-  the `PATH` as a program: micromamba's installer puts it in `~/.local/bin`
-  and makes `micromamba` a shell function, so if `command -v micromamba`
-  prints only `micromamba`, run `export PATH="$HOME/.local/bin:$PATH"` (or
-  log out and back in). Each tool gets its own environment, built on the
-  first run, which takes a few minutes. The desktop app works this way.
+  installed. If you've just installed micromamba and `which micromamba`
+  finds nothing, log out and back in, or run
+  `export PATH="$HOME/.local/bin:$PATH"`. The first run sets up the tools,
+  which takes a few minutes. The desktop app works this way.
 
 If Docker isn't reachable, the pipeline says so before starting any work.
 
@@ -100,10 +98,11 @@ Open `results/synteny/target.reference.synteny.interactive.html` in any browser.
 
 ## The result page
 
-The page re-chains in your browser, so min identity, max gap, hit rank and
-min block size update live. Click a chromosome, chromosome pair or block to
-highlight it in every panel. Each panel exports SVG, PNG or JPEG, and
-**blocks TSV** saves the blocks on screen, with the settings that made them.
+Change min identity, max gap, hit rank or min block size and the blocks
+update right away, in your browser. Click a chromosome, chromosome pair or
+block to highlight it everywhere and zoom in on it. Each panel's download
+button saves it as SVG, PNG or JPEG; the dotplot's also saves the blocks on
+screen as a table, with the settings that made them.
 
 ## Outputs
 
@@ -129,35 +128,26 @@ highlight it in every panel. Each panel exports SVG, PNG or JPEG, and
 
 Give at most one reference source. `--taxid` is needed unless you give
 `--proteome` and a reference source. `nextflow run main.nf --help` lists
-every parameter. Without internet, run
-`nextflow plugin install nf-schema@2.7.3` once first.
+every parameter. To run without internet later, run
+`nextflow plugin install nf-schema@2.7.3` once while online.
 
 ## Large genomes
 
-miniprot needs about 3.5 GB of RAM per Gb of genome. That's with the
-pipeline's sparser index (`--miniprot_m 2 --miniprot_l 45`, against
-miniprot's own 1 and 30), which halves the RAM: on rice and on two beetles
-80 My apart, large blocks were unchanged and small ones lost a few anchors.
-`--miniprot_m 1 --miniprot_l 30` gives miniprot's most sensitive index
-(about 7.5 GB per Gb); `--miniprot_m 3` cuts RAM by another third, but more
-hits are lost between distant species.
+miniprot needs about 3.5 GB of RAM per Gb of genome. The pipeline asks for
+memory to match the genome (a small one needs only a few GB), and for more
+if miniprot runs out.
 
-The pipeline asks for memory to match the genome (a small one needs only a
-few GB) and asks again for more if miniprot runs out. On this machine
-(`standard`, `conda`) it never asks for more than the machine has.
-
-If that doesn't fit, `--miniprot_chunk_gb` aligns in chunks (1 Gb if given
-no value). This costs more CPU and results differ slightly (about 97% of
-blocks matched on *C. elegans*), so use the largest chunk that fits.
+If your genome still doesn't fit in memory, `--miniprot_chunk_gb` aligns it
+in chunks (1 Gb if given no value). This takes longer and the results differ
+slightly from a whole-genome run, so use the largest chunk that fits.
 
 ## Profiles
 
-- `standard`: Docker, on this machine.
-- `conda`: conda environments, built with conda, mamba or micromamba; no
-  container engine (the desktop app uses this). Results can differ slightly from the container profiles.
-- `slurm`: Apptainer/Singularity on SLURM; `--slurm_queue` and
+- `standard`: Docker.
+- `conda`: conda, mamba or micromamba, no Docker (the desktop app uses
+  this). Results can differ slightly from Docker's.
+- `slurm`: Apptainer/Singularity on a SLURM cluster; `--slurm_queue` and
   `--singularity_cache_dir` set the partition and the image cache.
-- `test`: Docker with tiny resource limits.
 
 ## Citation
 
