@@ -32,6 +32,38 @@ are proteins that align to both genomes, not inferred orthologs.
 - **Command line**: [Nextflow](https://www.nextflow.io) 25.10 or newer, plus
   Docker, conda or Apptainer/Singularity (see [Profiles](#profiles)).
 
+### Before you start
+
+On the command line, the default profile (`standard`) runs every tool in
+Docker:
+
+- **Linux**: install
+  [Docker Engine](https://docs.docker.com/engine/install/) (Docker Desktop
+  isn't needed). Then let your user run it without `sudo`, and log out and
+  back in:
+
+  ```bash
+  sudo usermod -aG docker $USER
+  ```
+
+  `docker run hello-world` should now work. The `docker` group gives root
+  access to the machine; Docker's
+  [rootless mode](https://docs.docker.com/engine/security/rootless/) avoids
+  that.
+- **macOS**: install
+  [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start
+  it before a run. Its containers share the memory you give it in its
+  settings, under Resources, so allow enough for your genomes (see
+  [Large genomes](#large-genomes)).
+- **No Docker**: add `-profile conda` instead, with
+  [conda](https://docs.conda.io) or mamba installed. Each tool gets its own
+  environment, built on the first run, which takes a few minutes. The desktop
+  app works this way.
+
+If Docker isn't reachable, the pipeline says so before starting any work.
+
+### Run
+
 ```bash
 # find a reference genome and proteome on NCBI from your species' taxid
 nextflow run main.nf -profile standard \

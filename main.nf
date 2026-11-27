@@ -49,6 +49,43 @@ def validateParams() {
     }
 }
 
+// The Docker profiles (standard, test) need a Docker daemon this user can
+// reach. Without one, Nextflow only fails at the first task, with the docker
+// client's raw socket error ("permission denied while trying to connect to
+// the Docker daemon socket" when the user isn't in the docker group), so
+// check up front and say what to do instead.
+def checkDocker() {
+    if (workflow.containerEngine != 'docker') {
+        return
+    }
+    def problem = null
+    try {
+        def proc = ['docker', 'info'].execute()
+        def out = new StringBuilder()
+        def err = new StringBuilder()
+        proc.consumeProcessOutput(out, err)
+        // a daemon that never answers shouldn't hang the run
+        proc.waitForOrKill(30000)
+        if (proc.exitValue() != 0) {
+            problem = err.toString().trim().readLines().find { line -> line.trim() } ?: "docker info exited with ${proc.exitValue()}"
+        }
+    } catch (Exception e) {
+        problem = 'the docker command was not found'
+    }
+    if (problem == null) {
+        return
+    }
+    def fix = problem.toLowerCase().contains('permission denied')
+        ? 'Add yourself to the docker group (sudo usermod -aG docker $USER), then log out and back in.'
+        : 'Start Docker (Docker Desktop on macOS; sudo systemctl start docker on Linux), or install it.'
+    exit 1, [
+        "ERROR: Docker isn't reachable, and -profile ${workflow.profile} runs every tool in Docker.",
+        "  docker said: ${problem}",
+        "  ${fix}",
+        '  Or run without Docker: -profile conda (needs conda or mamba). See the README, "Before you start".',
+    ].join('\n')
+}
+
 def readSelection(selectionFile) {
     return new groovy.json.JsonSlurper().parse(selectionFile)
 }
@@ -61,6 +98,7 @@ workflow {
     }
     validateParameters()
     validateParams()
+    checkDocker()
 
     log.info "quick_synteny: assembly=${params.assembly} taxid=${params.taxid ?: '(skipped, using overrides)'} outdir=${params.outdir}"
 
