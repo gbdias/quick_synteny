@@ -25,11 +25,30 @@ def indexFlags(miniprot_m, miniprot_l) {
     [miniprot_m != '' ? "-M ${miniprot_m}" : '', miniprot_l != '' ? "-L ${miniprot_l}" : ''].findAll().join(' ')
 }
 
-// process_high sets memory and time; cpus is pinned to 1 in nextflow.config
+// Memory follows the genome rather than a fixed process_high figure, which
+// would refuse a small genome on a laptop with less than it (the local
+// executor won't start a task asking for more than the machine has) and
+// starve a big one. In GB: the genome's Gb times chunkGbPerGb() (build
+// plus align per Gb, more than an index build alone needs), plus 1, with
+// 1.5x more on each retry after an out-of-memory kill. A gzipped FASTA's
+// bases are taken as 4x its size, over the ~3.3x DNA typically
+// compresses by. The local profiles cap it at the machine's memory
+// (conf/local.config).
+def genomeGb(genome_fasta) {
+    def bytes = genome_fasta.size() as double
+    def name = genome_fasta.name.toLowerCase()
+    (name.endsWith('.gz') || name.endsWith('.bgz') ? bytes * 4 : bytes) / 1e9
+}
+
+// process_high sets time and cpus (pinned to 1 in nextflow.config); memory
+// is set here (see genomeGb)
 process MINIPROT_INDEX {
     tag "${name}"
     label 'process_high'
     label 'env_miniprot'
+    memory { "${Math.ceil((genomeGb(genome_fasta) * chunkGbPerGb() + 1) * Math.pow(1.5, task.attempt - 1))} GB" }
+    errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
+    maxRetries 2
 
     input:
     tuple val(name), path(genome_fasta)
@@ -45,10 +64,16 @@ process MINIPROT_INDEX {
     """
 }
 
+// Memory: the index as loaded (its file's size, plus half again for
+// alignment working space on process_high's threads) and a fixed 4 GB for
+// the proteome's side, as MINIPROT_ALIGN_CHUNK; 1.5x more on each retry
 process MINIPROT_ALIGN {
     tag "${name}"
     label 'process_high'
     label 'env_miniprot'
+    memory { "${Math.ceil((genome_index.size() / 1e9 * 1.5 + 4) * Math.pow(1.5, task.attempt - 1))} GB" }
+    errorStrategy { task.exitStatus in [137, 140] ? 'retry' : 'terminate' }
+    maxRetries 2
 
     input:
     tuple val(name), path(genome_index), path(proteome_faa)

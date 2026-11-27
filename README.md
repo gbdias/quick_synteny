@@ -105,6 +105,10 @@ miniprot's own 1 and 30), which halves the RAM: on rice and on two beetles
 (about 7.5 GB per Gb); `--miniprot_m 3` cuts RAM by another third, but more
 hits are lost between distant species.
 
+The pipeline asks for memory to match the genome (a small one needs only a
+few GB) and asks again for more if miniprot runs out. On this machine
+(`standard`, `conda`) it never asks for more than the machine has.
+
 If that doesn't fit, `--miniprot_chunk_gb` aligns in chunks (1 Gb if given
 no value). This costs more CPU and results differ slightly (about 97% of
 blocks matched on *C. elegans*), so use the largest chunk that fits.
