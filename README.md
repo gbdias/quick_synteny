@@ -32,6 +32,43 @@ are proteins that align to both genomes, not inferred orthologs.
 - **Command line**: [Nextflow](https://www.nextflow.io) 25.10 or newer, plus
   Docker, conda or Apptainer/Singularity (see [Profiles](#profiles)).
 
+### Before you start
+
+On the command line, the default profile (`standard`) runs every tool in
+Docker:
+
+- **Linux**: install
+  [Docker Engine](https://docs.docker.com/engine/install/) (Docker Desktop
+  isn't needed). Then let your user run it without `sudo`, and log out and
+  back in:
+
+  ```bash
+  sudo usermod -aG docker $USER
+  ```
+
+  `docker run hello-world` should now work. The `docker` group gives root
+  access to the machine; Docker's
+  [rootless mode](https://docs.docker.com/engine/security/rootless/) avoids
+  that.
+- **macOS**: install
+  [Docker Desktop](https://www.docker.com/products/docker-desktop/) and start
+  it before a run. Its containers share the memory you give it in its
+  settings, under Resources, so allow enough for your genomes (see
+  [Large genomes](#large-genomes)).
+- **No Docker**: add `-profile conda` instead, with
+  [conda](https://docs.conda.io), mamba or
+  [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
+  installed (whichever comes first on your `PATH` is used). It has to be on
+  the `PATH` as a program: micromamba's installer puts it in `~/.local/bin`
+  and makes `micromamba` a shell function, so if `command -v micromamba`
+  prints only `micromamba`, run `export PATH="$HOME/.local/bin:$PATH"` (or
+  log out and back in). Each tool gets its own environment, built on the
+  first run, which takes a few minutes. The desktop app works this way.
+
+If Docker isn't reachable, the pipeline says so before starting any work.
+
+### Run
+
 ```bash
 # find a reference genome and proteome on NCBI from your species' taxid
 nextflow run main.nf -profile standard \
@@ -105,6 +142,10 @@ miniprot's own 1 and 30), which halves the RAM: on rice and on two beetles
 (about 7.5 GB per Gb); `--miniprot_m 3` cuts RAM by another third, but more
 hits are lost between distant species.
 
+The pipeline asks for memory to match the genome (a small one needs only a
+few GB) and asks again for more if miniprot runs out. On this machine
+(`standard`, `conda`) it never asks for more than the machine has.
+
 If that doesn't fit, `--miniprot_chunk_gb` aligns in chunks (1 Gb if given
 no value). This costs more CPU and results differ slightly (about 97% of
 blocks matched on *C. elegans*), so use the largest chunk that fits.
@@ -112,8 +153,8 @@ blocks matched on *C. elegans*), so use the largest chunk that fits.
 ## Profiles
 
 - `standard`: Docker, on this machine.
-- `conda`: conda environments, no container engine (the desktop app uses
-  this). Results can differ slightly from the container profiles.
+- `conda`: conda environments, built with conda, mamba or micromamba; no
+  container engine (the desktop app uses this). Results can differ slightly from the container profiles.
 - `slurm`: Apptainer/Singularity on SLURM; `--slurm_queue` and
   `--singularity_cache_dir` set the partition and the image cache.
 - `test`: Docker with tiny resource limits.
