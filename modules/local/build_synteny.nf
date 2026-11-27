@@ -92,6 +92,15 @@ process CHAIN_SELF {
     """
 }
 
+// Single-quoted for the shell, so file names and species with spaces or
+// quotes survive. A module-level function, not a closure in the script:
+// block: Nextflow's strict syntax (NXF_SYNTAX_PARSER=v2, the default in
+// newer releases such as 26.10) can't call a closure held in a local
+// variable like a function.
+def shellQuote(v) {
+    return "'" + v.toString().replace("'", "'\\''") + "'"
+}
+
 // The page's stats panel: proteome size plus each genome's aligned-protein
 // count and mean identity, from the miniprot GFFs.
 process COMPUTE_ALIGNMENT_STATS {
@@ -112,16 +121,14 @@ process COMPUTE_ALIGNMENT_STATS {
     path "${target_name}.${reference_name}.stats.json", emit: stats
 
     script:
-    // single-quoted for the shell, so file names/species with spaces or quotes survive
-    def q = { v -> "'" + v.toString().replace("'", "'\\''") + "'" }
     """
     compute_alignment_stats.py \\
         --proteome ${proteome} \\
         --query_gff ${target_gff} --subject_gff ${reference_gff} \\
         --query_name ${target_name} --subject_name ${reference_name} \\
-        --query_source ${q(query_source)} --query_species ${q(query_species)} \\
-        --subject_source ${q(subject_source)} --subject_species ${q(subject_species)} \\
-        --proteome_source ${q(proteome_source)} --proteome_species ${q(proteome_species)} \\
+        --query_source ${shellQuote(query_source)} --query_species ${shellQuote(query_species)} \\
+        --subject_source ${shellQuote(subject_source)} --subject_species ${shellQuote(subject_species)} \\
+        --proteome_source ${shellQuote(proteome_source)} --proteome_species ${shellQuote(proteome_species)} \\
         --out ${target_name}.${reference_name}.stats.json
     """
 }
