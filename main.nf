@@ -86,6 +86,42 @@ def checkDocker() {
     ].join('\n')
 }
 
+// -profile conda needs conda, mamba or micromamba as a program on the PATH
+// (conf/conda.config picks the first). micromamba's installer often leaves
+// it a shell function only: `micromamba` works in a terminal, but its folder
+// (~/.local/bin) isn't on the PATH until the next login, and Nextflow -- which
+// can only run programs on the PATH -- fails at the first environment with
+// "conda: command not found". Check up front and give the line that fixes it.
+def checkCondaTool() {
+    if (!workflow.profile.tokenize(',').contains('conda')) {
+        return
+    }
+    def onPath = (System.getenv('PATH') ?: '').tokenize(java.io.File.pathSeparator).any { dir ->
+        ['conda', 'mamba', 'micromamba'].any { tool -> new java.io.File(dir, tool).canExecute() } }
+    if (onPath) {
+        return
+    }
+    // set by the shell setup of micromamba and conda respectively
+    def installed = [System.getenv('MAMBA_EXE'), System.getenv('CONDA_EXE')].find { exe ->
+        exe && new java.io.File(exe).canExecute() }
+    def lines = ['ERROR: -profile conda needs conda, mamba or micromamba on the PATH, and none is there.']
+    if (installed) {
+        def exe = new java.io.File(installed)
+        lines += [
+            "  ${exe.name} is installed at ${installed}, but its folder isn't on the PATH",
+            '  (in your terminal it works as a shell function, which Nextflow can\'t use). Add it, then rerun:',
+            "    export PATH=\"${exe.parent}:\$PATH\"",
+        ]
+        // Ubuntu's ~/.profile puts ~/.local/bin on the PATH at login, if it exists by then
+        if (exe.parent == "${System.getenv('HOME') ?: System.getProperty('user.home')}/.local/bin") {
+            lines += ['  Logging out and back in usually adds ~/.local/bin for good.']
+        }
+    } else {
+        lines += ['  Install one (see the README, "Before you start"), or run in Docker: -profile standard.']
+    }
+    exit 1, lines.join('\n')
+}
+
 def readSelection(selectionFile) {
     return new groovy.json.JsonSlurper().parse(selectionFile)
 }
@@ -99,6 +135,7 @@ workflow {
     validateParameters()
     validateParams()
     checkDocker()
+    checkCondaTool()
 
     log.info "quick_synteny: assembly=${params.assembly} taxid=${params.taxid ?: '(skipped, using overrides)'} outdir=${params.outdir}"
 

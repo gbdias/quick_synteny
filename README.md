@@ -58,9 +58,12 @@ Docker:
 - **No Docker**: add `-profile conda` instead, with
   [conda](https://docs.conda.io), mamba or
   [micromamba](https://mamba.readthedocs.io/en/latest/installation/micromamba-installation.html)
-  installed (whichever comes first on your `PATH` is used). Each tool gets
-  its own environment, built on the first run, which takes a few minutes.
-  The desktop app works this way.
+  installed (whichever comes first on your `PATH` is used). It has to be on
+  the `PATH` as a program: micromamba's installer puts it in `~/.local/bin`
+  and makes `micromamba` a shell function, so if `command -v micromamba`
+  prints only `micromamba`, run `export PATH="$HOME/.local/bin:$PATH"` (or
+  log out and back in). Each tool gets its own environment, built on the
+  first run, which takes a few minutes. The desktop app works this way.
 
 If Docker isn't reachable, the pipeline says so before starting any work.
 
