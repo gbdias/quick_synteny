@@ -1,5 +1,7 @@
 # quick_synteny
 
+[![Release](https://img.shields.io/github/v/release/gbdias/quick_synteny)](https://github.com/gbdias/quick_synteny/releases/latest)
+[![Nextflow](https://img.shields.io/badge/nextflow-%E2%89%A525.10-23aa62)](https://www.nextflow.io)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24339745.svg)](https://doi.org/10.5281/zenodo.24339745)
 
 Plot synteny between two genome assemblies, with no annotation needed. The
